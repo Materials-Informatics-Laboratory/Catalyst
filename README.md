@@ -1,6 +1,6 @@
 
-![Screenshot](https://github.com/Materials-Informatics-Laboratory/Catalyst/tree/main/visuals/catalyst.png?raw=true)
-
+![Screenshot](https://github.com/Materials-Informatics-Laboratory/Catalyst/tree/main/visuals/catalyst.jpeg?raw=true)
+visuals/catalyst.jpeg
 # Catalyst
 General-purpose toolkit for building machine learning models to study atomic-scale structure-property relationships.
 
