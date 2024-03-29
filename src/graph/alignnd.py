@@ -157,4 +157,76 @@ def realignnd(structures,cutoff,dihedral=False):
 
     return data
 
+def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[]):
+    """Converts ASE `atoms` into a PyG graph data holding the atomic graph (G) and the angular graph (A).
+    The angular graph holds bond angle information, but can also calculate dihedral information upon request.
+    """
+
+    data_amounts = dict(x_atm=[], x_bnd=[], x_ang=[])
+
+    elements = np.unique(atoms.get_chemical_symbols())
+    ohe = []
+    if len(elements) < len(all_elements):
+        elements = all_elements
+    for atom in atoms:
+        tx = [0.0] * len(elements)
+        for i in range(len(elements)):
+            if atom.symbol == elements[i]:
+                tx[i] = 1.0
+                break
+        ohe.append(tx)
+    x_atm = np.array(ohe)
+
+    edge_index_G, x_bnd = atoms2graph(atoms,cutoff=cutoff)
+    data = []
+    for i,atom in enumerate(atoms):
+        try:
+            idx = np.where(edge_index_G[0] == i)
+            tmp_edge_index_G = [edge_index_G[0][idx],edge_index_G[1][idx]]
+            tmp_x_bnd = x_bnd[idx]
+            #print('start: ' + str(len(tmp_edge_index_G[0])) + ' bl ' + str(len(tmp_x_bnd)))
+            for j, val in enumerate(tmp_edge_index_G[1]):
+                tmp_edge_index_G[0] = np.append(tmp_edge_index_G[0],val)
+                tmp_edge_index_G[1] = np.append(tmp_edge_index_G[1],i)
+                #idx_bnd = np.where((edge_index_G[0] == i) & (edge_index_G[1] == val))
+                tmp_x_bnd = np.append(tmp_x_bnd,x_bnd[j])
+            #print('end: ' + str(len(tmp_edge_index_G[0])) + ' bl ' + str(len(tmp_x_bnd)))
+            tmp_edge_index_G = np.array(tmp_edge_index_G)
+            edge_index_bnd_ang = line_graph(tmp_edge_index_G)
+            x_bnd_ang = get_bnd_angs(atoms, tmp_edge_index_G, edge_index_bnd_ang)
+
+            if dihedral:
+                edge_index_dih_ang = dihedral_graph(tmp_edge_index_G)
+                edge_index_A = np.hstack([edge_index_bnd_ang, edge_index_dih_ang])
+                x_dih_ang = get_dih_angs(atoms, tmp_edge_index_G, edge_index_dih_ang)
+                x_ang = np.concatenate([x_bnd_ang,x_dih_ang])
+                mask_dih_ang = [False] * len(x_bnd_ang) + [True]*len(x_dih_ang)
+
+            else:
+                edge_index_A = np.hstack([edge_index_bnd_ang])
+                x_ang = np.concatenate([x_bnd_ang])
+                mask_dih_ang = [False] * len(x_bnd_ang)
+
+            data_amounts["x_atm"].append(len(x_atm) - 1)
+            data_amounts["x_bnd"].append(len(tmp_x_bnd) - 1)
+            data_amounts["x_ang"].append(len(x_ang) - 1)
+            if dihedral:
+                data_amounts["x_dih_ang"].append(len(x_dih_ang) - 1)
+
+            data.append(Graph_Data(
+                edge_index_G=torch.tensor(tmp_edge_index_G, dtype=torch.long),
+                edge_index_A=torch.tensor(edge_index_A, dtype=torch.long),
+                x_atm=torch.tensor(x_atm, dtype=torch.float),
+                x_bnd=torch.tensor(tmp_x_bnd, dtype=torch.float),
+                x_ang=torch.tensor(x_ang, dtype=torch.float),
+                atm_amounts=torch.tensor(data_amounts['x_atm'], dtype=torch.long),
+                bnd_amounts=torch.tensor(data_amounts['x_bnd'], dtype=torch.long),
+                ang_amounts=torch.tensor(data_amounts['x_ang'], dtype=torch.long),
+                mask_dih_ang=torch.tensor(mask_dih_ang, dtype=torch.bool)
+            ))
+        except:
+            print('Failed graph gen...')
+            data.append(None)
+    return data
+
 
