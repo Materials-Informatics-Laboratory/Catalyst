@@ -1,0 +1,25 @@
+{
+    "gnn_dim": 10,
+    "num_convs": 5,
+    "num_inputs": 5,
+    "num_epochs": 1000,
+    "BATCH_SIZE": 1,
+    "n_models": 1,
+    "graph_cutoff": 4.0,
+    "LEARN_RATE": 0.0002,
+    "is_dihedral": false,
+    "remove_old_model": false,
+    "interpretable": true,
+    "pre_training": false,
+    "write_indv_pred": true,
+    "device": "cuda",
+    "model_dir": null,
+    "results_dir": null,
+    "elements": [
+        "Co",
+        "Mo",
+        "Cu",
+        "Ni",
+        "Fe"
+    ]
+}
