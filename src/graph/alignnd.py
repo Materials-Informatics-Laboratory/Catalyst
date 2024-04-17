@@ -1,13 +1,16 @@
 from ..utilities.structure_properties import *
 from ..graphite.utils.alignn import *
-from .graph.graph import Graph_Data
-from .graph.graph import atoms2graph
+from .graph import Graph_Data
+from .graph import atoms2graph
 import torch
 
 def alignnd(atoms,cutoff,dihedral=False):
     """Converts ASE `atoms` into a PyG graph data holding the atomic graph (G) and the angular graph (A).
     The angular graph holds bond angle information, but can also calculate dihedral information upon request.
     """
+    data_amounts = dict(x_atm=[], x_bnd=[], x_ang=[])
+    if dihedral:
+        data_amounts.append(x_dih_ang=[])
 
     elements = np.unique(atoms.get_chemical_symbols())
     ohe = []
@@ -42,7 +45,10 @@ def alignnd(atoms,cutoff,dihedral=False):
         x_atm=torch.tensor(x_atm, dtype=torch.float),
         x_bnd=torch.tensor(x_bnd, dtype=torch.float),
         x_ang=torch.tensor(x_ang, dtype=torch.float),
-        mask_dih_ang=torch.tensor(mask_dih_ang, dtype=torch.bool)
+        mask_dih_ang=torch.tensor(mask_dih_ang, dtype=torch.bool),
+        atm_amounts = torch.tensor(data_amounts['x_atm'], dtype=torch.long),
+        bnd_amounts = torch.tensor(data_amounts['x_bnd'], dtype=torch.long),
+        ang_amounts = torch.tensor(data_amounts['x_ang'], dtype=torch.long),
     )
 
     return data

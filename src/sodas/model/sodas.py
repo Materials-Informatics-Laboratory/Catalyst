@@ -1,10 +1,10 @@
 from torch_geometric.data import DataLoader
-from sodas.nn.models.alignn import Encoder, Processor, Decoder, ALIGNN
+from ..nn.models.alignn import Encoder, Processor, Decoder, ALIGNN
 import torch.nn as nn
 import numpy as np
 
 from torch_geometric.utils import scatter
-from sodas.nn import MLP
+from ..nn import MLP
 
 class SODAS():
     def __init__(self, mod = ALIGNN(

@@ -2,10 +2,10 @@ from scipy.spatial.distance import squareform, pdist
 from scipy import stats
 import networkx as nx
 
-from sodas.utils.structure_properties import *
-from sodas.utils.alignn import *
-from sodas.utils.graph import atoms2graph
-from sodas.utils.graph import AngularGraphPairData
+from ..utils.structure_properties import *
+from ..utils.alignn import *
+from ..utils.graph import atoms2graph
+from ..utils.graph import AngularGraphPairData
 import torch
 
 import numpy as np
