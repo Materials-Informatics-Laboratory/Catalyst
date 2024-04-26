@@ -40,6 +40,7 @@ def alignnd(atoms,cutoff,dihedral=False):
         mask_dih_ang = [False] * len(x_bnd_ang)
 
     data = Graph_Data(
+        atoms = atoms,
         edge_index_G=torch.tensor(edge_index_G, dtype=torch.long),
         edge_index_A=torch.tensor(edge_index_A, dtype=torch.long),
         x_atm=torch.tensor(x_atm, dtype=torch.float),
@@ -150,6 +151,7 @@ def realignnd(structures,cutoff,dihedral=False):
         scale += len(atoms)
 
     data = Graph_Data(
+        atoms=atoms,
         edge_index_G=torch.tensor(f_edge_index_G, dtype=torch.long),
         edge_index_A=torch.tensor(f_edge_index_A, dtype=torch.long),
         x_atm=torch.tensor(f_x_atm, dtype=torch.float),
@@ -220,6 +222,7 @@ def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[]):
                 data_amounts["x_dih_ang"].append(len(x_dih_ang) - 1)
 
             data.append(Graph_Data(
+                atoms=atoms,
                 edge_index_G=torch.tensor(tmp_edge_index_G, dtype=torch.long),
                 edge_index_A=torch.tensor(edge_index_A, dtype=torch.long),
                 x_atm=torch.tensor(x_atm, dtype=torch.float),
@@ -234,5 +237,68 @@ def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[]):
             print('Failed graph gen...')
             data.append(None)
     return data
+
+def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False):
+    data_amounts = dict(x_atm=[], x_bnd=[], x_ang=[])
+
+    atoms = []
+    for g in global_graph['edge_index_G'][0]:
+        atoms.append(g.item())
+    atoms = np.array(atoms)
+    neighbors = []
+    for g in global_graph['edge_index_G'][1]:
+        neighbors.append(g.item())
+    neighbors = np.array(neighbors)
+    x_atm = global_graph['x_atm']
+
+    unique_atoms = np.unique(atoms)
+    data = []
+    for atom in unique_atoms:
+        ids = np.where(atoms == atom)[0]
+        edge_index_G = [atoms[ids],neighbors[ids]]
+        x_bnd = []
+        for b in global_graph['x_bnd'][ids]:
+            x_bnd.append(b.item())
+        x_bnd = np.array(x_bnd)
+
+        for i,val in enumerate(edge_index_G[1]):
+            edge_index_G[0] = np.append(edge_index_G[0], val)
+            edge_index_G[1] = np.append(edge_index_G[1], edge_index_G[0][0])
+            x_bnd = np.append(x_bnd, x_bnd[i])
+        edge_index_G = np.array(edge_index_G)
+        edge_index_bnd_ang = line_graph(edge_index_G)
+        x_bnd_ang = get_bnd_angs(global_graph['atoms'], edge_index_G, edge_index_bnd_ang)
+
+        if dihedral:
+            edge_index_dih_ang = dihedral_graph(edge_index_G)
+            edge_index_A = np.hstack([edge_index_bnd_ang, edge_index_dih_ang])
+            x_dih_ang = get_dih_angs(global_graph['atoms'], edge_index_G, edge_index_dih_ang)
+            x_ang = np.concatenate([x_bnd_ang, x_dih_ang])
+            mask_dih_ang = [False] * len(x_bnd_ang) + [True] * len(x_dih_ang)
+        else:
+            edge_index_A = np.hstack([edge_index_bnd_ang])
+            x_ang = np.concatenate([x_bnd_ang])
+            mask_dih_ang = [False] * len(x_bnd_ang)
+
+        data.append(Graph_Data(
+            atoms = global_graph['atoms'],
+            edge_index_G=torch.tensor(edge_index_G, dtype=torch.long),
+            edge_index_A=torch.tensor(edge_index_A, dtype=torch.long),
+            x_atm=torch.tensor(x_atm, dtype=torch.float),
+            x_bnd=torch.tensor(x_bnd, dtype=torch.float),
+            x_ang=torch.tensor(x_ang, dtype=torch.float),
+            mask_dih_ang=torch.tensor(mask_dih_ang, dtype=torch.bool),
+            atm_amounts=torch.tensor(data_amounts['x_atm'], dtype=torch.long),
+            bnd_amounts=torch.tensor(data_amounts['x_bnd'], dtype=torch.long),
+            ang_amounts=torch.tensor(data_amounts['x_ang'], dtype=torch.long),
+            )
+        )
+    return data
+
+
+
+
+
+
 
 

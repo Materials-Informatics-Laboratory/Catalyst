@@ -59,7 +59,8 @@ class ML():
                                                     clusters=1
                                 ),
                                sodas_dict = dict(
-
+                                   gen_graphs=False,
+                                   gen_encodings=False,
                                     sodas_model = SODAS(mod=ALIGNN(
                                         encoder=Encoder(num_species=5, cutoff=3.0, dim=10),
                                         processor=Processor(num_convs=5, dim=10),

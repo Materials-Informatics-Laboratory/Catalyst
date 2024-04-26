@@ -1,6 +1,6 @@
 import numpy as np
 
-from .utilities.structure_properties import get_unique_bonds, get_unique_bond_angles
+from .structure_properties import get_unique_bonds, get_unique_bond_angles
 
 def organize_rankings(atom_data,bond_data,angle_data,elements):
     bnd_type = []

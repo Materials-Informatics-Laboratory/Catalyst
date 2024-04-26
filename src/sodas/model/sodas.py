@@ -34,8 +34,6 @@ class SODAS():
             self.model = nn.DataParallel(self.model)
         self.model.eval()
         self.model.to(device)
-
-        print('Generating GNN latent space...')
         # Run a forward pass
         counter = 0
         total_data = []

@@ -25,6 +25,7 @@ class Graph_Data(Data):
     """
 
     def __init__(self,
+                 atoms,
                  edge_index_G,
                  edge_index_A,
                  x_atm,
@@ -36,6 +37,7 @@ class Graph_Data(Data):
                  mask_dih_ang=None
                  ):
         super().__init__()
+        self.atoms = atoms
         self.edge_index_G = edge_index_G
         self.edge_index_A = edge_index_A
         self.x_atm = x_atm
