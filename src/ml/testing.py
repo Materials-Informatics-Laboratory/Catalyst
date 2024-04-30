@@ -68,6 +68,7 @@ def test_non_intepretable(loader,model,parameters,ind_fn='all',PIN_MEMORY = Fals
         proc = model.processor(encoding)
         atom_contrib, bond_contrib, angle_contrib = model.decoder(proc)
         all_sum = atom_contrib.sum() + bond_contrib.sum() + angle_contrib.sum()
+        print(all_sum)
         loss = loss_fn(all_sum, data.y[0][0])
         total_loss += loss.item()
 
@@ -76,6 +77,27 @@ def test_non_intepretable(loader,model,parameters,ind_fn='all',PIN_MEMORY = Fals
     if parameters['write_indv_pred']:
         of.close()
     return total_loss / len(loader)
+
+@torch.no_grad()
+def predict_non_intepretable(loader,model,parameters,ind_fn='all',PIN_MEMORY = False):
+    model.eval()
+    if parameters['write_indv_pred']:
+        of = open(os.path.join(parameters['results_dir'], ind_fn + '_indv_pred.data'), 'w')
+        of.write('#Pred_y          \n')
+    preds = []
+    for data in loader:
+        data = data.to(parameters['device'], non_blocking=PIN_MEMORY)
+        encoding = model.encoder(data)
+        proc = model.processor(encoding)
+        atom_contrib, bond_contrib, angle_contrib = model.decoder(proc)
+        all_sum = atom_contrib.sum() + bond_contrib.sum() + angle_contrib.sum()
+        preds.append(all_sum)
+        if parameters['write_indv_pred']:
+            of.write(str(all_sum.item()) + '\n')
+    if parameters['write_indv_pred']:
+        of.close()
+    return preds
+
 
 
 

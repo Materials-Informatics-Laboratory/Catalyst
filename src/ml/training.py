@@ -36,9 +36,6 @@ def run_training(data,parameters,model):
     loader_train = DataLoader(data['training'], batch_size=parameters['BATCH_SIZE'], shuffle=True, follow_batch=follow_batch)
     loader_valid = DataLoader(data['validation'], batch_size=parameters['BATCH_SIZE'], shuffle=False)
 
-    print(f'Number of training data: {len(loader_train.dataset)}')
-    print(f'Number of validation data: {len(loader_valid.dataset)}')
-
     L_train, L_valid = [], []
     min_loss_train = 1.0E30
     min_loss_valid = 1.0E30
@@ -74,7 +71,6 @@ def run_pre_training(data,parameters,model):
     follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm']
     loader_train = DataLoader(data['training'], batch_size=parameters['BATCH_SIZE'], shuffle=True,
                               follow_batch=follow_batch)
-    print(f'Number of training data: {len(loader_train.dataset)}')
     L_train = []
     min_loss_train = 1.0E30
 
