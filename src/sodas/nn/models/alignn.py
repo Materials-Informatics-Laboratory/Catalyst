@@ -15,14 +15,14 @@ class Encoder(nn.Module):
     The input `data` must have three fields `x_atm`, `x_bnd`, and `x_ang` that describe the atom type
     (in onehot vectors), the bond lengths, and bond/dihedral angles (in radians).
     """
-    def __init__(self, num_species, cutoff, dim=128, dihedral=False):
+    def __init__(self, num_species, cutoff,act_func, dim=128, dihedral=False):
         super().__init__()
         self.num_species = num_species
         self.cutoff      = cutoff
         self.dim         = dim
         self.dihedral    = dihedral
         
-        self.embed_atm = nn.Sequential(MLP([num_species, dim, dim], act=nn.SiLU()), nn.LayerNorm(dim))
+        self.embed_atm = nn.Sequential(MLP([num_species, dim, dim], act=act_func), nn.LayerNorm(dim))
         self.embed_bnd = partial(bessel, start=0, end=cutoff, num_basis=dim)
         self.embed_ang = self.embed_ang_with_dihedral if dihedral else self.embed_ang_without_dihedral
 
@@ -80,11 +80,11 @@ class Processor(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, node_dim, out_dim):
+    def __init__(self, node_dim, out_dim,act_func):
         super().__init__()
         self.node_dim = node_dim
         self.out_dim = out_dim
-        self.decoder = MLP([node_dim, node_dim, out_dim], act=nn.SiLU())
+        self.decoder = MLP([node_dim, node_dim, out_dim], act=act_func)
 
     def forward(self, data):
         return self.decoder(data.h_atm)
