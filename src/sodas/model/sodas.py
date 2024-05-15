@@ -8,9 +8,9 @@ from ..nn import MLP
 
 class SODAS():
     def __init__(self, mod = ALIGNN(
-                    encoder   = Encoder(num_species=5, cutoff=3.0, dim=100),
-                    processor = Processor(num_convs=5, dim=100),
-                    decoder   = Decoder(node_dim=100,out_dim=10)),
+                    encoder=Encoder(num_species=1, cutoff=3.0,act_func=nn.SiLU(), dim=100),
+                    processor=Processor(num_convs=5, dim=100),
+                    decoder=Decoder(node_dim=100, out_dim=10,act_func=nn.SiLU())
                  ls_mod=None):
         super().__init__()
 
