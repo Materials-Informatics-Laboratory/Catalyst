@@ -32,6 +32,8 @@ class ML():
                                num_epochs = 1000,
                                BATCH_SIZE = 1,
                                n_models = 1,
+                               world_size = 1,
+                               sampling_seed=112358,
                                graph_cutoff = 5.0,
                                LEARN_RATE = 2e-4,
                                train_tolerance = 1e-5,
@@ -44,6 +46,8 @@ class ML():
                                restart_training = False,
                                run_sodas_projection = False,
                                sodas_projection = True,
+                               run_ddp = False,
+                               main_path = '',
                                restart_model_name = '',
                                device = 'cpu',
                                graph_data_dir = '',
@@ -59,17 +63,12 @@ class ML():
                                                     clusters=1
                                 ),
                                sodas_dict = dict(
-                                   gen_graphs=False,
-                                   gen_encodings=False,
-                                    sodas_model = SODAS(mod=ALIGNN(
-                                        encoder=Encoder(num_species=5, cutoff=3.0, dim=10),
-                                        processor=Processor(num_convs=5, dim=10),
-                                        decoder=Decoder(node_dim=10, out_dim=10)
-                                        ),ls_mod=umap_.UMAP(n_neighbors=20, min_dist=0.1, n_components=10)
-                                    ),
-                                   projection_dir=''
+                                    gen_graphs=False,
+                                    gen_encodings=False,
+                                    sodas_model = None,
+                                    projection_dir=''
                                 )
-                               )
+                            )
 
         self.model = None
 
@@ -80,13 +79,16 @@ class ML():
             processor=Processor(num_convs=self.parameters['num_convs'], dim=self.parameters['gnn_dim']),
             decoder=PositiveScalarsDecoder(dim=self.parameters['gnn_dim']),
         )
-    def initialize(self,path):
-        np.save(os.path.join(path, 'parameter_log.npy'),self.parameters)
+
+    def set_params(self,new_params):
+        self.parameters = new_params
+        self.initialize()
+
+    def initialize(self):
+        np.save(os.path.join(self.parameters['main_path'], 'parameter_log.npy'),self.parameters)
         if self.parameters['pre_training']:
             print('*NOTE THAT PRE-TRAINING IS ON*')
             print('*THE FIRST MODEL WILL BE RANDOMLY INITIALIZED*')
             print('*ALL SUBSEQUENT MODELS WILL BE INITIALIZED USING THE PREVIOUS MODEL WEIGHTS*')
-    def set_params(self,new_params,path):
-        self.parameters = new_params
-        self.initialize(path)
+
 

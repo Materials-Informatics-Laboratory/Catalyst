@@ -13,9 +13,7 @@ def test_intepretable(loader,model,parameters,PIN_MEMORY = False):
     total_loss = 0.0
     for i,data in enumerate(loader):
         data = data.to(parameters['device'], non_blocking=PIN_MEMORY)
-        encoding = model.encoder(data)
-        proc = model.processor(encoding)
-        atom_contrib, bond_contrib, angle_contrib = model.decoder(proc)
+        atom_contrib, bond_contrib, angle_contrib = model(data)
 
         all_sum = atom_contrib.sum() + bond_contrib.sum() + angle_contrib.sum()
 
@@ -64,11 +62,8 @@ def test_non_intepretable(loader,model,parameters,ind_fn='all',PIN_MEMORY = Fals
         of.write('# True_y          Pred_y          \n')
     for data in loader:
         data = data.to(parameters['device'], non_blocking=PIN_MEMORY)
-        encoding = model.encoder(data)
-        proc = model.processor(encoding)
-        atom_contrib, bond_contrib, angle_contrib = model.decoder(proc)
+        atom_contrib, bond_contrib, angle_contrib = model(data)
         all_sum = atom_contrib.sum() + bond_contrib.sum() + angle_contrib.sum()
-        print(all_sum)
         loss = loss_fn(all_sum, data.y[0][0])
         total_loss += loss.item()
 
@@ -87,9 +82,7 @@ def predict_non_intepretable(loader,model,parameters,ind_fn='all',PIN_MEMORY = F
     preds = []
     for data in loader:
         data = data.to(parameters['device'], non_blocking=PIN_MEMORY)
-        encoding = model.encoder(data)
-        proc = model.processor(encoding)
-        atom_contrib, bond_contrib, angle_contrib = model.decoder(proc)
+        atom_contrib, bond_contrib, angle_contrib = model(data)
         all_sum = atom_contrib.sum() + bond_contrib.sum() + angle_contrib.sum()
         preds.append(all_sum)
         if parameters['write_indv_pred']:

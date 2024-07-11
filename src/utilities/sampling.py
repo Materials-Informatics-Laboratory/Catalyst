@@ -15,14 +15,14 @@ def check_samples(data,samples,non_samples):
     plt.scatter(np.array(data)[non_samples, 0], np.array(data)[non_samples, 1], color='b')
     plt.show()
 
-def random(data,split):
+def random(data,split,rng):
     npoints = int(split * float(len(data)))
     X = np.arange(len(data))
-    sampled_data = np.random.choice(X, npoints, replace=False)
+    sampled_data = rng.choice(X, npoints, replace=False)
     non_samples = np.delete(X, sampled_data)
     return sampled_data, non_samples
 
-def kmeans(data,split,clusters):
+def kmeans(data,split,clusters,rng):
     points_per_cluster = int(split*float(len(data))/float(clusters))
     kmeans = KMeans(n_clusters=clusters, random_state=0, n_init=10).fit(data)
     labels = kmeans.labels_
@@ -31,7 +31,7 @@ def kmeans(data,split,clusters):
     for cluster in range(clusters):
         idx = np.where(labels == cluster)[0]
         if points_per_cluster < len(idx):
-            samples = np.random.choice(idx, points_per_cluster, replace=False)
+            samples = rng.choice(idx, points_per_cluster, replace=False)
             sort_idx = idx.argsort()
             non_samples = np.delete(idx,sort_idx[np.searchsorted(idx,samples,sorter = sort_idx)])
             if sampled_data is None:
@@ -50,7 +50,7 @@ def kmeans(data,split,clusters):
     print('Found ',len(sampled_data), ' points out of ',points_per_cluster*clusters,' requested points')
     return sampled_data, remaining_data
 
-def property_binning(data,split,clusters):
+def property_binning(data,split,clusters,rng):
     y = []
     for d in data:
         y.append(d.y[0].item())
@@ -83,7 +83,7 @@ def property_binning(data,split,clusters):
             if sampled_data is None:
                 sampled_data = bx
         else:
-            samples = np.random.choice(bx, points_per_cluster, replace=False)
+            samples = rng.choice(bx, points_per_cluster, replace=False)
             sort_idx = np.array(bx).argsort()
             non_samples = np.delete(bx, sort_idx[np.searchsorted(bx, samples, sorter=sort_idx)])
             if sampled_data is None:
@@ -98,7 +98,7 @@ def property_binning(data,split,clusters):
     print('Found ',len(sampled_data), ' points out of ',points_per_cluster*(len(binned_idx)),' requested points')
     return sampled_data, remaining_data
 
-def gaussian_mixture(data,split,clusters):
+def gaussian_mixture(data,split,clusters,rng):
     points_per_cluster = int(split * float(len(data)) / float(clusters))
     labels = GaussianMixture(n_components=clusters).fit_predict(data)
 
@@ -107,7 +107,7 @@ def gaussian_mixture(data,split,clusters):
     for cluster in range(clusters):
         idx = np.where(labels == cluster)[0]
         if points_per_cluster < len(idx):
-            samples = np.random.choice(idx, points_per_cluster, replace=False)
+            samples = rng.choice(idx, points_per_cluster, replace=False)
             sort_idx = idx.argsort()
             non_samples = np.delete(idx, sort_idx[np.searchsorted(idx, samples, sorter=sort_idx)])
             if sampled_data is None:
@@ -126,7 +126,7 @@ def gaussian_mixture(data,split,clusters):
     print('Found ', len(sampled_data), ' points out of ', points_per_cluster * clusters, ' requested points')
     return sampled_data, remaining_data
 
-def spectral(data,split,clusters):
+def spectral(data,split,clusters,rng):
     points_per_cluster = int(split * float(len(data)) / float(clusters))
     labels = SpectralClustering(n_components=clusters).fit_predict(data)
 
@@ -135,7 +135,7 @@ def spectral(data,split,clusters):
     for cluster in range(clusters):
         idx = np.where(labels == cluster)[0]
         if points_per_cluster < len(idx):
-            samples = np.random.choice(idx, points_per_cluster, replace=False)
+            samples = rng.choice(idx, points_per_cluster, replace=False)
             sort_idx = idx.argsort()
             non_samples = np.delete(idx, sort_idx[np.searchsorted(idx, samples, sorter=sort_idx)])
             if sampled_data is None:
@@ -154,7 +154,7 @@ def spectral(data,split,clusters):
     print('Found ', len(sampled_data), ' points out of ', points_per_cluster * clusters, ' requested points')
     return sampled_data, remaining_data
 
-def birch(data,split,clusters):
+def birch(data,split,clusters,rng):
     points_per_cluster = int(split * float(len(data)) / float(clusters))
     labels = Birch(threshold=0.01, n_clusters=clusters).fit_predict(data)
 
@@ -163,7 +163,7 @@ def birch(data,split,clusters):
     for cluster in range(clusters):
         idx = np.where(labels == cluster)[0]
         if points_per_cluster < len(idx):
-            samples = np.random.choice(idx, points_per_cluster, replace=False)
+            samples = rng.choice(idx, points_per_cluster, replace=False)
             sort_idx = idx.argsort()
             non_samples = np.delete(idx, sort_idx[np.searchsorted(idx, samples, sorter=sort_idx)])
             if sampled_data is None:
@@ -182,20 +182,20 @@ def birch(data,split,clusters):
     print('Found ', len(sampled_data), ' points out of ', points_per_cluster * clusters, ' requested points')
     return sampled_data, remaining_data
 
-def run_sampling(data,sampling_type,split,nclusters=1):
+def run_sampling(data,sampling_type,split,rng,nclusters=1):
     print('Performing',sampling_type,'sampling using a training ratio of',str(split*100.0),'%')
     if sampling_type == 'random':
-        sampled_data, remaining_data = random(data=data,split=split)
+        sampled_data, remaining_data = random(data=data,split=split,rng=rng)
     elif sampling_type == 'kmeans':
-        sampled_data, remaining_data = kmeans(data=data,split=split,clusters=nclusters)
+        sampled_data, remaining_data = kmeans(data=data,split=split,clusters=nclusters,rng=rng)
     elif sampling_type == 'y_bin':
-        sampled_data, remaining_data = property_binning(data=data,split=split,clusters=nclusters)
+        sampled_data, remaining_data = property_binning(data=data,split=split,clusters=nclusters,rng=rng)
     elif sampling_type == 'gaussian_mixture':
-        sampled_data, remaining_data = gaussian_mixture(data=data,split=split,clusters=nclusters)
+        sampled_data, remaining_data = gaussian_mixture(data=data,split=split,clusters=nclusters,rng=rng)
     elif sampling_type == 'spectral':
-        sampled_data, remaining_data = spectral(data=data,split=split,clusters=nclusters)
+        sampled_data, remaining_data = spectral(data=data,split=split,clusters=nclusters,rng=rng)
     elif sampling_type == 'birch':
-        sampled_data, remaining_data = birch(data=data,split=split,clusters=nclusters)
+        sampled_data, remaining_data = birch(data=data,split=split,clusters=nclusters,rng=rng)
 
     return sampled_data, remaining_data
 
