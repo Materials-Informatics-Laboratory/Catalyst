@@ -77,6 +77,7 @@ def main(ml_parameters):
     pretraining_data = None
     if ml.parameters['run_pretrain']:
         # remove pretrain data
+        print('*NOTE THAT PRE-TRAINING IS ON*')
 
         pretrain_idx, nonpretrain_idx = sampling.run_sampling(projected_data, sampling_type=ml.parameters['sampling_dict'][
                 'pretraining_sampling_type'],
@@ -168,16 +169,16 @@ if __name__ == "__main__":
                          is_dihedral=False,
                          remove_old_model=False,
                          interpretable=False,
-                         pre_training=False,
-                         run_pretrain=False,
+                         pre_training=True,
+                         run_pretrain=True,
                          write_indv_pred=False,
-                         restart_training=True,
+                         restart_training=False,
                          sodas_projection=True,
                          run_sodas_projection=True,
-                         run_ddp = False,
+                         run_ddp = True,
                          main_path=path,
-                         device='cpu',
-                         restart_model_name=r'C:\Users\jc112358\Documents\venv_310\Lib\site-packages\catalyst\examples\train_model\models\0\model_2024-07-12_11-43-47',
+                         device='cuda',
+                         restart_model_name=r'C:\Users\jc112358\Documents\venv_310\Lib\site-packages\catalyst\examples\train_model\models\2\model_2024-07-12_12-08-05',
                          graph_data_dir=os.path.join(path, 'data'),
                          model_dir=None,
                          model_save_sdir=None,

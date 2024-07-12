@@ -87,9 +87,6 @@ class ML():
 
     def initialize(self):
         np.save(os.path.join(self.parameters['main_path'], 'parameter_log.npy'),self.parameters)
-        if self.parameters['pre_training']:
-            print('*NOTE THAT PRE-TRAINING IS ON*')
-            print('*THE FIRST MODEL WILL BE RANDOMLY INITIALIZED*')
-            print('*ALL SUBSEQUENT MODELS WILL BE INITIALIZED USING THE PREVIOUS MODEL WEIGHTS*')
+
 
 
