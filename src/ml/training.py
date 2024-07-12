@@ -53,8 +53,8 @@ def run_training(rank,data,parameters,model,ml=None):
         else:
             ml.set_model()
             ml.model = ml.model.to(ml.parameters['device'])
-            ml.model = DDP(ml.model, device_ids=[rank], find_unused_parameters=True)
             ml.model.load_state_dict(torch.load(os.path.join(ml.parameters['pretrain_dir'], 'model_pre')))
+            ml.model = DDP(ml.model, device_ids=[rank], find_unused_parameters=True)
             model = ml.model
 
     follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm']
@@ -73,7 +73,7 @@ def run_training(rank,data,parameters,model,ml=None):
     min_loss_valid = 1.0E30
 
     if rank == 0:
-        stats_file = open(os.path.join(parameters['model_dir'],'loss.data'),'w')
+        stats_file = open(os.path.join(parameters['model_save_dir'],'loss.data'),'w')
         stats_file.write('Training_loss     Validation loss\n')
         stats_file.close()
     for ep in range(parameters['num_epochs']):
@@ -88,7 +88,7 @@ def run_training(rank,data,parameters,model,ml=None):
         loss_valid = test_non_intepretable(loader_valid, model, parameters)
         L_valid.append(loss_valid)
         if rank == 0:
-            stats_file = open(os.path.join(parameters['model_dir'], 'loss.data'), 'a')
+            stats_file = open(os.path.join(parameters['model_save_dir'], 'loss.data'), 'a')
             stats_file.write(str(loss_train) + '     ' + str(loss_valid) + '\n')
             stats_file.close()
         if loss_train < min_loss_train:
@@ -96,13 +96,16 @@ def run_training(rank,data,parameters,model,ml=None):
             if loss_valid < min_loss_valid:
                 min_loss_valid = loss_valid
                 if parameters['remove_old_model']:
-                    model_name = glob.glob(os.path.join(parameters['model_dir'], 'model_*'))
+                    model_name = glob.glob(os.path.join(parameters['model_save_dir'], 'model_*'))
                     if len(model_name) > 0 and rank == 0:
                         os.remove(model_name[0])
                 if rank == 0:
                     now = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
                     print('Min train loss: ', min_loss_train, ' min valid loss: ', min_loss_valid, ' time: ', now)
-                    torch.save(model.state_dict(), os.path.join(parameters['model_dir'], 'model_' + str(now)))
+                    if parameters['run_ddp']:
+                        torch.save(model.module.state_dict(), os.path.join(parameters['model_save_dir'], 'model_' + str(now)))
+                    else:
+                        torch.save(model.state_dict(), os.path.join(parameters['model_save_dir'], 'model_' + str(now)))
         if loss_train < parameters['train_tolerance'] and loss_valid < parameters['train_tolerance']:
             if rank == 0:
                 print('Validation and training losses satisy set tolerance...exiting training loop...')
@@ -149,7 +152,10 @@ def run_pre_training(rank,data,parameters,model):
             if len(model_name) > 0 and rank == 0:
                 os.remove(model_name[0])
             if rank == 0:
-                torch.save(model.state_dict(), os.path.join(parameters['pretrain_dir'], 'model_pre'))
+                if parameters['run_ddp']:
+                    torch.save(model.module.state_dict(), os.path.join(parameters['pretrain_dir'], 'model_pre'))
+                else:
+                    torch.save(model.state_dict(), os.path.join(parameters['pretrain_dir'], 'model_pre'))
         if loss_train < parameters['train_tolerance']:
             if rank == 0:
                 print('Pre-Training loss satisfies set tolerance...exiting training loop...')

@@ -52,6 +52,7 @@ class ML():
                                device = 'cpu',
                                graph_data_dir = '',
                                model_dir='',
+                               model_save_dir='',
                                results_dir = '',
                                pretrain_dir='',
                                samples_dir = '',

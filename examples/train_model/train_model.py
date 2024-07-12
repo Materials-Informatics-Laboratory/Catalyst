@@ -20,25 +20,21 @@ from catalyst.src.sodas.model.sodas import SODAS
 from catalyst.src.ml.ml import ML
 
 def main(ml_parameters):
-    if ml_parameters['restart_training']:
-        wp = ml_parameters['restart_model_name']
-        if sys.platform.startswith('win'):
-            print(wp)
-        else:
-            ml.parameters['model_dir'] = save_dir
-        exit(0)
-    else:
-        model_dir = os.path.join(ml_parameters['main_path'], 'models')
-        if os.path.isdir(model_dir):
-            shutil.rmtree(model_dir)
-        os.mkdir(model_dir)
-
     # initialize ML class and load graph data
     ml = ML()
     ml.set_params(ml_parameters)
     data = []
     for graph in glob.glob(os.path.join(ml.parameters['graph_data_dir'],'*.pt')):
         data.append(torch.load(graph))
+
+    # restart training tags
+    if ml_parameters['restart_training']:
+        ml.parameters['model_dir'] = os.path.join(ml_parameters['main_path'], 'models_restart')
+    else:
+        ml.parameters['model_dir'] = os.path.join(ml_parameters['main_path'], 'models')
+    if os.path.isdir(ml.parameters['model_dir']):
+        shutil.rmtree(ml.parameters['model_dir'])
+    os.mkdir(ml.parameters['model_dir'])
 
     # sodas: either perform sodas projection or load a previously projected set of data
     projected_data = None
@@ -118,26 +114,25 @@ def main(ml_parameters):
         np.save(os.path.join(ml.parameters['samples_dir'], 'pretraining_data.npy'), pretraining_data)
         np.save(os.path.join(ml.parameters['samples_dir'], 'pretraining_data_projected.npy'), projected_data_pretrain)
 
-    # reload model if performing model restart
-    if ml_parameters['restart_training']:
-        ml.model = ml.model.to(ml.parameters['device'])
-        ml.model.load_state_dict(torch.load(ml_parameters['restart_model_name']))
-
     # loop over number of requested models
     for iteration in range(ml.parameters['n_models']):
+        ml.parameters['model_save_dir'] = os.path.join(ml.parameters['model_dir'], str(iteration))
+        os.mkdir(ml.parameters['model_save_dir'])
         if ml_parameters['restart_training']:
             print('Restarting model training using model ',ml_parameters['restart_model_name'])
+
+            # reload model if performing model restart
+            ml.set_model()
+            device = torch.device(ml.parameters['device'])
+            ml.model.load_state_dict(torch.load(ml_parameters['restart_model_name'],map_location=device))
         else:
             print('Training model ',iteration)
-            save_dir = os.path.join(model_dir,str(iteration))
-            os.mkdir(save_dir)
-            ml.parameters['model_dir'] = save_dir
+            # if pretraining is on this will load the pretrained model, if not it will initialize a new model
+            if ml.parameters['pre_training'] == False:
+                ml = ML()
+                ml.set_params(ml_parameters)
+                ml.set_model()
 
-        # if pretraining is on this will load the pretrained model, if not it will initialize a new model
-        if ml.parameters['pre_training'] == False:
-            ml = ML()
-            ml.set_params(ml_parameters,model_dir)
-            ml.set_model()
         # sample data and train model
         train_idx, valid_idx = sampling.run_sampling(projected_data,sampling_type=ml.parameters['sampling_dict']['sampling_type'],
                                                            split=ml.parameters['sampling_dict']['split'][2],rng=rng,
@@ -146,7 +141,7 @@ def main(ml_parameters):
         valid_data = [data[index] for index in valid_idx]
         partitioned_data = dict(training=train_data,
                                 validation=valid_data)
-        np.save(os.path.join(save_dir,'train_valid_split.npy'), partitioned_data)
+        np.save(os.path.join(ml.parameters['model_dir'],'train_valid_split.npy'), partitioned_data)
         if ml.parameters['run_ddp']:
             mp.spawn(run_training, args=(partitioned_data, ml.parameters, ml.model,ml), nprocs=ml_parameters['world_size'],
                  join=True)
@@ -173,18 +168,19 @@ if __name__ == "__main__":
                          is_dihedral=False,
                          remove_old_model=False,
                          interpretable=False,
-                         pre_training=True,
-                         run_pretrain=True,
+                         pre_training=False,
+                         run_pretrain=False,
                          write_indv_pred=False,
-                         restart_training=False,
+                         restart_training=True,
                          sodas_projection=True,
                          run_sodas_projection=True,
                          run_ddp = False,
                          main_path=path,
                          device='cpu',
-                         restart_model_name=None,
+                         restart_model_name=r'C:\Users\jc112358\Documents\venv_310\Lib\site-packages\catalyst\examples\train_model\models\0\model_2024-07-12_11-43-47',
                          graph_data_dir=os.path.join(path, 'data'),
                          model_dir=None,
+                         model_save_sdir=None,
                          pretrain_dir=os.path.join(path, 'pre_training'),
                          results_dir=None,
                          samples_dir=None,
