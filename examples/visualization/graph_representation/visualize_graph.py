@@ -16,7 +16,6 @@ def visualize_graph(data,atomic=False):
         'node_size': 100,
     }
 
-    print(data)
     edge_index_bnd = data.edge_index_G.numpy()
     G = nx.Graph(list(edge_index_bnd.T))
     G_pos = nx.spring_layout(G)
@@ -54,7 +53,7 @@ def visualize_graph(data,atomic=False):
     plt.show()
 
 path = str(Path(__file__).parent)
-graphs = glob.glob(os.path.join(path,'graphs','*.pt'))
+graphs = glob.glob(os.path.join(path,'data','*.pt'))
 for graph in graphs:
     visualize_graph(torch.load(os.path.join(path,graph)),atomic=False)
 

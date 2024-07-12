@@ -7,7 +7,6 @@ import os
 
 from umap import umap_
 
-from torch.nn.parallel import DistributedDataParallel as DDP
 from torch_geometric.loader import DataLoader
 import torch.multiprocessing as mp
 import torch as torch
