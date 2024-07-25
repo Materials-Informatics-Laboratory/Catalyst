@@ -12,7 +12,7 @@ import glob
 import sys
 import os
 
-def ddp_setup(rank: int,world_size):
+def ddp_setup(rank: int,world_size,backend):
     """
     Args:
     rank: Unique identifier of each process
@@ -21,7 +21,11 @@ def ddp_setup(rank: int,world_size):
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "12355"
     torch.cuda.set_device(rank)
-    init_process_group(backend="gloo", rank=rank, world_size=world_size)
+    
+    init_process_group(backend=backend, rank=rank, world_size=world_size)
+
+def ddp_destroy():
+    destroy_process_group()
 
 def train(loader,model,parameters,PIN_MEMORY=False):
     model.train()
@@ -41,21 +45,24 @@ def train(loader,model,parameters,PIN_MEMORY=False):
         loss.backward()
         optimizer.step()
         total_loss += loss.item()
-
+        if parameters['run_ddp']:
+            data.detach()
     return total_loss / len(loader)
 
 def run_training(rank,data,parameters,model,ml=None):
     if parameters['run_ddp']:
-        ddp_setup(rank,parameters['world_size'])
+        ddp_setup(rank,parameters['world_size'],parameters['ddp_backend'])
         if parameters['pre_training'] == False:
+            if parameters['restart_training']:
+                device = torch.device(ml.parameters['device'])
+                ml.model.load_state_dict(torch.load(ml.parameters['restart_model_name'],map_location=device))
             model.to(parameters['device'])
             model = DDP(model, device_ids=[rank],find_unused_parameters=True)
-        else:
-            ml.set_model()
-            ml.model = ml.model.to(ml.parameters['device'])
-            ml.model.load_state_dict(torch.load(os.path.join(ml.parameters['pretrain_dir'], 'model_pre')))
-            ml.model = DDP(ml.model, device_ids=[rank], find_unused_parameters=True)
-            model = ml.model
+        else: 
+            model.to(ml.parameters['device'])
+            device = torch.device(ml.parameters['device'])
+            model.load_state_dict(torch.load(os.path.join(ml.parameters['pretrain_dir'], 'model_pre'),map_location=device))
+            model = DDP(model, device_ids=[rank], find_unused_parameters=True)
 
     follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm']
     if parameters['run_ddp']:
@@ -111,11 +118,12 @@ def run_training(rank,data,parameters,model,ml=None):
                 print('Validation and training losses satisy set tolerance...exiting training loop...')
             break
     if parameters['run_ddp']:
-        destroy_process_group()
+        ddp_destroy()
 def run_pre_training(rank,data,parameters,model):
     if parameters['run_ddp']:
-        ddp_setup(rank, parameters['world_size'])
-        model.to(parameters['device'])
+        ddp_setup(rank, parameters['world_size'],parameters['ddp_backend'])
+        model.to('cuda')
+        #model.cuda(rank % torch.cuda.device_count())
         model = DDP(model, device_ids=[rank],find_unused_parameters=True)
 
     follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm']
@@ -161,7 +169,7 @@ def run_pre_training(rank,data,parameters,model):
                 print('Pre-Training loss satisfies set tolerance...exiting training loop...')
             break
     if parameters['run_ddp']:
-        destroy_process_group()
+        ddp_destroy()
 
 
 

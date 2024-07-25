@@ -5,7 +5,6 @@ import numpy as np
 
 from torch_geometric.utils import scatter
 from ..nn import MLP
-
 class SODAS():
     def __init__(self, mod, ls_mod):
         super().__init__()
@@ -63,6 +62,20 @@ class SODAS():
         data = self.dim_model.transform(data)
 
         return data
+
+    def clear_gpu_memory(self):
+        from numba import cuda
+        import torch
+        import gc
+        
+        self.model.cpu()
+        del self.model
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        device = cuda.get_current_device()
+        device.reset()
+        cuda.close()
 
 
 

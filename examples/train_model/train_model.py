@@ -5,6 +5,10 @@ import glob
 import sys
 import os
 
+from numba import cuda
+import torch
+import gc
+
 from umap import umap_
 
 from torch_geometric.loader import DataLoader
@@ -18,15 +22,24 @@ import catalyst.src.utilities.sampling as sampling
 from catalyst.src.sodas.model.sodas import SODAS
 from catalyst.src.ml.ml import ML
 
+# ddp_destory is needed when calling mp.spawn() multiple times within a SLURM or ORACLE scheduling environment
+def ddp_destroy():
+    # collect memory via garbage collection
+    gc.collect()
+    # loop through active devices (assumes you are using all devices available), clear their memory, and then reset the device and close cuda
+    for gpu_id in range(torch.cuda.device_count()):
+        cuda.select_device(gpu_id)
+        torch.cuda.empty_cache()
+        device = cuda.get_current_device()
+        device.reset()
+        cuda.close()
+
 def main(ml_parameters):
-    # initialize ML class and load graph data
+    # initialize ML class
     ml = ML()
     ml.set_params(ml_parameters)
-    data = []
-    for graph in glob.glob(os.path.join(ml.parameters['graph_data_dir'],'*.pt')):
-        data.append(torch.load(graph))
-
-    # restart training tags
+    
+    # create model directories
     if ml_parameters['restart_training']:
         ml.parameters['model_dir'] = os.path.join(ml_parameters['main_path'], 'models_restart')
     else:
@@ -35,119 +48,44 @@ def main(ml_parameters):
         shutil.rmtree(ml.parameters['model_dir'])
     os.mkdir(ml.parameters['model_dir'])
 
-    # sodas: either perform sodas projection or load a previously projected set of data
-    projected_data = None
-    if ml.parameters['run_sodas_projection']:
-        if os.path.isdir(ml.parameters['sodas_dict']['projection_dir']):
-            shutil.rmtree(ml.parameters['sodas_dict']['projection_dir'])
-        os.mkdir(ml.parameters['sodas_dict']['projection_dir'])
-
-        follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data[0], 'x_ang') else ['x_atm']
-        loader = DataLoader(data, batch_size=1, shuffle=False, follow_batch=follow_batch)
-        encoded_data = ml.parameters['sodas_dict']['sodas_model'].generate_gnn_latent_space(loader=loader, device=ml.parameters['device'])
-        ml.parameters['sodas_dict']['sodas_model'].fit_preprocess(data=encoded_data)
-        ml.parameters['sodas_dict']['sodas_model'].fit_dim_red(data=encoded_data)
-        projected_data =  ml.parameters['sodas_dict']['sodas_model'].project_data(data=encoded_data)
-
-        stored_projection = dict(
-            projections = projected_data,
-            graphs = data
-        )
-        np.save(os.path.join(ml.parameters['sodas_dict']['projection_dir'], 'saved_projection_data.npy'), stored_projection)
-    elif ml.parameters['sodas_projection']:
-        # when loading projections, you must have saved the data in the dictionary format used in the ml.parameters['run_sodas_projection'] section
-        # this stored the graphs and projections in the correct order, together, so that they can be indexed together
-        # note, this will rewrite the data variable to ensure that data and projected_data are in the same order
-        loaded_projections = np.load(os.path.join(ml.parameters['sodas_dict']['projection_dir'], 'saved_projection_data.npy'),allow_pickle=True)
-        data = loaded_projections.item().get('graphs')
-        projected_data = loaded_projections.item().get('projections')
-
-    # remove validation data
-    rng = np.random.default_rng(seed=ml.parameters['sampling_seed'])
-    test_idx, nontest_idx = sampling.run_sampling(data,sampling_type=ml.parameters['sampling_dict']['test_sampling_type'],
-                                                           split=ml.parameters['sampling_dict']['split'][0],rng=rng,
-                                                           nclusters=ml.parameters['sampling_dict']['clusters'])
-    test_data = [data[index] for index in test_idx]
-    data = [data[index] for index in nontest_idx]
-    projected_data_test = [projected_data[index] for index in test_idx]
-    projected_data = [projected_data[index] for index in nontest_idx]
-
-    # run pretraining
-    pretraining_data = None
+    # run pretraining  
     if ml.parameters['run_pretrain']:
-        # remove pretrain data
-        print('*NOTE THAT PRE-TRAINING IS ON*')
+        print('Performing pretraining...')
 
-        pretrain_idx, nonpretrain_idx = sampling.run_sampling(projected_data, sampling_type=ml.parameters['sampling_dict'][
-                'pretraining_sampling_type'],
-                                                          split=ml.parameters['sampling_dict']['split'][1],rng=rng,
-                                                          nclusters=ml.parameters['sampling_dict']['clusters'])
-        pretraining_data = [data[index] for index in pretrain_idx]
-        data = [data[index] for index in nonpretrain_idx]
-        projected_data_pretrain = [projected_data[index] for index in pretrain_idx]
-        projected_data = [projected_data[index] for index in nonpretrain_idx]
-
-        # perform pretraining
+        # load pretraining data
         if os.path.isdir(ml.parameters['pretrain_dir']):
             shutil.rmtree(ml.parameters['pretrain_dir'])
         os.mkdir(ml.parameters['pretrain_dir'])
         ml.set_model()
-        partitioned_data = dict(training=pretraining_data,
-                                    validation=None)
-        np.save(os.path.join(ml.parameters['pretrain_dir'], 'train_valid_split.npy'), partitioned_data)
+        partitioned_data = np.load(os.path.join(ml.parameters['graph_data_dir'],'pre_training','train_valid_split.npy'),allow_pickle=True)
+
+        samples = dict(training=partitioned_data.item().get('training'),validation=None)
+        # perform pretraining
         if ml.parameters['run_ddp']:
-            mp.spawn(run_pre_training, args=(partitioned_data, ml.parameters, ml.model), nprocs=ml_parameters['world_size'], join=True)
+            mp.spawn(run_pre_training, args=(samples, ml.parameters, ml.model), nprocs=ml_parameters['world_size'], join=True)
+            ddp_destroy()
         else:
-            run_pre_training(rank=0, data=partitioned_data, parameters=ml.parameters, model=ml.model)
-
-    # save different bins of data
-    ml.parameters['samples_dir'] = os.path.join(ml_parameters['main_path'],'sampled_data')
-    if os.path.isdir(ml.parameters['samples_dir']):
-        shutil.rmtree(ml.parameters['samples_dir'])
-    os.mkdir(ml.parameters['samples_dir'])
-
-    np.save(os.path.join(ml.parameters['samples_dir'], 'test_data.npy'), test_data)
-    np.save(os.path.join(ml.parameters['samples_dir'], 'test_data_projected.npy'), projected_data_test)
-    np.save(os.path.join(ml.parameters['samples_dir'], 'remaining_data.npy'), data)
-    np.save(os.path.join(ml.parameters['samples_dir'], 'remaining_data_projected.npy'), projected_data)
-    if ml.parameters['run_pretrain']:
-        np.save(os.path.join(ml.parameters['samples_dir'], 'pretraining_data.npy'), pretraining_data)
-        np.save(os.path.join(ml.parameters['samples_dir'], 'pretraining_data_projected.npy'), projected_data_pretrain)
+            run_pre_training(rank=0, data=samples, parameters=ml.parameters, model=ml.model)
 
     # loop over number of requested models
     for iteration in range(ml.parameters['n_models']):
         ml.parameters['model_save_dir'] = os.path.join(ml.parameters['model_dir'], str(iteration))
         os.mkdir(ml.parameters['model_save_dir'])
+        ml.set_model()
         if ml_parameters['restart_training']:
             print('Restarting model training using model ',ml_parameters['restart_model_name'])
+        print('Training model ',iteration)
 
-            # reload model if performing model restart
-            ml.set_model()
-            device = torch.device(ml.parameters['device'])
-            ml.model.load_state_dict(torch.load(ml_parameters['restart_model_name'],map_location=device))
-        else:
-            print('Training model ',iteration)
-            # if pretraining is on this will load the pretrained model, if not it will initialize a new model
-            if ml.parameters['pre_training'] == False:
-                ml = ML()
-                ml.set_params(ml_parameters)
-                ml.set_model()
-
-        # sample data and train model
-        train_idx, valid_idx = sampling.run_sampling(projected_data,sampling_type=ml.parameters['sampling_dict']['sampling_type'],
-                                                           split=ml.parameters['sampling_dict']['split'][2],rng=rng,
-                                                           nclusters=ml.parameters['sampling_dict']['clusters'])
-        train_data = [data[index] for index in train_idx]
-        valid_data = [data[index] for index in valid_idx]
-        partitioned_data = dict(training=train_data,
-                                validation=valid_data)
-        np.save(os.path.join(ml.parameters['model_dir'],'train_valid_split.npy'), partitioned_data)
+        partitioned_data = np.load(os.path.join(ml.parameters['graph_data_dir'],'model_samples',str(iteration),'train_valid_split.npy'),allow_pickle=True)
+ 
+        samples = dict(training=partitioned_data.item().get('training'),validation=partitioned_data.item().get('validation'))
         if ml.parameters['run_ddp']:
-            mp.spawn(run_training, args=(partitioned_data, ml.parameters, ml.model,ml), nprocs=ml_parameters['world_size'],
+            mp.spawn(run_training, args=(samples, ml.parameters, ml.model,ml), nprocs=ml_parameters['world_size'],
                  join=True)
+            ddp_destroy()
         else:
-            run_training(rank=0, data=partitioned_data, parameters=ml.parameters, model=ml.model)
-
+            run_training(rank=0, data=samples, parameters=ml.parameters, model=ml.model)
+        
 if __name__ == "__main__":
     import time
     start_time = time.time()
@@ -172,15 +110,14 @@ if __name__ == "__main__":
                          run_pretrain=True,
                          write_indv_pred=False,
                          restart_training=False,
-                         sodas_projection=True,
-                         run_sodas_projection=True,
                          run_ddp = True,
                          main_path=path,
+                         ddp_backend='gloo',
                          device='cuda',
-                         restart_model_name=r'C:\Users\jc112358\Documents\venv_310\Lib\site-packages\catalyst\examples\train_model\models\2\model_2024-07-12_12-08-05',
-                         graph_data_dir=os.path.join(path, 'data'),
+                         restart_model_name=None,
+                         graph_data_dir=os.path.join(path, 'samples'),
                          model_dir=None,
-                         model_save_sdir=None,
+                         model_save_dir=None,
                          pretrain_dir=os.path.join(path, 'pre_training'),
                          results_dir=None,
                          samples_dir=None,
@@ -192,18 +129,9 @@ if __name__ == "__main__":
                                             # [test,pretrain,train,val], test is percent of total data left out of training and validation, pretrain is selected and not replaced for pretraining, the remaining data is split into the train vs val split
                                             clusters=3
                                             ),
-                         sodas_dict=dict(
-                             sodas_model=SODAS(mod=ALIGNN(
-                                 encoder=Encoder(num_species=5, cutoff=4.0, dim=10, act_func=nn.SiLU()),
-                                 processor=Processor(num_convs=5, dim=10),
-                                 decoder=Decoder(node_dim=10, out_dim=10, act_func=nn.SiLU())
-                             ),
-                                 ls_mod=umap_.UMAP(n_neighbors=20, min_dist=0.1, n_components=3)
-                             ),
-                             projection_dir=os.path.join(path, 'sodas_projection')
-                         )
                         )
 
+    #tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
     main(ml_parameters)
 
     print("--- %s seconds ---" % (time.time() - start_time))

@@ -50,10 +50,7 @@ def kmeans(data,split,clusters,rng):
     print('Found ',len(sampled_data), ' points out of ',points_per_cluster*clusters,' requested points')
     return sampled_data, remaining_data
 
-def property_binning(data,split,clusters,rng):
-    y = []
-    for d in data:
-        y.append(d.y[0].item())
+def property_binning(data,y,split,clusters,rng):
     binned_idx = []
     for i in range(clusters + 1):
         binned_idx.append([])
@@ -182,14 +179,14 @@ def birch(data,split,clusters,rng):
     print('Found ', len(sampled_data), ' points out of ', points_per_cluster * clusters, ' requested points')
     return sampled_data, remaining_data
 
-def run_sampling(data,sampling_type,split,rng,nclusters=1):
+def run_sampling(data,sampling_type,split,rng,nclusters=1,y=None):
     print('Performing',sampling_type,'sampling using a training ratio of',str(split*100.0),'%')
     if sampling_type == 'random':
         sampled_data, remaining_data = random(data=data,split=split,rng=rng)
     elif sampling_type == 'kmeans':
         sampled_data, remaining_data = kmeans(data=data,split=split,clusters=nclusters,rng=rng)
     elif sampling_type == 'y_bin':
-        sampled_data, remaining_data = property_binning(data=data,split=split,clusters=nclusters,rng=rng)
+        sampled_data, remaining_data = property_binning(data=data,y=y,split=split,clusters=nclusters,rng=rng)
     elif sampling_type == 'gaussian_mixture':
         sampled_data, remaining_data = gaussian_mixture(data=data,split=split,clusters=nclusters,rng=rng)
     elif sampling_type == 'spectral':

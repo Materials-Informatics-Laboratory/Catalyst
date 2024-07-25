@@ -47,6 +47,7 @@ class ML():
                                run_sodas_projection = False,
                                sodas_projection = True,
                                run_ddp = False,
+                               ddp_backend='',
                                main_path = '',
                                restart_model_name = '',
                                device = 'cpu',
