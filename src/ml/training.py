@@ -36,7 +36,7 @@ def train(loader,model,parameters,PIN_MEMORY=False):
         optimizer = torch.optim.AdamW(model.processor.parameters(), lr=parameters['LEARN_RATE'])
         model.to(parameters['device'])
     loss_fn = torch.nn.MSELoss()
-    for i,data in enumerate(loader, 0):
+    for data in loader:
         data.to(parameters['device'])
         optimizer.zero_grad(set_to_none=True)
         atom_contrib, bond_contrib, angle_contrib = model(data)
@@ -44,7 +44,7 @@ def train(loader,model,parameters,PIN_MEMORY=False):
         loss = loss_fn(all_sum, data.y[0][0])
         loss.backward()
         optimizer.step()
-        total_loss += loss.item()
+        total_loss += loss.item()*float(len(data))
         if parameters['run_ddp']:
             data.detach()
     return total_loss / len(loader)
