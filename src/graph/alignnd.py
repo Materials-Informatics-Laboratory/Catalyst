@@ -4,21 +4,24 @@ from .graph import Graph_Data
 from .graph import atoms2graph
 import torch
 
-def alignnd(atoms,cutoff,dihedral=False):
+def alignnd(atoms,cutoff,dihedral=False, store_atoms=False, atom_labels=''):
     """Converts ASE `atoms` into a PyG graph data holding the atomic graph (G) and the angular graph (A).
     The angular graph holds bond angle information, but can also calculate dihedral information upon request.
     """
+    atms = None
     data_amounts = dict(x_atm=[], x_bnd=[], x_ang=[])
     if dihedral:
         data_amounts.append(x_dih_ang=[])
 
-    elements = np.unique(atoms.get_chemical_symbols())
+    elements = np.sort(np.unique(atoms.get_atomic_numbers()), axis=None)
     ohe = []
     for atom in atoms:
         tx = [0.0] * len(elements)
         for i in range(len(elements)):
-            if atom.symbol == elements[i]:
+            if atom.number == elements[i]:
                 tx[i] = 1.0
+                if atom_labels == 'atomic_number':
+                    tx[i] *= atom.number
                 break
         ohe.append(tx)
     x_atm = np.array(ohe)
@@ -39,8 +42,11 @@ def alignnd(atoms,cutoff,dihedral=False):
         x_ang = np.concatenate([x_bnd_ang])
         mask_dih_ang = [False] * len(x_bnd_ang)
 
+    if store_atoms:
+        atms = atoms
+
     data = Graph_Data(
-        atoms = atoms,
+        atoms = atms,
         edge_index_G=torch.tensor(edge_index_G, dtype=torch.long),
         edge_index_A=torch.tensor(edge_index_A, dtype=torch.long),
         x_atm=torch.tensor(x_atm, dtype=torch.float),
@@ -54,7 +60,7 @@ def alignnd(atoms,cutoff,dihedral=False):
 
     return data
 
-def realignnd(structures,cutoff,dihedral=False):
+def realignnd(structures,cutoff,dihedral=False,store_atoms=False, atom_labels=''):
     """Converts ASE `atoms` into a PyG graph data holding the atomic graph (G) and the angular graph (A).
     The angular graph holds bond angle information, but can also calculate dihedral information upon request.
     """
@@ -65,6 +71,7 @@ def realignnd(structures,cutoff,dihedral=False):
     f_x_bnd = None
     f_x_dih_ang = None
     f_mask_dih_ang = None
+    atms = None
 
     data_amounts = dict(x_atm=[], x_bnd=[], x_ang=[])
     if dihedral:
@@ -73,7 +80,7 @@ def realignnd(structures,cutoff,dihedral=False):
     scale = 0
     all_elements = []
     for atoms in structures:
-        elements = np.unique(atoms.get_chemical_symbols())
+        elements = np.sort(np.unique(atoms.get_atomic_numbers()), axis=None)
         if len(all_elements) == 0:
             all_elements = elements
         else:
@@ -90,8 +97,10 @@ def realignnd(structures,cutoff,dihedral=False):
         for atom in atoms:
             tx = [0.0] * len(all_elements)
             for i in range(len(all_elements)):
-                if atom.symbol == all_elements[i]:
+                if atom.number == all_elements[i]:
                     tx[i] = 1.0
+                    if atom_labels == 'atomic_number':
+                        tx[i] *= atom.number
                     break
             ohe.append(tx)
         x_atm = np.array(ohe)
@@ -139,6 +148,8 @@ def realignnd(structures,cutoff,dihedral=False):
             f_mask_dih_ang = np.append(f_mask_dih_ang, mask_dih_ang)
             if dihedral:
                 f_x_dih_ang = np.append(f_x_dih_ang, x_dih_ang)
+            if store_atoms:
+                atms.append(atoms)
         else:
             f_edge_index_G = edge_index_G
             f_edge_index_A = edge_index_A
@@ -148,10 +159,12 @@ def realignnd(structures,cutoff,dihedral=False):
             f_mask_dih_ang = mask_dih_ang
             if dihedral:
                 f_x_dih_ang = x_dih_ang
+            if store_atoms:
+                atms = [atoms]
         scale += len(atoms)
 
     data = Graph_Data(
-        atoms=atoms,
+        atoms=atms,
         edge_index_G=torch.tensor(f_edge_index_G, dtype=torch.long),
         edge_index_A=torch.tensor(f_edge_index_A, dtype=torch.long),
         x_atm=torch.tensor(f_x_atm, dtype=torch.float),
@@ -165,22 +178,27 @@ def realignnd(structures,cutoff,dihedral=False):
 
     return data
 
-def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[]):
+def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[],store_atoms=False,atom_labels=''):
     """Converts ASE `atoms` into a PyG graph data holding the atomic graph (G) and the angular graph (A).
     The angular graph holds bond angle information, but can also calculate dihedral information upon request.
     """
 
     data_amounts = dict(x_atm=[], x_bnd=[], x_ang=[])
+    atms = None
+    if store_atoms:
+        atms = atoms
 
-    elements = np.unique(atoms.get_chemical_symbols())
+    elements = np.sort(np.unique(atoms.get_atomic_numbers()), axis=None)
     ohe = []
     if len(elements) < len(all_elements):
         elements = all_elements
     for atom in atoms:
         tx = [0.0] * len(elements)
         for i in range(len(elements)):
-            if atom.symbol == elements[i]:
+            if atom.number == elements[i]:
                 tx[i] = 1.0
+                if atom_labels == 'atomic_number':
+                    tx[i] *= atom.number
                 break
         ohe.append(tx)
     x_atm = np.array(ohe)
@@ -222,7 +240,7 @@ def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[]):
                 data_amounts["x_dih_ang"].append(len(x_dih_ang) - 1)
 
             data.append(Graph_Data(
-                atoms=atoms,
+                atoms=atms,
                 edge_index_G=torch.tensor(tmp_edge_index_G, dtype=torch.long),
                 edge_index_A=torch.tensor(edge_index_A, dtype=torch.long),
                 x_atm=torch.tensor(x_atm, dtype=torch.float),
@@ -238,8 +256,9 @@ def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[]):
             data.append(None)
     return data
 
-def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False):
+def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False, store_atoms=False,return_ids=False):
     data_amounts = dict(x_atm=[], x_bnd=[], x_ang=[])
+    atm = None
 
     atoms = []
     for g in global_graph['edge_index_G'][0]:
@@ -280,8 +299,11 @@ def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False):
             x_ang = np.concatenate([x_bnd_ang])
             mask_dih_ang = [False] * len(x_bnd_ang)
 
+        if store_atoms:
+            atm = global_graph['atoms']
+
         data.append(Graph_Data(
-            atoms = global_graph['atoms'],
+            atoms = atm,
             edge_index_G=torch.tensor(edge_index_G, dtype=torch.long),
             edge_index_A=torch.tensor(edge_index_A, dtype=torch.long),
             x_atm=torch.tensor(x_atm, dtype=torch.float),
@@ -293,7 +315,10 @@ def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False):
             ang_amounts=torch.tensor(data_amounts['x_ang'], dtype=torch.long),
             )
         )
-    return data
+    if return_ids:
+        return data
+    else:
+        return data, unique_atoms
 
 
 

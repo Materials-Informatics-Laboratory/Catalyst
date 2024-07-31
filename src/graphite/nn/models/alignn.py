@@ -7,6 +7,11 @@ from ..mlp import MLP
 from ..basis import gaussian, bessel
 from ..conv import GatedGCN
 
+from ..conv import MeshGraphNetsConv
+
+# Typing
+from torch import Tensor
+from typing import List, Optional, Tuple
 
 class Encoder(nn.Module):
     """ALIGNN/ALIGNN-d Encoder.
@@ -22,11 +27,14 @@ class Encoder(nn.Module):
         self.num_species = num_species
         self.cutoff = cutoff
         self.dim = dim
+        self.init_bnd_dim =4
         self.dihedral = dihedral
 
         self.embed_atm = nn.Sequential(MLP([num_species, dim, dim], act=nn.SiLU()), nn.LayerNorm(dim))
         self.embed_bnd = partial(bessel, start=0, end=cutoff, num_basis=dim)
         self.embed_ang = self.embed_ang_with_dihedral if dihedral else self.embed_ang_without_dihedral
+        #self.embed_bnd = nn.Sequential(MLP([init_bnd_dim, dim, dim], act=nn.SiLU()), nn.LayerNorm(dim))
+        #self.embed_ang = nn.Sequential(MLP([init_ang_dim, dim, dim], act=nn.SiLU()), nn.LayerNorm(dim))
 
     def embed_ang_with_dihedral(self, x_ang, mask_dih_ang):
         cos_ang = torch.cos(x_ang)
@@ -58,7 +66,6 @@ class Encoder(nn.Module):
 
         return data
 
-
 class Processor(nn.Module):
     """ALIGNN Processor.
     The processor updates atom, bond, and angle embeddings.
@@ -69,8 +76,11 @@ class Processor(nn.Module):
         self.num_convs = num_convs
         self.dim = dim
 
-        self.atm_bnd_convs = nn.ModuleList([copy.deepcopy(GatedGCN(dim, dim)) for _ in range(num_convs)])
-        self.bnd_ang_convs = nn.ModuleList([copy.deepcopy(GatedGCN(dim, dim)) for _ in range(num_convs)])
+        #self.atm_bnd_convs = nn.ModuleList([copy.deepcopy(GatedGCN(dim, dim)) for _ in range(num_convs)])
+        #self.bnd_ang_convs = nn.ModuleList([copy.deepcopy(GatedGCN(dim, dim)) for _ in range(num_convs)])
+
+        self.atm_bnd_convs = nn.ModuleList([copy.deepcopy(MeshGraphNetsConv(dim, dim)) for _ in range(num_convs)])
+        self.bnd_ang_convs = nn.ModuleList([copy.deepcopy(MeshGraphNetsConv(dim, dim)) for _ in range(num_convs)])
 
     def forward(self, data):
         edge_index_G = data.edge_index_G

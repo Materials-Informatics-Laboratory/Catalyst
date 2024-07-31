@@ -27,7 +27,8 @@ def ddp_setup(rank: int,world_size,backend):
 def ddp_destroy():
     destroy_process_group()
 
-def train(loader,model,parameters,PIN_MEMORY=False):
+def train(loader,model,parameters):
+
     model.train()
     total_loss = 0.0
     if parameters['run_ddp']:
@@ -37,7 +38,7 @@ def train(loader,model,parameters,PIN_MEMORY=False):
         model.to(parameters['device'])
     loss_fn = torch.nn.MSELoss()
     for data in loader:
-        data.to(parameters['device'])
+        data.to(parameters['device'], non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
         atom_contrib, bond_contrib, angle_contrib = model(data)
         all_sum = atom_contrib.sum() + bond_contrib.sum() + angle_contrib.sum()
@@ -66,14 +67,15 @@ def run_training(rank,data,parameters,model,ml=None):
 
     follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm']
     if parameters['run_ddp']:
-        loader_train = DataLoader(data['training'], batch_size=parameters['BATCH_SIZE'], shuffle=False,
-                              follow_batch=follow_batch,sampler=DistributedSampler(data['training']))
-        loader_valid = DataLoader(data['validation'], batch_size=parameters['BATCH_SIZE'], shuffle=False,
-                                  sampler=DistributedSampler(data['validation']))
+        loader_train = DataLoader(data['training'], batch_size=parameters['BATCH_SIZE'],pin_memory=parameters['pin_memory'],
+                                  shuffle=False, follow_batch=follow_batch,sampler=DistributedSampler(data['training']))
+        loader_valid = DataLoader(data['validation'], batch_size=parameters['BATCH_SIZE'],pin_memory=parameters['pin_memory'],
+                                  shuffle=False, sampler=DistributedSampler(data['validation']))
     else:
-        loader_train = DataLoader(data['training'], batch_size=parameters['BATCH_SIZE'], shuffle=True,
-                                  follow_batch=follow_batch)
-        loader_valid = DataLoader(data['validation'], batch_size=parameters['BATCH_SIZE'], shuffle=False)
+        loader_train = DataLoader(data['training'],pin_memory=parameters['pin_memory'],
+                                  batch_size=parameters['BATCH_SIZE'], shuffle=True, follow_batch=follow_batch)
+        loader_valid = DataLoader(data['validation'],pin_memory=parameters['pin_memory'],
+                                  batch_size=parameters['BATCH_SIZE'], shuffle=False)
 
     L_train, L_valid = [], []
     min_loss_train = 1.0E30

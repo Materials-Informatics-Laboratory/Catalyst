@@ -15,7 +15,6 @@ class PositiveScalarsDecoder(nn.Module):
         self.transform_bnd = nn.Sequential(MLP([dim, dim, 1], act=nn.SiLU()), nn.Softplus())
         self.transform_ang = nn.Sequential(MLP([dim, dim, 1], act=nn.SiLU()), nn.Softplus())
 
-    # Here I assume `data` is not batched.
     def forward(self, data):
         atm_scalars = self.transform_atm(data.h_atm)
         bnd_scalars = self.transform_bnd(data.h_bnd)
@@ -47,6 +46,7 @@ class ML():
                                run_sodas_projection = False,
                                sodas_projection = True,
                                run_ddp = False,
+                               pin_memory=False,
                                ddp_backend='',
                                main_path = '',
                                restart_model_name = '',
