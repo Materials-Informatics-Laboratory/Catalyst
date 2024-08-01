@@ -316,9 +316,9 @@ def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False, store_a
             )
         )
     if return_ids:
-        return data
-    else:
         return data, unique_atoms
+    else:
+        return data
 
 
 
