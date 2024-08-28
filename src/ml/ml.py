@@ -82,12 +82,11 @@ class ML():
             decoder=PositiveScalarsDecoder(dim=self.parameters['gnn_dim']),
         )
 
-    def set_params(self,new_params):
+    def set_params(self,new_params,save_params=True):
         self.parameters = new_params
-        self.initialize()
+        if save_params:
+            np.save(os.path.join(self.parameters['main_path'], 'parameter_log.npy'), self.parameters)
 
-    def initialize(self):
-        np.save(os.path.join(self.parameters['main_path'], 'parameter_log.npy'),self.parameters)
 
 
 

@@ -13,14 +13,14 @@ import numpy as np
 
 path = str(Path(__file__).parent)
 ml_parameters = dict(world_size = torch.cuda.device_count(),
-                    gnn_dim=10,
+                    gnn_dim=100,
                     num_convs=5,
                     num_inputs=5,
                     graph_cutoff = 4.0,
                     LEARN_RATE = 2e-4,
                     is_dihedral = False,
                     remove_old_model = False,
-                    interpretable = False,
+                    interpretable = True,
                     write_indv_pred = True,
                     run_ddp = False,
                     main_path=path,
@@ -31,7 +31,7 @@ ml_parameters = dict(world_size = torch.cuda.device_count(),
 
 
 models_dir = os.path.join(path,'models')
-data_dir = os.path.join(path,'data')
+data_dir = os.path.join(path,'graphs')
 results_dir = os.path.join(path,'results')
 if os.path.isdir(results_dir):
     shutil.rmtree(results_dir)

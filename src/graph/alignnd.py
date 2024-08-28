@@ -178,7 +178,7 @@ def realignnd(structures,cutoff,dihedral=False,store_atoms=False, atom_labels=''
 
     return data
 
-def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[],store_atoms=False,atom_labels=''):
+def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[],store_atoms=False,store_atoms_type='ase-atoms',atom_labels=''):
     """Converts ASE `atoms` into a PyG graph data holding the atomic graph (G) and the angular graph (A).
     The angular graph holds bond angle information, but can also calculate dihedral information upon request.
     """
@@ -239,6 +239,12 @@ def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[],store_atoms=False
             if dihedral:
                 data_amounts["x_dih_ang"].append(len(x_dih_ang) - 1)
 
+            if store_atoms:
+                if store_atoms_type == 'ase-atoms':
+                    atm = global_graph['atoms']
+                else:
+                    atm = atom
+
             data.append(Graph_Data(
                 atoms=atms,
                 edge_index_G=torch.tensor(tmp_edge_index_G, dtype=torch.long),
@@ -256,7 +262,7 @@ def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[],store_atoms=False
             data.append(None)
     return data
 
-def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False, store_atoms=False,return_ids=False):
+def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False, store_atoms=False,return_ids=False,store_atoms_type='ase-atoms'):
     data_amounts = dict(x_atm=[], x_bnd=[], x_ang=[])
     atm = None
 
@@ -300,7 +306,10 @@ def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False, store_a
             mask_dih_ang = [False] * len(x_bnd_ang)
 
         if store_atoms:
-            atm = global_graph['atoms']
+            if store_atoms_type == 'ase-atoms':
+                atm = global_graph['atoms']
+            else:
+                atm = atom
 
         data.append(Graph_Data(
             atoms = atm,
