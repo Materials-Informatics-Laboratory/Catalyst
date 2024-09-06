@@ -13,6 +13,7 @@ from umap import umap_
 
 from torch_geometric.loader import DataLoader
 import torch.multiprocessing as mp
+from torch.multiprocessing import Process
 import torch as torch
 from torch import nn
 
@@ -21,6 +22,8 @@ from catalyst.src.ml.training import run_training, run_pre_training
 import catalyst.src.utilities.sampling as sampling
 from catalyst.src.sodas.model.sodas import SODAS
 from catalyst.src.ml.ml import ML
+
+torch.set_float32_matmul_precision
 
 # ddp_destory is needed when calling mp.spawn() multiple times within a SLURM or ORACLE scheduling environment
 def ddp_destroy():
@@ -68,7 +71,8 @@ def main(ml_parameters):
             run_pre_training(rank=0, data=samples, parameters=ml.parameters, model=ml.model)
 
     # loop over number of requested models
-    for iteration in range(ml.parameters['n_models']):
+    #for iteration in range(ml.parameters['n_models']):
+        '''
         ml.parameters['model_save_dir'] = os.path.join(ml.parameters['model_dir'], str(iteration))
         os.mkdir(ml.parameters['model_save_dir'])
         ml.set_model()
@@ -79,12 +83,13 @@ def main(ml_parameters):
         partitioned_data = np.load(os.path.join(ml.parameters['graph_data_dir'],'model_samples',str(iteration),'train_valid_split.npy'),allow_pickle=True)
  
         samples = dict(training=partitioned_data.item().get('training'),validation=partitioned_data.item().get('validation'))
-        if ml.parameters['run_ddp']:
-            mp.spawn(run_training, args=(samples, ml.parameters, ml.model,ml), nprocs=ml_parameters['world_size'],
-                 join=True)
-            ddp_destroy()
-        else:
-            run_training(rank=0, data=samples, parameters=ml.parameters, model=ml.model)
+        '''
+    if ml.parameters['run_ddp']:
+        mp.spawn(run_training, args=(ml,), nprocs=ml.parameters['world_size'],
+                join=True)
+        ddp_destroy()
+    else:
+        run_training(rank=0,ml=ml)
         
 if __name__ == "__main__":
     import time
@@ -94,10 +99,10 @@ if __name__ == "__main__":
     path = str(Path(__file__).parent)
     ml_parameters = dict(gnn_dim=10,
                          num_convs=5,
-                         num_inputs=5,
-                         num_epochs=10,
-                         BATCH_SIZE=2,
-                         n_models=3,
+                         num_inputs=1,
+                         num_epochs=100,
+                         BATCH_SIZE=4000,
+                         n_models=1,
                          world_size = torch.cuda.device_count(),
                          sampling_seed=12345,
                          graph_cutoff=4.0,
@@ -106,27 +111,27 @@ if __name__ == "__main__":
                          is_dihedral=False,
                          remove_old_model=False,
                          interpretable=False,
-                         pre_training=True,
-                         run_pretrain=True,
+                         pre_training=False,
+                         run_pretrain=False,
                          write_indv_pred=False,
                          restart_training=False,
                          run_ddp = True,
+                         pin_memory=False,
                          main_path=path,
                          ddp_backend='gloo',
                          device='cuda',
                          restart_model_name=None,
-                         graph_data_dir=os.path.join(path, 'samples'),
+                         graph_data_dir=os.path.join(path, 'data'),
                          model_dir=None,
                          model_save_dir=None,
                          pretrain_dir=os.path.join(path, 'pre_training'),
                          results_dir=None,
                          samples_dir=None,
-                         elements=['Co', 'Mo', 'Cu', 'Ni', 'Fe'],
+                         elements=['Al'],
                          sampling_dict=dict(test_sampling_type='y_bin',
                                             pretraining_sampling_type='kmeans',
                                             sampling_type='gaussian_mixture',
-                                            split=[0.1, 0.25, 0.75, 0.25],
-                                            # [test,pretrain,train,val], test is percent of total data left out of training and validation, pretrain is selected and not replaced for pretraining, the remaining data is split into the train vs val split
+                                            split=[0.1, 0.25, 0.75],
                                             clusters=3
                                             ),
                         )
