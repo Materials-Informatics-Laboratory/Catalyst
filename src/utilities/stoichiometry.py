@@ -21,7 +21,6 @@ def check_num_elements(main_group, other_groups):
         return 1
     else:
         return 0
-
 def get_structure_stoichiometry(atoms):
     stoichiometry = []
     symbols = atoms.get_chemical_symbols()
