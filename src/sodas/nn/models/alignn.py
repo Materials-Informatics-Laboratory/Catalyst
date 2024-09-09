@@ -1,11 +1,12 @@
-import torch
-from torch import nn
 from functools import partial
+from torch import nn
+import torch
 import copy
 
-from ..mlp import MLP
+from ..conv import MeshGraphNetsConv
 from ..basis import gaussian, bessel
 from ..conv import GatedGCN
+from ..mlp import MLP
 
 class Encoder(nn.Module):
     """ALIGNN/ALIGNN-d Encoder.
@@ -60,13 +61,17 @@ class Processor(nn.Module):
     """ALIGNN Processor.
     The processor updates atom, bond, and angle embeddings.
     """
-    def __init__(self, num_convs, dim):
+    def __init__(self, num_convs, dim,conv_type='mesh'):
         super().__init__()
         self.num_convs = num_convs
         self.dim = dim
 
-        self.atm_bnd_convs = nn.ModuleList([copy.deepcopy(GatedGCN(dim, dim)) for _ in range(num_convs)])
-        self.bnd_ang_convs = nn.ModuleList([copy.deepcopy(GatedGCN(dim, dim)) for _ in range(num_convs)])
+        if conv_type == 'mesh':
+            self.atm_bnd_convs = nn.ModuleList([copy.deepcopy(MeshGraphNetsConv(dim, dim)) for _ in range(num_convs)])
+            self.bnd_ang_convs = nn.ModuleList([copy.deepcopy(MeshGraphNetsConv(dim, dim)) for _ in range(num_convs)])
+        elif conv_type == 'gcn':
+            self.atm_bnd_convs = nn.ModuleList([copy.deepcopy(GatedGCN(dim, dim)) for _ in range(num_convs)])
+            self.bnd_ang_convs = nn.ModuleList([copy.deepcopy(GatedGCN(dim, dim)) for _ in range(num_convs)])
 
     def forward(self, data):
         edge_index_G = data.edge_index_G
@@ -88,6 +93,20 @@ class Decoder(nn.Module):
 
     def forward(self, data):
         return self.decoder(data.h_atm)
+
+class PositiveScalarsDecoder(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
+        self.transform_atm = nn.Sequential(MLP([dim, dim, 1], act=nn.SiLU()), nn.Softplus())
+        self.transform_bnd = nn.Sequential(MLP([dim, dim, 1], act=nn.SiLU()), nn.Softplus())
+        self.transform_ang = nn.Sequential(MLP([dim, dim, 1], act=nn.SiLU()), nn.Softplus())
+
+    def forward(self, data):
+        atm_scalars = self.transform_atm(data.h_atm)
+        bnd_scalars = self.transform_bnd(data.h_bnd)
+        ang_scalars = self.transform_bnd(data.h_ang)
+        return (atm_scalars, bnd_scalars, ang_scalars)
 
 
 class ALIGNN(nn.Module):

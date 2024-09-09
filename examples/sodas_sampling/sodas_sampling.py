@@ -5,6 +5,7 @@ import glob
 import sys
 import os
 
+from sklearn.decomposition import PCA
 from umap import umap_
 
 from torch_geometric.loader import DataLoader
@@ -21,8 +22,11 @@ def main(ml_parameters):
     ml = ML()
     ml.set_params(ml_parameters)
     graph_data = []
-    for graph in glob.glob(os.path.join(ml.parameters['graph_data_dir'],'*.pt')):
-        graph_data.append(torch.load(graph))
+    take = 1
+    for i,graph in enumerate(glob.glob(os.path.join(ml.parameters['graph_data_dir'],'*.pt'))):
+        if i % take == 0:
+            graph_data.append(torch.load(graph))
+    print('Found ',len(graph_data),' graphs')
 
 # sodas: either perform sodas projection or load a previously projected set of data
     projected_data = None
@@ -121,6 +125,7 @@ def main(ml_parameters):
                                                            nclusters=ml.parameters['sampling_dict']['clusters'])
         train_data = [graph_data[index] for index in train_idx]
         valid_data = [graph_data[index] for index in valid_idx]
+        print('Using the remaining ',len(valid_data),' for validation')
         partitioned_data = dict(training=train_data,
                                 validation=valid_data)
         np.save(os.path.join(ml.parameters['model_save_dir'],'train_valid_split.npy'), partitioned_data)
@@ -135,8 +140,8 @@ if __name__ == "__main__":
                          num_convs=5,
                          num_inputs=5,
                          num_epochs=10,
-                         BATCH_SIZE=2,
-                         n_models=3,
+                         BATCH_SIZE=1,
+                         n_models=1,
                          world_size = torch.cuda.device_count(),
                          sampling_seed=12345,
                          graph_cutoff=4.0,
@@ -155,27 +160,26 @@ if __name__ == "__main__":
                          main_path=path,
                          device='cuda',
                          restart_model_name=None,
-                         graph_data_dir=os.path.join(path, 'data'),
+                         graph_data_dir=os.path.join(path, 'graphs'),
                          model_dir=None,
                          model_save_dir=None,
                          pretrain_dir=os.path.join(path, 'pre_training'),
                          results_dir=None,
                          samples_dir=None,
-                         elements=['Co', 'Mo', 'Cu', 'Ni', 'Fe'],
+                         elements=['Al'],
                          sampling_dict=dict(test_sampling_type='y_bin',
                                             pretraining_sampling_type='kmeans',
                                             sampling_type='gaussian_mixture',
-                                            split=[0.1, 0.25, 0.75, 0.25],
-                                            # [test,pretrain,train,val], test is percent of total data left out of training and validation, pretrain is selected and not replaced for pretraining, the remaining data is split into the train vs val split
-                                            clusters=3
+                                            split=[0.2, 0.1, 0.9],
+                                            clusters=5
                                             ),
                          sodas_dict=dict(
                              sodas_model=SODAS(mod=ALIGNN(
-                                 encoder=Encoder(num_species=5, cutoff=4.0, dim=100, act_func=nn.SiLU()),
+                                 encoder=Encoder(num_species=1, cutoff=4.0, dim=100, act_func=nn.SiLU()),
                                  processor=Processor(num_convs=5, dim=100),
                                  decoder=Decoder(node_dim=100, out_dim=10, act_func=nn.SiLU())
                              ),
-                                 ls_mod=umap_.UMAP(n_neighbors=20, min_dist=0.1, n_components=3)
+                                 ls_mod=umap_.UMAP(n_neighbors=15, min_dist=0.5, n_components=2)
                              ),
                              projection_dir=os.path.join(path, 'sodas_projection')
                          )

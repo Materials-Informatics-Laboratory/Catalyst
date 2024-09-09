@@ -1,1 +1,0 @@
-from .mol import MolData
