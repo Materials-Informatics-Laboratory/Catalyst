@@ -57,7 +57,7 @@ for i,A_structure in enumerate(A_files):
                 if x:
                     H_mix = calc_reaction_enthalpy(energies=[energy[0][-1],energy[1][-1],energy[2][-1]],n_systems=len(energy))
                     structures = [snapshots[0][i][-1],snapshots[1][j][-1],snapshots[2][k][-1]]
-                    graph_data = realignnd(structures, cutoff=4.0, dihedral=False,store_atoms=False,atom_labels='atomic_number')
+                    graph_data = realignnd(structures, cutoff=4.0, dihedral=False,store_atoms=False,use_pt=True,atom_labels='atomic_number')
                     graph_data.y = torch.full(graph_data.edge_index_G.shape, H_mix + y_scale,dtype=torch.float).view(-1, 1)
                     torch.save(graph_data, os.path.join(graph_dir, str(i) + '_' + str(j) + '_' + str(k) + '_graph.pt'))
 

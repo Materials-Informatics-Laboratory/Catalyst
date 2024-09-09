@@ -1,10 +1,11 @@
 from ..utilities.structure_properties import *
-from ..graphite.utils.alignn import *
+from ..utilities.physics_database import Physics_data
+from ..sodas.utils.alignn import *
 from .graph import Graph_Data
 from .graph import atoms2graph
 import torch
 
-def alignnd(atoms,cutoff,dihedral=False, store_atoms=False, atom_labels=''):
+def alignnd(atoms,cutoff,dihedral=False, store_atoms=False, use_pt=False, atom_labels=''):
     """Converts ASE `atoms` into a PyG graph data holding the atomic graph (G) and the angular graph (A).
     The angular graph holds bond angle information, but can also calculate dihedral information upon request.
     """
@@ -13,12 +14,21 @@ def alignnd(atoms,cutoff,dihedral=False, store_atoms=False, atom_labels=''):
     if dihedral:
         data_amounts.append(x_dih_ang=[])
 
+    pdb = None
+    if use_pt:
+        pdb = Physics_data()
     elements = np.sort(np.unique(atoms.get_atomic_numbers()), axis=None)
     ohe = []
     for atom in atoms:
-        tx = [0.0] * len(elements)
-        for i in range(len(elements)):
-            if atom.number == elements[i]:
+        all_elem = elements
+        if use_pt:
+            elems = []
+            for el in pdb.elements:
+                elems.append(el.number)
+            all_elem = elems
+        tx = [0.0] * len(all_elem)
+        for i in range(len(all_elem)):
+            if atom.number == all_elem[i]:
                 tx[i] = 1.0
                 if atom_labels == 'atomic_number':
                     tx[i] *= atom.number
@@ -60,7 +70,7 @@ def alignnd(atoms,cutoff,dihedral=False, store_atoms=False, atom_labels=''):
 
     return data
 
-def realignnd(structures,cutoff,dihedral=False,store_atoms=False, atom_labels=''):
+def realignnd(structures,cutoff,dihedral=False,store_atoms=False,use_pt=False, atom_labels=''):
     """Converts ASE `atoms` into a PyG graph data holding the atomic graph (G) and the angular graph (A).
     The angular graph holds bond angle information, but can also calculate dihedral information upon request.
     """
@@ -93,11 +103,20 @@ def realignnd(structures,cutoff,dihedral=False,store_atoms=False, atom_labels=''
                 if check == 0:
                     all_elements.append(ee)
     for atoms in structures:
+        pdb = None
+        if use_pt:
+            pdb = Physics_data()
         ohe = []
         for atom in atoms:
-            tx = [0.0] * len(all_elements)
-            for i in range(len(all_elements)):
-                if atom.number == all_elements[i]:
+            all_elem = all_elements
+            if use_pt:
+                elems = []
+                for el in pdb.elements:
+                    elems.append(el.number)
+                all_elem = elems
+            tx = [0.0] * len(all_elem)
+            for i in range(len(all_elem)):
+                if atom.number == all_elem[i]:
                     tx[i] = 1.0
                     if atom_labels == 'atomic_number':
                         tx[i] *= atom.number
@@ -178,7 +197,7 @@ def realignnd(structures,cutoff,dihedral=False,store_atoms=False, atom_labels=''
 
     return data
 
-def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[],store_atoms=False,store_atoms_type='ase-atoms',atom_labels=''):
+def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[],store_atoms=False,use_pt=False,store_atoms_type='ase-atoms',atom_labels=''):
     """Converts ASE `atoms` into a PyG graph data holding the atomic graph (G) and the angular graph (A).
     The angular graph holds bond angle information, but can also calculate dihedral information upon request.
     """
@@ -188,14 +207,23 @@ def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[],store_atoms=False
     if store_atoms:
         atms = atoms
 
+    pdb = None
+    if use_pt:
+        pdb = Physics_data()
     elements = np.sort(np.unique(atoms.get_atomic_numbers()), axis=None)
     ohe = []
     if len(elements) < len(all_elements):
         elements = all_elements
     for atom in atoms:
-        tx = [0.0] * len(elements)
-        for i in range(len(elements)):
-            if atom.number == elements[i]:
+        all_elem = elements
+        if use_pt:
+            elems = []
+            for el in pdb.elements:
+                elems.append(el.number)
+            all_elem = elems
+        tx = [0.0] * len(all_elem)
+        for i in range(len(all_elem)):
+            if atom.number == all_elem[i]:
                 tx[i] = 1.0
                 if atom_labels == 'atomic_number':
                     tx[i] *= atom.number
