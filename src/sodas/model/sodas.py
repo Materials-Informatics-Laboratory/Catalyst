@@ -1,10 +1,8 @@
-from torch_geometric.data import DataLoader
-from ..nn.models.alignn import Encoder, Processor, Decoder, ALIGNN
 import torch.nn as nn
 import numpy as np
 
 from torch_geometric.utils import scatter
-from ..nn import MLP
+
 class SODAS():
     def __init__(self, mod, ls_mod):
         super().__init__()
@@ -26,7 +24,7 @@ class SODAS():
 
             # Prepare model
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            self.model = nn.DataParallel(self.model)
+            #self.model = nn.DataParallel(self.model)
         self.model.eval()
         self.model.to(device)
         # Run a forward pass
@@ -34,9 +32,7 @@ class SODAS():
         total_data = []
         for data in loader:
             data = data.to(device)
-            encoding = self.model.encoder(data)
-            proc = self.model.processor(encoding)
-            pred = self.model.decoder(proc)
+            pred = self.model(proc)
             pred = scatter(pred,data.x_atm_batch, dim=0, reduce='mean')
             data.detach()
             tx = []

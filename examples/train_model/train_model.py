@@ -1,26 +1,16 @@
 from pathlib import Path
-import numpy as np
 import shutil
-import glob
-import sys
 import os
 import gc
 
 from numba import cuda
-import torch
 
-from umap import umap_
-
-from torch_geometric.loader import DataLoader
 import torch.multiprocessing as mp
 import torch as torch
 from torch import nn
 
-from catalyst.src.sodas.nn.models.alignn import Encoder, Processor, PositiveScalarsDecoder, ALIGNN
+from src.ml.nn.models.alignn import Encoder, Processor, PositiveScalarsDecoder, ALIGNN
 from catalyst.src.ml.training import run_training, run_pre_training
-import catalyst.src.utilities.sampling as sampling
-from catalyst.src.sodas.model.sodas import SODAS
-from catalyst.src.sodas.nn import MLP
 from catalyst.src.ml.ml import ML
 
 torch.set_float32_matmul_precision

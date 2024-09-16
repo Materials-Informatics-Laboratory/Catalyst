@@ -2,17 +2,15 @@ from pathlib import Path
 import numpy as np
 import shutil
 import glob
-import sys
 import os
 
-from sklearn.decomposition import PCA
 from umap import umap_
 
 from torch_geometric.loader import DataLoader
 import torch as torch
 from torch import nn
 
-from catalyst.src.sodas.nn.models.alignn import Encoder, Processor, Decoder, ALIGNN
+from src.ml.nn.models.alignn import Encoder, Processor, SODAS_Decoder, ALIGNN
 import catalyst.src.utilities.sampling as sampling
 from catalyst.src.sodas.model.sodas import SODAS
 from catalyst.src.ml.ml import ML
@@ -177,7 +175,7 @@ if __name__ == "__main__":
                              sodas_model=SODAS(mod=ALIGNN(
                                  encoder=Encoder(num_species=1, cutoff=4.0, dim=100, act_func=nn.SiLU()),
                                  processor=Processor(num_convs=5, dim=100),
-                                 decoder=Decoder(node_dim=100, out_dim=10, act_func=nn.SiLU())
+                                 decoder=SODAS_Decoder(node_dim=100, out_dim=10, act_func=nn.SiLU())
                              ),
                                  ls_mod=umap_.UMAP(n_neighbors=15, min_dist=0.5, n_components=2)
                              ),
