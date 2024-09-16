@@ -113,9 +113,9 @@ def run_training(rank,ml=None):
 
         follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm']
         if parameters['run_ddp']:
-            loader_train = DataLoader(data['training'], batch_size=parameters['model_dict']['batch_size'][1],pin_memory=parameters['pin_memory'],
+            loader_train = DataLoader(data['training'], batch_size=int(parameters['model_dict']['batch_size'][1]/parameters['world_size']),pin_memory=parameters['pin_memory'],
                                       shuffle=False, follow_batch=follow_batch,sampler=DistributedSampler(data['training']))
-            loader_valid = DataLoader(data['validation'], batch_size=parameters['model_dict']['batch_size'][1],pin_memory=parameters['pin_memory'],
+            loader_valid = DataLoader(data['validation'], batch_size=int(parameters['model_dict']['batch_size'][1]/parameters['world_size']),pin_memory=parameters['pin_memory'],
                                       shuffle=False, sampler=DistributedSampler(data['validation']))
         else:
             loader_train = DataLoader(data['training'],pin_memory=parameters['pin_memory'],
