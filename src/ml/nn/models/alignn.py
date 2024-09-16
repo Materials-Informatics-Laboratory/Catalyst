@@ -84,11 +84,11 @@ class Processor(nn.Module):
         return data
 
 class SODAS_Decoder(nn.Module):
-    def __init__(self, node_dim, out_dim):
+    def __init__(self, node_dim, out_dim,act_func):
         super().__init__()
         self.node_dim = node_dim
         self.out_dim = out_dim
-        self.decoder = MLP([node_dim, node_dim, out_dim], act=nn.SiLU())
+        self.decoder = MLP([node_dim, node_dim, out_dim], act=act_func)
 
     def forward(self, data):
         return self.decoder(data.h_atm)

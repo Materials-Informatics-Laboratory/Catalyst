@@ -32,7 +32,7 @@ class SODAS():
         total_data = []
         for data in loader:
             data = data.to(device)
-            pred = self.model(proc)
+            pred = self.model(data)
             pred = scatter(pred,data.x_atm_batch, dim=0, reduce='mean')
             data.detach()
             tx = []
