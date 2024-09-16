@@ -75,24 +75,16 @@ if __name__ == "__main__":
     # setup parameters
     path = str(Path(__file__).parent)
     ml_parameters = dict(
-                         num_inputs=1,
-                         num_epochs=[10,100],
-                         BATCH_SIZE=1000,
-                         n_models=1,
                          world_size = torch.cuda.device_count(),
                          sampling_seed=12345,
-                         LEARN_RATE=2e-4,
-                         train_tolerance=1e-5,
-                         lr_scale=[1.0,0.05],
                          remove_old_model=False,
                          interpretable=False,
-                         pre_training=True,
-                         run_pretrain=True,
+                         pre_training=False,
+                         run_pretrain=False,
                          write_indv_pred=False,
                          restart_training=False,
-                         run_ddp = True,
+                         run_ddp = False,
                          pin_memory=False,
-                         dynamic_lr=True,
                          main_path=path,
                          ddp_backend='gloo',
                          device='cuda',
@@ -104,13 +96,26 @@ if __name__ == "__main__":
                          results_dir=None,
                          elements=['Al'],
                          model_dict = dict(
+                             n_models=1,
+                             num_epochs=[10, 100],
+                             train_tolerance=1e-5,
+                             batch_size=[10,1000],
                              model = ALIGNN(
                                     encoder=Encoder(num_species=1,cutoff=4.0,dim=10,act_func=nn.SiLU()),
                                     processor=Processor(num_convs=5, dim=10,conv_type='mesh'),
                                     decoder=PositiveScalarsDecoder(dim=10),
-                            )
+                            ),
+                             optimizer_params=dict(
+                                 lr_scale=[1.0, 0.05],
+                                 dynamic_lr=False,
+                                 dist_type='exp',
+                                 optimizer = 'AdamW',
+                                 params_group = {
+                                     'lr':0.001
+                                 }
+                             )
                          )
-                        )
+                    )
 
     #tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
     main(ml_parameters)

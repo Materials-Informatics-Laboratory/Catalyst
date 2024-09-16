@@ -7,18 +7,9 @@ class ML():
     def __init__(self):
         super().__init__()
 
-        self.parameters = dict(gnn_dim = 10,
-                               num_convs = 5,
-                               num_inputs = 1,
-                               num_epochs = 1000,
-                               BATCH_SIZE = 1,
-                               n_models = 1,
+        self.parameters = dict(
                                world_size = 1,
                                sampling_seed=112358,
-                               graph_cutoff = 5.0,
-                               LEARN_RATE = 2e-4,
-                               lr_scale=1.0,
-                               train_tolerance = 1e-5,
                                is_dihedral = False,
                                remove_old_model = False,
                                interpretable = False,
@@ -55,7 +46,20 @@ class ML():
                                     projection_dir=''
                                 ),
                                model_dict = dict(
-                                   model = None
+                                   n_models=1,
+                                   num_epochs=[1, 1],
+                                   train_tolerance=1.0,
+                                   batch_size=[1, 1],
+                                   model = None,
+                                   optimizer_params=dict(
+                                       lr_scale=[1.0, 0.1],
+                                       dynamic_lr=False,
+                                       dist_type='',
+                                       optimizer='',
+                                       params_group={
+                                           'lr': 0.001
+                                       }
+                                   )
                                )
                             )
 

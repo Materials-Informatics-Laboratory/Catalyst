@@ -15,6 +15,19 @@ import glob
 import sys
 import os
 
+def optimizer_to(optim, device):
+    for param in optim.state.values():
+        # Not sure there are any global tensors in the state dict
+        if isinstance(param, torch.Tensor):
+            param.data = param.data.to(device)
+            if param._grad is not None:
+                param._grad.data = param._grad.data.to(device)
+        elif isinstance(param, dict):
+            for subparam in param.values():
+                if isinstance(subparam, torch.Tensor):
+                    subparam.data = subparam.data.to(device)
+                    if subparam._grad is not None:
+                        subparam._grad.data = subparam._grad.data.to(device)
 def ddp_setup(rank: int,world_size,backend):
     """
     Args:
@@ -31,21 +44,26 @@ def ddp_destroy():
     destroy_process_group()
 
 def train(loader,model,parameters,optimizer):
-
     model.train()
+
     total_loss = 0.0
+
     if parameters['run_ddp'] == False:
         model.to(parameters['device'])
     loss_fn = torch.nn.MSELoss()
     for data in loader:
-        data.to(parameters['device'], non_blocking=True)
-        optimizer.zero_grad(set_to_none=True)
-        atom_contrib, bond_contrib, angle_contrib = model(data)
-        all_sum = atom_contrib.sum() + bond_contrib.sum() + angle_contrib.sum()
-        loss = loss_fn(all_sum, data.y[0][0])
-        loss.backward()
-        optimizer.step()
-        total_loss += loss.item()*float(len(data))
+        def closure():
+            data.to(parameters['device'], non_blocking=True)
+            optimizer.zero_grad(set_to_none=True)
+            atom_contrib, bond_contrib, angle_contrib = model(data)
+            all_sum = atom_contrib.sum() + bond_contrib.sum() + angle_contrib.sum()
+            loss = loss_fn(all_sum, data.y[0][0])
+            nonlocal total_loss
+            total_loss += loss.item()
+            loss.backward()
+            return loss
+        optimizer.step(closure)
+
         if parameters['run_ddp']:
             data.detach()
     return total_loss / len(loader)
@@ -53,7 +71,7 @@ def train(loader,model,parameters,optimizer):
 def run_training(rank,ml=None):
 
     parameters = ml.parameters
-    for iteration in range(parameters['n_models']):
+    for iteration in range(parameters['model_dict']['n_models']):
         parameters['model_save_dir'] = os.path.join(parameters['model_dir'], str(iteration))
         if os.path.isdir(parameters['model_save_dir']):
             shutil.rmtree(parameters['model_save_dir'])
@@ -74,29 +92,31 @@ def run_training(rank,ml=None):
 
         if parameters['run_ddp']:
             ddp_setup(rank,parameters['world_size'],parameters['ddp_backend'])
-            if parameters['pre_training'] == False:
-                if parameters['restart_training']:
-                    device = torch.device(ml.parameters['device'])
-                    ml.model.load_state_dict(torch.load(ml.parameters['restart_model_name'],map_location=device))
-                model.to(parameters['device'])
-                model = DDP(model, device_ids=[rank],find_unused_parameters=True)
-            else:
-                model.to(ml.parameters['device'])
+        if parameters['pre_training'] == False:
+            if parameters['restart_training']:
                 device = torch.device(ml.parameters['device'])
-                model.load_state_dict(torch.load(os.path.join(ml.parameters['pretrain_dir'], 'model_pre'),map_location=device))
+                ml.model.load_state_dict(torch.load(ml.parameters['restart_model_name'],map_location=device))
+            model.to(parameters['device'])
+            if parameters['run_ddp']:
+                model = DDP(model, device_ids=[rank],find_unused_parameters=True)
+        else:
+            model.to(ml.parameters['device'])
+            device = torch.device(ml.parameters['device'])
+            model.load_state_dict(torch.load(os.path.join(ml.parameters['pretrain_dir'], 'model_pre'),map_location=device))
+            if parameters['run_ddp']:
                 model = DDP(model, device_ids=[rank], find_unused_parameters=True)
 
         follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm']
         if parameters['run_ddp']:
-            loader_train = DataLoader(data['training'], batch_size=parameters['BATCH_SIZE'],pin_memory=parameters['pin_memory'],
+            loader_train = DataLoader(data['training'], batch_size=parameters['model_dict']['batch_size'][1],pin_memory=parameters['pin_memory'],
                                       shuffle=False, follow_batch=follow_batch,sampler=DistributedSampler(data['training']))
-            loader_valid = DataLoader(data['validation'], batch_size=parameters['BATCH_SIZE'],pin_memory=parameters['pin_memory'],
+            loader_valid = DataLoader(data['validation'], batch_size=parameters['model_dict']['batch_size'][1],pin_memory=parameters['pin_memory'],
                                       shuffle=False, sampler=DistributedSampler(data['validation']))
         else:
             loader_train = DataLoader(data['training'],pin_memory=parameters['pin_memory'],
-                                      batch_size=parameters['BATCH_SIZE'], shuffle=True, follow_batch=follow_batch)
+                                      batch_size=parameters['model_dict']['batch_size'][1], shuffle=True, follow_batch=follow_batch)
             loader_valid = DataLoader(data['validation'],pin_memory=parameters['pin_memory'],
-                                      batch_size=parameters['BATCH_SIZE'], shuffle=False)
+                                      batch_size=parameters['model_dict']['batch_size'][1], shuffle=False)
         L_train, L_valid = [], []
         min_loss_train = 1.0E30
         min_loss_valid = 1.0E30
@@ -106,29 +126,60 @@ def run_training(rank,ml=None):
             stats_file.write('Training_loss     Validation loss\n')
             stats_file.close()
 
-        if parameters['dynamic_lr']:
+        if parameters['model_dict']['optimizer_params']['dynamic_lr']:
             dist_params = dict(
-                dist_type='exp',
-                vars=parameters['lr_scale'],
-                size=parameters['num_epochs'][1],
-                floor=parameters['LEARN_RATE']
+                dist_type=parameters['model_dict']['optimizer_params']['dist_type'],
+                vars=parameters['model_dict']['optimizer_params']['lr_scale'],
+                size=parameters['model_dict']['num_epochs'][1],
+                floor=parameters['model_dict']['optimizer_params']['params_group']['lr']
             )
             lr_data = get_distribution(dist_params)
         else:
-            lr_data = np.linspace(parameters['LEARN_RATE'],parameters['LEARN_RATE'],parameters['num_epochs'][1])
+            lr_data = np.linspace(parameters['model_dict']['optimizer_params']['params_group']['lr'],
+                                  parameters['model_dict']['optimizer_params']['params_group']['lr'],parameters['model_dict']['num_epochs'][1])
 
-        for ep in range(parameters['num_epochs'][1]):
+        for ep in range(parameters['model_dict']['num_epochs'][1]):
             if rank == 0:
-                print('Epoch ',ep+1,' of ',parameters['num_epochs'][1])
+                print('Epoch ',ep+1,' of ',parameters['model_dict']['num_epochs'][1],  ' lr_rate: ',lr_data[ep])
                 sys.stdout.flush()
 
+            parameters['model_dict']['optimizer_params']['params_group']['lr'] = lr_data[ep]
             if parameters['run_ddp']:
                 loader_train.sampler.set_epoch(ep)
                 loader_valid.sampler.set_epoch(ep)
 
-                optimizer = torch.optim.AdamW(model.module.processor.parameters(), lr=lr_data[ep])
+                parameters['model_dict']['optimizer_params']['params_group'][
+                    'params'] = model.module.processor.parameters()
             else:
-                optimizer = torch.optim.AdamW(model.processor.parameters(), lr=lr_data[ep])
+                parameters['model_dict']['optimizer_params']['params_group']['params'] = model.processor.parameters()
+
+            if parameters['model_dict']['optimizer_params']['optimizer'] == 'AdamW':
+                optimizer = torch.optim.AdamW([parameters['model_dict']['optimizer_params']['params_group']])
+            elif parameters['model_dict']['optimizer_params']['optimizer'] == 'Adadelta':
+                optimizer = torch.optim.Adadelta([parameters['model_dict']['optimizer_params']['params_group']])
+            elif parameters['model_dict']['optimizer_params']['optimizer'] == 'Adagrad':
+                optimizer = torch.optim.Adagrad([parameters['model_dict']['optimizer_params']['params_group']])
+            elif parameters['model_dict']['optimizer_params']['optimizer'] == 'Adam':
+                optimizer = torch.optim.Adam([parameters['model_dict']['optimizer_params']['params_group']])
+            elif parameters['model_dict']['optimizer_params']['optimizer'] == 'SparseAdam':
+                optimizer = torch.optim.SparseAdam([parameters['model_dict']['optimizer_params']['params_group']])
+            elif parameters['model_dict']['optimizer_params']['optimizer'] == 'Adamax':
+                optimizer = torch.optim.Adamax([parameters['model_dict']['optimizer_params']['params_group']])
+            elif parameters['model_dict']['optimizer_params']['optimizer'] == 'ASGD':
+                optimizer = torch.optim.ASGD([parameters['model_dict']['optimizer_params']['params_group']])
+            elif parameters['model_dict']['optimizer_params']['optimizer'] == 'LBFGS':
+                optimizer = torch.optim.LBFGS([parameters['model_dict']['optimizer_params']['params_group']])
+            elif parameters['model_dict']['optimizer_params']['optimizer'] == 'NAdam':
+                optimizer = torch.optim.NAdam([parameters['model_dict']['optimizer_params']['params_group']])
+            elif parameters['model_dict']['optimizer_params']['optimizer'] == 'RAdam':
+                optimizer = torch.optim.RAdam([parameters['model_dict']['optimizer_params']['params_group']])
+            elif parameters['model_dict']['optimizer_params']['optimizer'] == 'RMSprop':
+                optimizer = torch.optim.RMSprop([parameters['model_dict']['optimizer_params']['params_group']])
+            elif parameters['model_dict']['optimizer_params']['optimizer'] == 'Rprop':
+                optimizer = torch.optim.Rprop([parameters['model_dict']['optimizer_params']['params_group']])
+            elif parameters['model_dict']['optimizer_params']['optimizer'] == 'SGD':
+                optimizer = torch.optim.SGD([parameters['model_dict']['optimizer_params']['params_group']])
+            optimizer_to(optimizer,parameters['device'])
 
             loss_train = train(loader_train, model, parameters, optimizer);
             L_train.append(loss_train)
@@ -148,12 +199,12 @@ def run_training(rank,ml=None):
                             os.remove(model_name[0])
                     if rank == 0:
                         now = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-                        print('Min train loss: ', min_loss_train, ' min valid loss: ', min_loss_valid, ' lr_rate: ',lr_data[ep])
+                        print('Min train loss: ', min_loss_train, ' min valid loss: ', min_loss_valid)
                         if parameters['run_ddp']:
-                            torch.save(model.module.state_dict(), os.path.join(parameters['model_save_dir'], 'model_' + str(now)))
+                            torch.save(model.module.state_dict(), os.path.join(parameters['model_save_dir'], 'model_' + str(now)+'_ep-'+str(ep)))
                         else:
                             torch.save(model.state_dict(), os.path.join(parameters['model_save_dir'], 'model_' + str(now)))
-            if loss_train < parameters['train_tolerance'] and loss_valid < parameters['train_tolerance']:
+            if loss_train < parameters['model_dict']['train_tolerance'] and loss_valid < parameters['model_dict']['train_tolerance']:
                 if rank == 0:
                     print('Validation and training losses satisy set tolerance...exiting training loop...')
                 break
@@ -177,13 +228,13 @@ def run_pre_training(rank,ml=None):
 
     follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm']
     if parameters['run_ddp']:
-        loader_train = DataLoader(data['training'], batch_size=parameters['BATCH_SIZE'],
+        loader_train = DataLoader(data['training'], batch_size=parameters['model_dict']['batch_size'][0],
                                   pin_memory=parameters['pin_memory'],
                                   shuffle=False, follow_batch=follow_batch,
                                   sampler=DistributedSampler(data['training']))
     else:
         loader_train = DataLoader(data['training'], pin_memory=parameters['pin_memory'],
-                                  batch_size=parameters['BATCH_SIZE'], shuffle=True, follow_batch=follow_batch)
+                                  batch_size=parameters['model_dict']['batch_size'][0], shuffle=True, follow_batch=follow_batch)
     L_train = []
     min_loss_train = 1.0E30
 
@@ -192,27 +243,61 @@ def run_pre_training(rank,ml=None):
         stats_file.write('Training_loss\n')
         stats_file.close()
 
-    if parameters['dynamic_lr']:
+    if parameters['model_dict']['optimizer_params']['dynamic_lr']:
         dist_params = dict(
-            dist_type='exp',
-            vars=parameters['lr_scale'],
-            size=parameters['num_epochs'][0],
-            floor=parameters['LEARN_RATE']
+            dist_type=parameters['model_dict']['optimizer_params']['dist_type'],
+            vars=parameters['model_dict']['optimizer_params']['lr_scale'],
+            size=parameters['model_dict']['num_epochs'][1],
+            floor=parameters['model_dict']['optimizer_params']['params_group']['lr']
         )
         lr_data = get_distribution(dist_params)
     else:
-        lr_data = np.linspace(parameters['LEARN_RATE'], parameters['LEARN_RATE'], parameters['num_epochs'][0])
+        lr_data = np.linspace(parameters['model_dict']['optimizer_params']['params_group']['lr'],
+                              parameters['model_dict']['optimizer_params']['params_group']['lr'],
+                              parameters['model_dict']['num_epochs'][1])
 
-    for ep in range(parameters['num_epochs'][0]):
+    for ep in range(parameters['model_dict']['num_epochs'][0]):
         if rank == 0:
-            print('Epoch ', ep+1, ' of ', parameters['num_epochs'][0])
+            print('Epoch ', ep+1, ' of ', parameters['model_dict']['num_epochs'][0], ' lr_rate: ',lr_data[ep])
             sys.stdout.flush()
 
+        parameters['model_dict']['optimizer_params']['params_group']['lr'] = lr_data[ep]
         if parameters['run_ddp']:
             loader_train.sampler.set_epoch(ep)
-            optimizer = torch.optim.AdamW(model.module.processor.parameters(), lr=lr_data[ep])
+            loader_valid.sampler.set_epoch(ep)
+
+            parameters['model_dict']['optimizer_params']['params_group'][
+                'params'] = model.module.processor.parameters()
         else:
-            optimizer = torch.optim.AdamW(model.processor.parameters(), lr=lr_data[ep])
+            parameters['model_dict']['optimizer_params']['params_group']['params'] = model.processor.parameters()
+
+        if parameters['model_dict']['optimizer_params']['optimizer'] == 'AdamW':
+            optimizer = torch.optim.AdamW([parameters['model_dict']['optimizer_params']['params_group']])
+        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'Adadelta':
+            optimizer = torch.optim.Adadelta([parameters['model_dict']['optimizer_params']['params_group']])
+        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'Adagrad':
+            optimizer = torch.optim.Adagrad([parameters['model_dict']['optimizer_params']['params_group']])
+        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'Adam':
+            optimizer = torch.optim.Adam([parameters['model_dict']['optimizer_params']['params_group']])
+        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'SparseAdam':
+            optimizer = torch.optim.SparseAdam([parameters['model_dict']['optimizer_params']['params_group']])
+        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'Adamax':
+            optimizer = torch.optim.Adamax([parameters['model_dict']['optimizer_params']['params_group']])
+        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'ASGD':
+            optimizer = torch.optim.ASGD([parameters['model_dict']['optimizer_params']['params_group']])
+        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'LBFGS':
+            optimizer = torch.optim.LBFGS([parameters['model_dict']['optimizer_params']['params_group']])
+        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'NAdam':
+            optimizer = torch.optim.NAdam([parameters['model_dict']['optimizer_params']['params_group']])
+        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'RAdam':
+            optimizer = torch.optim.RAdam([parameters['model_dict']['optimizer_params']['params_group']])
+        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'RMSprop':
+            optimizer = torch.optim.RMSprop([parameters['model_dict']['optimizer_params']['params_group']])
+        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'Rprop':
+            optimizer = torch.optim.Rprop([parameters['model_dict']['optimizer_params']['params_group']])
+        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'SGD':
+            optimizer = torch.optim.SGD([parameters['model_dict']['optimizer_params']['params_group']])
+        optimizer_to(optimizer, parameters['device'])
 
         loss_train = train(loader_train, model, parameters,optimizer);
         L_train.append(loss_train)
@@ -222,7 +307,7 @@ def run_pre_training(rank,ml=None):
             stats_file.close()
         if loss_train < min_loss_train:
             if rank == 0:
-                print('Min train loss: ', min_loss_train, ' lr_rate: ',lr_data[ep])
+                print('Min train loss: ', min_loss_train)
             min_loss_train = loss_train
             model_name = glob.glob(os.path.join(parameters['pretrain_dir'], 'model_*'))
             if len(model_name) > 0 and rank == 0:
@@ -232,7 +317,7 @@ def run_pre_training(rank,ml=None):
                     torch.save(model.module.state_dict(), os.path.join(parameters['pretrain_dir'], 'model_pre'))
                 else:
                     torch.save(model.state_dict(), os.path.join(parameters['pretrain_dir'], 'model_pre'))
-        if loss_train < parameters['train_tolerance']:
+        if loss_train < parameters['model_dict']['train_tolerance']:
             if rank == 0:
                 print('Pre-Training loss satisfies set tolerance...exiting training loop...')
             break
