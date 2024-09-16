@@ -55,9 +55,14 @@ def train(loader,model,parameters,optimizer):
         def closure():
             data.to(parameters['device'], non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
-            atom_contrib, bond_contrib, angle_contrib = model(data)
-            all_sum = atom_contrib.sum() + bond_contrib.sum() + angle_contrib.sum()
-            loss = loss_fn(all_sum, data.y[0][0])
+            preds = model(data)
+            pred = 0.0
+            if len(preds) > 1:
+                for p in preds:
+                    pred += p.sum()
+            else:
+                pred = preds
+            loss = loss_fn(pred, data.y[0][0])
             nonlocal total_loss
             total_loss += loss.item()
             loss.backward()

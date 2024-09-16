@@ -85,14 +85,17 @@ class Processor(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, node_dim, out_dim,act_func):
+    def __init__(self, in_dim, out_dim,act_func):
         super().__init__()
-        self.node_dim = node_dim
+        self.node_dim = in_dim
         self.out_dim = out_dim
-        self.decoder = MLP([node_dim, node_dim, out_dim], act=act_func)
+        self.decoder = MLP([in_dim, in_dim, out_dim], act=act_func)
 
     def forward(self, data):
-        return self.decoder(data.h_atm)
+        atm_scalars = self.transform_atm(data.h_atm)
+        bnd_scalars = self.transform_bnd(data.h_bnd)
+        ang_scalars = self.transform_bnd(data.h_ang)
+        return [atm_scalars, bnd_scalars, ang_scalars]
 
 class PositiveScalarsDecoder(nn.Module):
     def __init__(self, dim):
@@ -106,7 +109,7 @@ class PositiveScalarsDecoder(nn.Module):
         atm_scalars = self.transform_atm(data.h_atm)
         bnd_scalars = self.transform_bnd(data.h_bnd)
         ang_scalars = self.transform_bnd(data.h_ang)
-        return (atm_scalars, bnd_scalars, ang_scalars)
+        return [atm_scalars, bnd_scalars, ang_scalars]
 
 
 class ALIGNN(nn.Module):
