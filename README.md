@@ -2,18 +2,19 @@
 ![Screenshot](https://github.com/Materials-Informatics-Laboratory/Catalyst/blob/main/visuals/catalyst.jpg?raw=true)
 
 # Catalyst
-General-purpose toolkit for building machine learning models to study atomic-scale structure-property relationships.
+General-purpose toolkit for analyzing atomistic simulations via graph-based machine learning. Currently, Catalyst can genearte and visualize graphs of both global and local atomistic environments, build grpah neural networks to both characterize systems and learn materials properties. The current learning process can be "black-box" or "interpretable" depending on your goals. There are many examples showcasing how to extract interpretable feature rankings. Catalyst also supports multi-GPU training via Pytroch's DistributedDataParallel package, and our current testing shows a speed-up of between 2-6 ordgers of magnitude when compared to serial training on GPU and CPU, respectively.
 
 ## Installation
 
 The following dependencies need to be installed before installing `catalyst`. The installation time is typically within 10 minutes on a normal local machine.
 - PyTorch (`pytorch>=1.8.1`)
 - PyTorch-Geometric (`pyg>=2.0.1`): for implementing graph representations
-- UMAP-learn (`umap-learn>=0.5.3`)
-- Networkx (`networkx>=2.8.6`)
+- Networkx (`networkx>=2.8.6`): for using SODAS sampling
 - Scipy (`scipy>=1.9.0`)
 - Numpy (`numpy>=1.21.1`)
 - Atomic Simulation Environment (`ase>= 3.22.1`): for reading/writing atomic structures
+- PeriodicTable (`periodictable >= 1.7.1`): for graph construction
+- Numbda (`numba >= 0.60.0`): for CUDA calls
 
 To install `catalyst`, clone this repo and run:
 ```bash
@@ -33,3 +34,7 @@ pip uninstall catalyst
 
 - The `src` folder contains the source code.
 - The `examples` folder contains examples that explain how to use `catalyst`'s various functions.
+
+## Contact
+
+- Questions regarding Catlayst should be directed to jc112358@bu.edu.
