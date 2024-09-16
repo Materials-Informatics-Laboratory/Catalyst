@@ -9,7 +9,7 @@ structures = read(os.path.join(path,'OUTCAR_Al_FCC'),index=':',format='vasp-out'
 dataset = []
 for i,structure in enumerate(structures):
     print('Generating graph for structure ',i,' of ',len(structures))
-    atomic_graphs = atomic_alignnd(structure,cutoff=6.0,dihedral=False)
+    atomic_graphs = atomic_alignnd(structure,cutoff=6.0,dihedral=False,store_atoms=True,store_atoms_type='ase-atoms')
     torch.save(atomic_graphs, os.path.join(path, 'graph_data.pt'))
 
 

@@ -10,7 +10,7 @@ structures = [read(os.path.join(path,'OUTCAR-0'),index=':-1',format='vasp-out')[
     read(os.path.join(path,'OUTCAR-1'),index=':-1',format='vasp-out')[0],
     read(os.path.join(path,'OUTCAR-2'),index=':-1',format='vasp-out')[0]
               ]
-graph_data = realignnd(structures,cutoff=5.0,dihedral=False)
+graph_data = realignnd(structures,cutoff=5.0,dihedral=False,store_atoms=False,use_pt=True)
 torch.save(graph_data, os.path.join(path, 'graph_data.pt'))
 
 

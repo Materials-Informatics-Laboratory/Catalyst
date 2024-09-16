@@ -8,7 +8,7 @@ structures = read(os.path.join(path,'OUTCAR_Al_FCC'),index=':',format='vasp-out'
 dataset = []
 for i,structure in enumerate(structures):
     print('Generating graph for structure ',i,' of ',len(structures))
-    graph_data = alignnd(structure,cutoff=6.0,dihedral=False)
+    graph_data = alignnd(structure,cutoff=6.0,dihedral=False,store_atoms=False,use_pt=False)
     dataset.append(graph_data)
 torch.save(dataset, os.path.join(path, 'graph_data.pt'))
 
