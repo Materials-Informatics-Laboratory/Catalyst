@@ -40,7 +40,7 @@ class Encoder(nn.Module):
 
         return h_ang
     
-    def embed_ang_without_dihedral(self, x_ang, mask_dih_ang):
+    def embed_ang_without_dihedral(self, x_ang):
         cos_ang = torch.cos(x_ang)
         return gaussian(cos_ang, start=-1, end=1, num_basis=self.dim)
 
@@ -52,7 +52,7 @@ class Encoder(nn.Module):
         data.h_bnd = self.embed_bnd(data.x_bnd)
         
         # Embed angles
-        data.h_ang = self.embed_ang(data.x_ang, data.mask_dih_ang)
+        data.h_ang = self.embed_ang(data.x_ang)
         
         return data
 

@@ -50,7 +50,7 @@ def alignnd(atoms,cutoff,dihedral=False, store_atoms=False, use_pt=False, atom_l
     else:
         edge_index_A = np.hstack([edge_index_bnd_ang])
         x_ang = np.concatenate([x_bnd_ang])
-        mask_dih_ang = [False] * len(x_bnd_ang)
+        mask_dih_ang = [False]
 
     if store_atoms:
         atms = atoms
@@ -143,7 +143,7 @@ def realignnd(structures,cutoff,dihedral=False,store_atoms=False,use_pt=False, a
         else:
             edge_index_A = np.hstack([edge_index_bnd_ang])
             x_ang = np.concatenate([x_bnd_ang])
-            mask_dih_ang = [False] * len(x_bnd_ang)
+            mask_dih_ang = [False]
 
         if len(data_amounts["x_atm"]) == 0:
             data_amounts["x_atm"].append(len(x_atm) - 1)
@@ -259,7 +259,7 @@ def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[],store_atoms=False
             else:
                 edge_index_A = np.hstack([edge_index_bnd_ang])
                 x_ang = np.concatenate([x_bnd_ang])
-                mask_dih_ang = [False] * len(x_bnd_ang)
+                mask_dih_ang = [False]
 
             data_amounts["x_atm"].append(len(x_atm) - 1)
             data_amounts["x_bnd"].append(len(tmp_x_bnd) - 1)
@@ -331,7 +331,7 @@ def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False, store_a
         else:
             edge_index_A = np.hstack([edge_index_bnd_ang])
             x_ang = np.concatenate([x_bnd_ang])
-            mask_dih_ang = [False] * len(x_bnd_ang)
+            mask_dih_ang = [False]
 
         if store_atoms:
             if store_atoms_type == 'ase-atoms':
