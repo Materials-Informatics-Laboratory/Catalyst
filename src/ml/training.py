@@ -1,6 +1,6 @@
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data.distributed import DistributedSampler
 from torch.distributed import init_process_group,destroy_process_group
+from torch.utils.data.distributed import DistributedSampler
 from torch_geometric.loader import DataLoader
 from torch import nn
 import torch
@@ -10,6 +10,7 @@ from ..utilities.distributions import get_distribution
 
 from datetime import datetime
 import numpy as np
+import random
 import shutil
 import glob
 import sys
@@ -50,28 +51,63 @@ def train(loader,model,parameters,optimizer):
 
     if parameters['run_ddp'] == False:
         model.to(parameters['device'])
-    loss_fn = torch.nn.MSELoss()
+    loss_fn = parameters['model_dict']['loss_func']
     for data in loader:
+        '''
+        TO DO:
+            Right now this entire prediction process is broken for batched graph data. preds is a series of sums of graph features, which are grouped globally
+            in the batched graph. So the output is a single scalar across the entire batched data and is being compared to data.y[0][0] which doesn't even
+            line up with the batched data (is anything data.y[0][0] should be summed over the batch, but ideally compared individually to the batched predictions.)
+        '''
         def closure():
             data.to(parameters['device'], non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
-            preds = model(data)
-            pred = 0.0
-            if len(preds) > 1:
-                for p in preds:
-                    pred += p.sum()
-            else:
-                pred = preds
-            loss = loss_fn(pred, data.y[0][0])
+
+            pred = model(data)
+
+            d = pred[0].flatten()
+            x = torch.unique(data['x_atm_batch'])
+            sorted_atms = [None] * len(x)
+            dd = data['x_atm_batch']
+            for i,xx in enumerate(x):
+                xw = torch.where(dd == xx)
+                sorted_atms[i] = d[xw]
+            d = pred[1].flatten()
+            x = torch.unique(data['x_bnd_batch'])
+            sorted_bnds = [None] * len(x)
+            dd = data['x_bnd_batch']
+            for i,xx in enumerate(x):
+                xw = torch.where(dd == xx)
+                sorted_bnds[i] = d[xw]
+            if hasattr(data,'x_ang_batch'):
+                d = pred[2].flatten()
+                x = torch.unique(data['x_ang_batch'])
+                sorted_angs = [None] * len(x)
+                dd = data['x_ang_batch']
+                for i,xx in enumerate(x):
+                    xw = torch.where(dd == xx)
+                    sorted_angs[i] = d[xw]
+
+            preds = []
+            for i in range(len(sorted_atms)):
+                if hasattr(data, 'x_ang_batch'):
+                    preds.append(sorted_atms[i].sum() + sorted_angs[i].sum() + sorted_bnds[i].sum())
+                else:
+                    preds.append(sorted_atms[i].sum() + sorted_bnds[i].sum())
+            preds = torch.stack(preds)
+
+            y = data.y.flatten()
+            loss = loss_fn(preds,y)
             nonlocal total_loss
             total_loss += loss.item()
             loss.backward()
+            optimizer.step()
             return loss
         optimizer.step(closure)
 
         if parameters['run_ddp']:
             data.detach()
-    return total_loss / len(loader)
+    return total_loss/(len(loader)*parameters['world_size'])
 
 def run_training(rank,ml=None):
 
@@ -95,6 +131,10 @@ def run_training(rank,ml=None):
         data = dict(training=partitioned_data.item().get('training'),
                        validation=partitioned_data.item().get('validation'))
 
+
+        #for i in range(len(data['training'])):
+        #    data['training'][i]['y'] = data['training'][i]['y'][0][0]
+
         if parameters['run_ddp']:
             ddp_setup(rank,parameters['world_size'],parameters['ddp_backend'])
         if parameters['pre_training'] == False:
@@ -103,25 +143,36 @@ def run_training(rank,ml=None):
                 ml.model.load_state_dict(torch.load(ml.parameters['restart_model_name'],map_location=device))
             model.to(parameters['device'])
             if parameters['run_ddp']:
+                model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
                 model = DDP(model, device_ids=[rank],find_unused_parameters=True)
         else:
             model.to(ml.parameters['device'])
             device = torch.device(ml.parameters['device'])
             model.load_state_dict(torch.load(os.path.join(ml.parameters['pretrain_dir'], 'model_pre'),map_location=device))
             if parameters['run_ddp']:
+                model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
                 model = DDP(model, device_ids=[rank], find_unused_parameters=True)
 
-        follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm']
+        follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm','x_bnd']
         if parameters['run_ddp']:
-            loader_train = DataLoader(data['training'], batch_size=int(parameters['model_dict']['batch_size'][1]/parameters['world_size']),pin_memory=parameters['pin_memory'],
-                                      shuffle=False, follow_batch=follow_batch,sampler=DistributedSampler(data['training']))
-            loader_valid = DataLoader(data['validation'], batch_size=int(parameters['model_dict']['batch_size'][1]/parameters['world_size']),pin_memory=parameters['pin_memory'],
-                                      shuffle=False, sampler=DistributedSampler(data['validation']))
+            if parameters['loader_dict']['shuffle_loader'] == False:
+                loader_train = DataLoader(data['training'], batch_size=int(
+                    parameters['loader_dict']['batch_size'][1] / parameters['world_size']),
+                                      pin_memory=parameters['pin_memory'],
+                                      follow_batch=follow_batch,
+                                      sampler=DistributedSampler(data['training'],
+                                                                 shuffle=False),num_workers=parameters['loader_dict']['num_workers'])
+            loader_valid = DataLoader(data['validation'], batch_size=1,pin_memory=parameters['pin_memory'],
+                                      shuffle=False, sampler=DistributedSampler(data['validation']),num_workers=parameters['loader_dict']['num_workers'])
         else:
-            loader_train = DataLoader(data['training'],pin_memory=parameters['pin_memory'],
-                                      batch_size=parameters['model_dict']['batch_size'][1], shuffle=True, follow_batch=follow_batch)
+            loader_train = DataLoader(data['training'], pin_memory=parameters['pin_memory'],
+                                      batch_size=parameters['loader_dict']['batch_size'][1],
+                                      shuffle=parameters['loader_dict']['shuffle_loader'],
+                                      follow_batch=follow_batch,
+                                      num_workers=parameters['loader_dict']['num_workers'])
+
             loader_valid = DataLoader(data['validation'],pin_memory=parameters['pin_memory'],
-                                      batch_size=parameters['model_dict']['batch_size'][1], shuffle=False)
+                                      batch_size=1, shuffle=False,num_workers=parameters['loader_dict']['num_workers'])
         L_train, L_valid = [], []
         min_loss_train = 1.0E30
         min_loss_valid = 1.0E30
@@ -148,11 +199,23 @@ def run_training(rank,ml=None):
                 print('Epoch ',ep+1,' of ',parameters['model_dict']['num_epochs'][1],  ' lr_rate: ',lr_data[ep])
                 sys.stdout.flush()
 
+            if parameters['loader_dict']['shuffle_loader'] == True: #reshuffle training data to avoid overfitting
+                if rank == 0:
+                    print('Shuffling training data...')
+                if parameters['run_ddp']:
+                    if ep > 0:
+                        loader_train.sampler.set_epoch(ep)
+                        loader_valid.sampler.set_epoch(ep)
+                    loader_train = DataLoader(data['training'], batch_size=int(
+                        parameters['loader_dict']['batch_size'][1] / parameters['world_size']),
+                                              pin_memory=parameters['pin_memory'],
+                                              follow_batch=follow_batch,
+                                              sampler=DistributedSampler(data['training'],shuffle=parameters['loader_dict']['shuffle_loader'],
+                                                                         seed=random.randint(-sys.maxsize - 1, sys.maxsize)),
+                                              num_workers=parameters['loader_dict']['num_workers'])
+
             parameters['model_dict']['optimizer_params']['params_group']['lr'] = lr_data[ep]
             if parameters['run_ddp']:
-                loader_train.sampler.set_epoch(ep)
-                loader_valid.sampler.set_epoch(ep)
-
                 parameters['model_dict']['optimizer_params']['params_group'][
                     'params'] = model.module.processor.parameters()
             else:
@@ -209,7 +272,7 @@ def run_training(rank,ml=None):
                             torch.save(model.module.state_dict(), os.path.join(parameters['model_save_dir'], 'model_' + str(now)+'_ep-'+str(ep)))
                         else:
                             torch.save(model.state_dict(), os.path.join(parameters['model_save_dir'], 'model_' + str(now)))
-            if loss_train < parameters['model_dict']['train_tolerance'] and loss_valid < parameters['model_dict']['train_tolerance']:
+            if loss_valid < parameters['model_dict']['train_tolerance']:
                 if rank == 0:
                     print('Validation and training losses satisy set tolerance...exiting training loop...')
                 break

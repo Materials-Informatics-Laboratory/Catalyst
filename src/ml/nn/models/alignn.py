@@ -47,13 +47,14 @@ class Encoder(nn.Module):
     def forward(self, data):
         # Embed atoms
         data.h_atm = self.embed_atm(data.x_atm)
-        
+
         # Embed bonds
         data.h_bnd = self.embed_bnd(data.x_bnd)
         
         # Embed angles
-        data.h_ang = self.embed_ang(data.x_ang)
-        
+        if hasattr(data,'x_ang'):
+            data.h_ang = self.embed_ang(data.x_ang)
+
         return data
 
 
@@ -75,36 +76,38 @@ class Processor(nn.Module):
 
     def forward(self, data):
         edge_index_G = data.edge_index_G
-        edge_index_A = data.edge_index_A
+        if hasattr(data, 'x_ang'):
+            edge_index_A = data.edge_index_A
         
         for i in range(self.num_convs):
-            data.h_bnd, data.h_ang = self.bnd_ang_convs[i](data.h_bnd, edge_index_A, data.h_ang)
+            if hasattr(data, 'x_ang'):
+                data.h_bnd, data.h_ang = self.bnd_ang_convs[i](data.h_bnd, edge_index_A, data.h_ang)
             data.h_atm, data.h_bnd = self.atm_bnd_convs[i](data.h_atm, edge_index_G, data.h_bnd)
     
         return data
 
-class SODAS_Decoder(nn.Module):
-    def __init__(self, node_dim, out_dim,act_func):
-        super().__init__()
-        self.node_dim = node_dim
-        self.out_dim = out_dim
-        self.decoder = MLP([node_dim, node_dim, out_dim], act=act_func)
-
-    def forward(self, data):
-        return self.decoder(data.h_atm)
-
 class Decoder(nn.Module):
-    def __init__(self, in_dim, out_dim,act_func):
+    def __init__(self, in_dim, out_dim,act_func,combine=True):
         super().__init__()
         self.node_dim = in_dim
         self.out_dim = out_dim
+        self.combine = combine
         self.decoder = MLP([in_dim, in_dim, out_dim], act=act_func)
 
     def forward(self, data):
-        atm_scalars = self.transform_atm(data.h_atm)
-        bnd_scalars = self.transform_bnd(data.h_bnd)
-        ang_scalars = self.transform_bnd(data.h_ang)
-        return [atm_scalars, bnd_scalars, ang_scalars]
+        atm_scalars = self.decoder(data.h_atm)
+        bnd_scalars = self.decoder(data.h_bnd)
+        if hasattr(data, 'x_ang'):
+            ang_scalars = self.decoder(data.h_ang)
+            if self.combine:
+                return torch.cat((atm_scalars,bnd_scalars,ang_scalars),0)
+            else:
+                return [atm_scalars, bnd_scalars, ang_scalars]
+        else:
+            if self.combine:
+                return torch.cat((atm_scalars,bnd_scalars),0)
+            else:
+                return [atm_scalars, bnd_scalars]
 
 class PositiveScalarsDecoder(nn.Module):
     def __init__(self, dim):
@@ -117,9 +120,11 @@ class PositiveScalarsDecoder(nn.Module):
     def forward(self, data):
         atm_scalars = self.transform_atm(data.h_atm)
         bnd_scalars = self.transform_bnd(data.h_bnd)
-        ang_scalars = self.transform_bnd(data.h_ang)
-        return [atm_scalars, bnd_scalars, ang_scalars]
-
+        if hasattr(data, 'x_ang'):
+            ang_scalars = self.transform_bnd(data.h_ang)
+            return [atm_scalars, bnd_scalars, ang_scalars]
+        else:
+            return [atm_scalars, bnd_scalars]
 
 class ALIGNN(nn.Module):
     """ALIGNN model.

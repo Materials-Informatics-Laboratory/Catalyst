@@ -10,7 +10,7 @@ from torch_geometric.loader import DataLoader
 import torch as torch
 from torch import nn
 
-from src.ml.nn.models.alignn import Encoder, Processor, SODAS_Decoder, ALIGNN
+from src.ml.nn.models.alignn import Encoder, Processor, Decoder, ALIGNN
 import catalyst.src.utilities.sampling as sampling
 from catalyst.src.sodas.model.sodas import SODAS
 from catalyst.src.ml.ml import ML
@@ -36,8 +36,8 @@ def main(ml_parameters):
 
         encoded_data = []
         for data in graph_data:
-            y_values.append(data.y[0].item())
-            follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data, 'x_ang') else ['x_atm']
+            y_values.append(data.y.item())
+            follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data, 'x_ang') else ['x_atm','x_bnd']
             loader = DataLoader([data], batch_size=1, shuffle=False, follow_batch=follow_batch)
             encoded_data.append(ml.parameters['sodas_dict']['sodas_model'].generate_gnn_latent_space(loader=loader, device=ml.parameters['device'])[0])
         ml.parameters['sodas_dict']['sodas_model'].clear_gpu_memory()
@@ -173,9 +173,9 @@ if __name__ == "__main__":
                                             ),
                          sodas_dict=dict(
                              sodas_model=SODAS(mod=ALIGNN(
-                                 encoder=Encoder(num_species=1, cutoff=4.0, dim=100, act_func=nn.SiLU()),
+                                 encoder=Encoder(num_species=119, cutoff=4.0, dim=100, act_func=nn.SiLU()),
                                  processor=Processor(num_convs=5, dim=100),
-                                 decoder=SODAS_Decoder(node_dim=100, out_dim=10, act_func=nn.SiLU())
+                                 decoder=Decoder(in_dim=100, out_dim=10, act_func=nn.SiLU())
                              ),
                                  ls_mod=umap_.UMAP(n_neighbors=15, min_dist=0.5, n_components=2)
                              ),

@@ -6,6 +6,7 @@ import os
 
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 import math
 
 def get_top_nperc_rankings(data):
@@ -113,6 +114,7 @@ def plot_data(data):
             sub_labels += [data[i][index] for index in top_index]
 
         bp = ax2[i].boxplot(sub_data, patch_artist=True, boxprops=dict(facecolor=colors[i], color='k'))
+
         vp = ax3[i].violinplot(sub_data)
 
         violin_parts = vp
@@ -155,14 +157,15 @@ def get_total_statistics(all_stats_data, all_data):
                     break
             if check == 0:
                 all_bonds.append(bt)
-        for ba in data["angs"]:
-            check = 0
-            for angle in all_angles:
-                if angle == ba:
-                    check = 1
-                    break
-            if check == 0:
-                all_angles.append(ba)
+        if data["angs"] is not None:
+            for ba in data["angs"]:
+                check = 0
+                for angle in all_angles:
+                    if angle == ba:
+                        check = 1
+                        break
+                if check == 0:
+                    all_angles.append(ba)
         for at in data["atms"]:
             check = 0
             for atom in all_atoms:
@@ -243,9 +246,10 @@ def get_single_statistics(ind_data,take=0):
         avg_data["std_bnd_features"][-1].append([])
     avg_data["avg_ang_features"].append([])
     avg_data["std_ang_features"].append([])
-    for i in ind_data["angs"]:
-        avg_data["avg_ang_features"][-1].append([])
-        avg_data["std_ang_features"][-1].append([])
+    if ind_data["angs"] is not None:
+        for i in ind_data["angs"]:
+            avg_data["avg_ang_features"][-1].append([])
+            avg_data["std_ang_features"][-1].append([])
 
     counter = 0
     for j, atm in enumerate(ind_data['i_atm_data']):
@@ -260,6 +264,8 @@ def get_single_statistics(ind_data,take=0):
                 avg_data["std_atm_features"][0][j].append(float(ind_data["atm_data"][counter]))
             counter += 1
     bnd_counts = {v: np.where(ind_data["i_bnd_data"] == v)[0] for v in np.unique(ind_data["i_bnd_data"])}
+    if ind_data["total_indices"][1].size()[0] == 0:
+        ind_data["total_indices"][1] = torch.tensor([10000000000])
     for j, bond_type in enumerate(ind_data["bond_amounts"]):  # bond type
         if take == 0:
             indices = np.where(bnd_counts[j] < ind_data["total_indices"][1][take].item())
@@ -269,16 +275,17 @@ def get_single_statistics(ind_data,take=0):
         for index in indices[0]:
             avg_data["avg_bnd_features"][0][j].append(float(ind_data["bnd_data"][bnd_counts[j][index]]))
             avg_data["std_bnd_features"][0][j].append(float(ind_data["bnd_data"][bnd_counts[j][index]]))
-    ang_counts = {v: np.where(ind_data["i_ang_data"] == v)[0] for v in np.unique(ind_data["i_ang_data"])}
-    for j, ang_type in enumerate(ind_data["angle_amounts"]):  # bond type
-        if take == 0:
-            indices = np.where(ang_counts[j] < ind_data["total_indices"][2][take].item())
-        else:
-            indices = np.where((ang_counts[j] < ind_data["total_indices"][2][take - 1].item()) &
-                               (ang_counts[j] < ind_data["total_indices"][2][take].item()))
-        for index in indices[0]:
-            avg_data["avg_ang_features"][0][j].append(float(ind_data["ang_data"][ang_counts[j][index]]))
-            avg_data["std_ang_features"][0][j].append(float(ind_data["ang_data"][ang_counts[j][index]]))
+    if ind_data["angs"] is not None:
+        ang_counts = {v: np.where(ind_data["i_ang_data"] == v)[0] for v in np.unique(ind_data["i_ang_data"])}
+        for j, ang_type in enumerate(ind_data["angle_amounts"]):  # bond type
+            if take == 0:
+                indices = np.where(ang_counts[j] < ind_data["total_indices"][2][take].item())
+            else:
+                indices = np.where((ang_counts[j] < ind_data["total_indices"][2][take - 1].item()) &
+                                   (ang_counts[j] < ind_data["total_indices"][2][take].item()))
+            for index in indices[0]:
+                avg_data["avg_ang_features"][0][j].append(float(ind_data["ang_data"][ang_counts[j][index]]))
+                avg_data["std_ang_features"][0][j].append(float(ind_data["ang_data"][ang_counts[j][index]]))
     for i,system in enumerate(avg_data["avg_atm_features"]):
         for j,data in enumerate(system):
             if len(data) > 0:
@@ -302,18 +309,18 @@ def get_single_statistics(ind_data,take=0):
             else:
                 avg_data["avg_bnd_features"][i][j] = -1.0
                 avg_data["std_bnd_features"][i][j] = -1.0
+    if ind_data["angs"] is not None:
+        for i,system in enumerate(avg_data["avg_ang_features"]):
+            for j,data in enumerate(system):
+                if len(data) > 0:
+                    avg = np.average(data)
+                    std = np.std(data)
 
-    for i,system in enumerate(avg_data["avg_ang_features"]):
-        for j,data in enumerate(system):
-            if len(data) > 0:
-                avg = np.average(data)
-                std = np.std(data)
-
-                avg_data["avg_ang_features"][i][j] = avg
-                avg_data["std_ang_features"][i][j] = std
-            else:
-                avg_data["avg_ang_features"][i][j] = -1.0
-                avg_data["std_ang_features"][i][j] = -1.0
+                    avg_data["avg_ang_features"][i][j] = avg
+                    avg_data["std_ang_features"][i][j] = std
+                else:
+                    avg_data["avg_ang_features"][i][j] = -1.0
+                    avg_data["std_ang_features"][i][j] = -1.0
 
     return avg_data
 

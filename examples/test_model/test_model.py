@@ -5,7 +5,9 @@ import os
 
 from torch_geometric.loader import DataLoader
 import torch as torch
+from torch import nn
 
+from src.ml.nn.models.alignn import Encoder, Processor, PositiveScalarsDecoder, ALIGNN
 from catalyst.src.ml.testing import test_intepretable, test_non_intepretable
 from catalyst.src.ml.ml import ML
 
@@ -26,7 +28,13 @@ ml_parameters = dict(world_size = torch.cuda.device_count(),
                     main_path=path,
                     device = 'cuda',
                     results_dir = None,
-                    elements=['Co','Mo','Cu','Ni','Fe']
+                    model_dict = dict(
+                        model=ALIGNN(
+                            encoder=Encoder(num_species=1, cutoff=4.0, dim=10, act_func=nn.SiLU()),
+                            processor=Processor(num_convs=5, dim=10, conv_type='mesh'),
+                            decoder=PositiveScalarsDecoder(dim=10),
+                        )
+                    )
                 )
 
 
@@ -44,7 +52,7 @@ ml.set_params(ml_parameters,save_params=False)
 data = []
 for graph in glob.glob(os.path.join(data_dir,'*.pt')):
     data.append(torch.load(graph))
-follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data[0], 'x_ang') else ['x_atm']
+follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data[0], 'x_ang') else ['x_atm','x_bnd']
 loader = DataLoader(data, batch_size=1, shuffle=False, follow_batch=follow_batch)
 print(f'Number of test graphs: {len(loader.dataset)}')
 
@@ -56,7 +64,7 @@ for i, model_name in enumerate(models):
     ml.parameters['results_dir'] = final_dir
     device = torch.device(ml.parameters['device'])
     ml.set_model()
-    ml.model.to(ml.parameters['device'])
+    #ml.model.to(ml.parameters['device'])
     #device = torch.device(ml.parameters['device'])
     #model.load_state_dict(torch.load(os.path.join(ml.parameters['pretrain_dir'], 'model_pre'), map_location=device))
     ml.model.load_state_dict(torch.load(model_name,map_location=device))

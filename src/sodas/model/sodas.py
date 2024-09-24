@@ -1,5 +1,6 @@
 import torch.nn as nn
 import numpy as np
+import torch
 
 from torch_geometric.utils import scatter
 
@@ -33,7 +34,11 @@ class SODAS():
         for data in loader:
             data = data.to(device)
             pred = self.model(data)
-            pred = scatter(pred,data.x_atm_batch, dim=0, reduce='mean')
+            if hasattr(data, 'x_ang'):
+                pred = scatter(pred,torch.cat((data.x_atm_batch,data.x_bnd_batch,data.x_ang_batch),0), dim=0, reduce='mean')
+            else:
+                pred = scatter(pred, torch.cat((data.x_atm_batch, data.x_bnd_batch), 0), dim=0,
+                               reduce='mean')
             data.detach()
             tx = []
             for p in pred[0]:

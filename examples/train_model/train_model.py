@@ -73,7 +73,7 @@ if __name__ == "__main__":
                          run_pretrain=False,
                          write_indv_pred=False,
                          restart_training=False,
-                         run_ddp = False,
+                         run_ddp = True,
                          pin_memory=False,
                          main_path=path,
                          ddp_backend='gloo',
@@ -84,14 +84,18 @@ if __name__ == "__main__":
                          model_save_dir=None,
                          pretrain_dir=os.path.join(path, 'pre_training'),
                          results_dir=None,
-                         elements=['Al'],
+                         loader_dict = dict(
+                             shuffle_loader=False,
+                             batch_size=[10, 20],
+                             num_workers=0
+                         ),
                          model_dict = dict(
                              n_models=1,
                              num_epochs=[10, 100],
                              train_tolerance=1e-5,
-                             batch_size=[10,1000],
+                             loss_func=torch.nn.MSELoss(),
                              model = ALIGNN(
-                                    encoder=Encoder(num_species=1,cutoff=4.0,dim=10,act_func=nn.SiLU()),
+                                    encoder=Encoder(num_species=119,cutoff=4.0,dim=10,act_func=nn.SiLU()),
                                     processor=Processor(num_convs=5, dim=10,conv_type='mesh'),
                                     decoder=PositiveScalarsDecoder(dim=10),
                             ),

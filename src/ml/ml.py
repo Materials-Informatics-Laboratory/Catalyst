@@ -39,6 +39,11 @@ class ML():
                                                     train_split = 0.8,
                                                     clusters=1
                                 ),
+                                loader_dict=dict(
+                                    shuffle_loader=False,
+                                    batch_size=[1,1],
+                                    num_workers=0
+                                ),
                                sodas_dict = dict(
                                     gen_graphs=False,
                                     gen_encodings=False,
@@ -49,7 +54,6 @@ class ML():
                                    n_models=1,
                                    num_epochs=[1, 1],
                                    train_tolerance=1.0,
-                                   batch_size=[1, 1],
                                    model = None,
                                    optimizer_params=dict(
                                        lr_scale=[1.0, 0.1],
