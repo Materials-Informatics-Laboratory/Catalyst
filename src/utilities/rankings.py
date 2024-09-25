@@ -1,8 +1,9 @@
 import numpy as np
 import torch as torch
 from .structure_properties import get_unique_bonds, get_unique_bond_angles
-
+from ..utilities.physics_database import Physics_data
 def organize_rankings(data,atom_data,bond_data,angle_data,elements,atom_mode='atomic_numbers'):
+
     bnd_type = []
     ang_type = []
     if atom_mode == 'atomic_numbers':
@@ -15,7 +16,11 @@ def organize_rankings(data,atom_data,bond_data,angle_data,elements,atom_mode='at
                     atom_data[i][j] = 1
                     break
     else:
-        pass
+        pdb = Physics_data()
+        ohe = []
+        elements = []
+        for el in pdb.elements:
+            elements.append(el.number)
     for i in range(len(bond_data[0])):
         bond1 = atom_data[bond_data[0][i]].numpy()
         bond2 = atom_data[bond_data[1][i]].numpy()
@@ -36,7 +41,7 @@ def organize_rankings(data,atom_data,bond_data,angle_data,elements,atom_mode='at
                 bx[j] = atom_data[b].numpy()
             bonds = [np.where(bx[0] == 1)[0][0], np.where(bx[1] == 1)[0][0], np.where(bx[2] == 1)[0][0]]
             angle = [elements[bonds[0]], elements[bonds[1]], elements[bonds[2]]]
-            ang_type[i] = angle
+            ang_type[i] = torch.tensor(angle)
         x_ang, i_ang = get_unique_bond_angles(ang_type)
     else:
         x_ang = None

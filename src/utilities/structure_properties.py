@@ -1,5 +1,5 @@
 import numpy as np
-import torch as torch
+import torch
 
 def get_bnd_angs(atoms, edge_index_G, edge_index_A_bnd_ang):
     """Return the bond angles (in radians) for the (angular) line graph edges.
@@ -18,7 +18,9 @@ def get_dih_angs(atoms, edge_index_G, edge_index_A_dih_ang):
 def get_unique_bonds(bonds):
     sums = []
     for bnd in bonds:
-        sums.append(torch.sum(torch.stack(bnd)).item())
+        if torch.is_tensor(bnd):
+            bnd = bnd.tolist()
+        sums.append(sum(bnd))
     unique_bonds, indices = np.unique(np.array(sums), return_inverse=True)
 
     '''
@@ -51,7 +53,9 @@ def get_unique_bond_angles(angles):
 
     sums = []
     for ang in angles:
-        sums.append(torch.sum(torch.stack(ang)).item())
+        if torch.is_tensor(ang):
+            ang = ang.tolist()
+        sums.append(sum(ang))
     unique_angles , indices = np.unique(np.array(sums), return_inverse=True)
 
     '''

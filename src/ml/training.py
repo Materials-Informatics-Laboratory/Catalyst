@@ -53,12 +53,6 @@ def train(loader,model,parameters,optimizer):
         model.to(parameters['device'])
     loss_fn = parameters['model_dict']['loss_func']
     for data in loader:
-        '''
-        TO DO:
-            Right now this entire prediction process is broken for batched graph data. preds is a series of sums of graph features, which are grouped globally
-            in the batched graph. So the output is a single scalar across the entire batched data and is being compared to data.y[0][0] which doesn't even
-            line up with the batched data (is anything data.y[0][0] should be summed over the batch, but ideally compared individually to the batched predictions.)
-        '''
         def closure():
             data.to(parameters['device'], non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
@@ -100,6 +94,7 @@ def train(loader,model,parameters,optimizer):
             loss = loss_fn(preds,y)
             nonlocal total_loss
             total_loss += loss.item()
+
             loss.backward()
             optimizer.step()
             return loss

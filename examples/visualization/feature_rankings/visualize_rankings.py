@@ -9,6 +9,8 @@ import numpy as np
 import torch
 import math
 
+from catalyst.src.utilities.physics_database import Physics_data
+
 def get_top_nperc_rankings(data):
     data = sorted(data, key=float)
     nperc = int(float(len(data))*.25)
@@ -64,7 +66,7 @@ def plot_data(data):
             sum = numbers[i] + numbers[j]
             for k in range(len(labels)):
                 if labels[k] == sum:
-                    labels[k] = [elements[i]+'-'+elements[j]]
+                    labels[k] = [str(elements[i])+'-'+str(elements[j])]
                     break
     fixed_labels.append(labels)
     ax[1].set_xticklabels(labels)
@@ -78,7 +80,7 @@ def plot_data(data):
                 sum = numbers[i] + numbers[j] + numbers[k]
                 for l in range(len(labels)):
                     if labels[l] == sum:
-                        labels[l] = [elements[i]+'-'+elements[j]+'-'+elements[k]]
+                        labels[l] = [str(elements[i])+'-'+str(elements[j])+'-'+str(elements[k])]
                         break
     fixed_labels.append(labels)
     ax[2].set_xticklabels(labels)
@@ -236,6 +238,13 @@ def get_single_statistics(ind_data,take=0):
 
     avg_data["avg_atm_features"].append([])
     avg_data["std_atm_features"].append([])
+    pdb = Physics_data()
+    elems = []
+    for i,e in enumerate(ind_data["atms"]):
+        for el in pdb.elements:
+            if el.symbol == e:
+                ind_data["atms"][i] = el.number
+                break
     for i in ind_data["atms"]:
         avg_data["avg_atm_features"][-1].append([])
         avg_data["std_atm_features"][-1].append([])
@@ -260,8 +269,9 @@ def get_single_statistics(ind_data,take=0):
                     system_index = i
                     break
             if system_index == take:
-                avg_data["avg_atm_features"][0][j].append(float(ind_data["atm_data"][counter]))
-                avg_data["std_atm_features"][0][j].append(float(ind_data["atm_data"][counter]))
+                el_counter = np.where(np.array(ind_data["atms"]) == j)
+                avg_data["avg_atm_features"][0][el_counter[0][0]].append(float(ind_data["atm_data"][counter]))
+                avg_data["std_atm_features"][0][el_counter[0][0]].append(float(ind_data["atm_data"][counter]))
             counter += 1
     bnd_counts = {v: np.where(ind_data["i_bnd_data"] == v)[0] for v in np.unique(ind_data["i_bnd_data"])}
     if ind_data["total_indices"][1].size()[0] == 0:

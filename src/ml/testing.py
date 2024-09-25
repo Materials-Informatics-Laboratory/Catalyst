@@ -90,7 +90,8 @@ def predict_non_intepretable(loader,model,parameters,ind_fn='all',PIN_MEMORY = F
         of = open(os.path.join(parameters['results_dir'], ind_fn + '_indv_pred.data'), 'w')
         of.write('#Pred_y          \n')
     preds = []
-    for data in loader:
+    for i,data in enumerate(loader):
+        print('predicting on structure ', i)
         data = data.to(parameters['device'], non_blocking=PIN_MEMORY)
         pred = model(data)
         all_sum = 0.0
@@ -111,6 +112,7 @@ def predict_intepretable(loader,model,parameters,ind_fn='all',PIN_MEMORY = False
         of.write('#Pred_y          \n')
     preds = []
     for i,data in enumerate(loader):
+        print('predicting on structure ',i)
         data = data.to(parameters['device'], non_blocking=PIN_MEMORY)
         pred = model(data)
         all_sum = 0.0
@@ -123,7 +125,7 @@ def predict_intepretable(loader,model,parameters,ind_fn='all',PIN_MEMORY = False
             angle_contrib = (pred[2].cpu() / all_sum.cpu()).flatten().numpy()
 
             i_atm, x_bnd, i_bnd, x_ang, i_ang = organize_rankings(data.cpu(), data.x_atm.cpu(), data.edge_index_G.cpu(),
-                                                                  data.edge_index_A.cpu(), parameters['elements'])
+                                                                  data.edge_index_A.cpu(), parameters['elements'],atom_mode='')
         else:
             i_atm, x_bnd, i_bnd, x_ang, i_ang = organize_rankings(data.cpu(), data.x_atm.cpu(), data.edge_index_G.cpu(),
                                                                   None, parameters['elements'])
