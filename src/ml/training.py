@@ -189,7 +189,11 @@ def run_training(rank,ml=None):
             lr_data = np.linspace(parameters['model_dict']['optimizer_params']['params_group']['lr'],
                                   parameters['model_dict']['optimizer_params']['params_group']['lr'],parameters['model_dict']['num_epochs'][1])
 
+        import time
+        epoch_times = []
         for ep in range(parameters['model_dict']['num_epochs'][1]):
+            if rank == 0:
+                start_time = time.time()
             if rank == 0:
                 print('Epoch ',ep+1,' of ',parameters['model_dict']['num_epochs'][1],  ' lr_rate: ',lr_data[ep])
                 sys.stdout.flush()
@@ -271,6 +275,11 @@ def run_training(rank,ml=None):
                 if rank == 0:
                     print('Validation and training losses satisy set tolerance...exiting training loop...')
                 break
+            if rank == 0:
+                epoch_times.append(time.time() - start_time)
+                print('epoch_time = ',time.time() - start_time,' seconds')
+        if rank == 0:
+            print('Average epoch time = ',sum(epoch_times)/float(len(epoch_times)),' seconds')
         if parameters['run_ddp']:
             ddp_destroy()
 def run_pre_training(rank,ml=None):

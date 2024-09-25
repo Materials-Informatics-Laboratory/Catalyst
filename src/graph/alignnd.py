@@ -9,9 +9,9 @@ def alignnd(atoms,cutoff,dihedral=False, store_atoms=False, use_pt=False,include
     """Converts ASE `atoms` into a PyG graph data holding the atomic graph (G) and the angular graph (A).
     The angular graph holds bond angle information, but can also calculate dihedral information upon request.
     """
+    atms = None
     if store_atoms:
         atms = atoms
-    atms = None
     data_amounts = dict(x_atm=[], x_bnd=[], x_ang=[])
     if dihedral:
         data_amounts.append(x_dih_ang=[])
