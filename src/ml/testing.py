@@ -9,16 +9,12 @@ import os
 @torch.no_grad()
 def test_intepretable(loader,model,parameters,PIN_MEMORY = False):
     model.eval()
-    loss_fn = torch.nn.MSELoss()
+    loss_fn = parameters['model_dict']['loss_func']
     total_loss = 0.0
     for i,data in enumerate(loader):
         print('Testing on data point ',i)
         data = data.to(parameters['device'], non_blocking=PIN_MEMORY)
         pred = model(data)
-
-        all_sum = 0.0
-        for p in pred:
-            all_sum += p.sum()
 
         atom_contrib = (pred[0].cpu() / all_sum.cpu()).flatten().numpy()
         bond_contrib = (pred[1].cpu() / all_sum.cpu()).flatten().numpy()
@@ -63,7 +59,7 @@ def test_intepretable(loader,model,parameters,PIN_MEMORY = False):
 @torch.no_grad()
 def test_non_intepretable(loader,model,parameters,ind_fn='all',PIN_MEMORY = False):
     model.eval()
-    loss_fn = torch.nn.MSELoss()
+    loss_fn = parameters['model_dict']['loss_func']
     total_loss = 0.0
     if parameters['write_indv_pred']:
         of = open(os.path.join(parameters['results_dir'],ind_fn + '_indv_pred.data'),'w')
@@ -71,10 +67,54 @@ def test_non_intepretable(loader,model,parameters,ind_fn='all',PIN_MEMORY = Fals
     for data in loader:
         data = data.to(parameters['device'], non_blocking=PIN_MEMORY)
         pred = model(data)
-        all_sum = 0.0
-        for p in pred:
-            all_sum += p.sum()
-        loss = loss_fn(all_sum, data.y[0])
+
+        if parameters['model_dict']['accumulate_loss'] == 'exact':
+            if hasattr(data, 'x_atm_batch'):
+                d = pred[0].flatten()
+                x = torch.unique(data['x_atm_batch'])
+                sorted_atms = [None] * len(x)
+                dd = data['x_atm_batch']
+                for i, xx in enumerate(x):
+                    xw = torch.where(dd == xx)
+                    sorted_atms[i] = d[xw]
+                d = pred[1].flatten()
+                x = torch.unique(data['x_bnd_batch'])
+                sorted_bnds = [None] * len(x)
+                dd = data['x_bnd_batch']
+                for i, xx in enumerate(x):
+                    xw = torch.where(dd == xx)
+                    sorted_bnds[i] = d[xw]
+                if hasattr(data, 'x_ang_batch'):
+                    d = pred[2].flatten()
+                    x = torch.unique(data['x_ang_batch'])
+                    sorted_angs = [None] * len(x)
+                    dd = data['x_ang_batch']
+                    for i, xx in enumerate(x):
+                        xw = torch.where(dd == xx)
+                        sorted_angs[i] = d[xw]
+
+                preds = []
+                for i in range(len(sorted_atms)):
+                    if hasattr(data, 'x_ang_batch'):
+                        preds.append(sorted_atms[i].sum() + sorted_angs[i].sum() + sorted_bnds[i].sum())
+                    else:
+                        preds.append(sorted_atms[i].sum() + sorted_bnds[i].sum())
+                preds = torch.stack(preds)
+
+                y = data.y.flatten()
+            else:
+                '''
+                Implement generic routines here for non alignn systems
+                '''
+                pass
+        elif parameters['model_dict']['accumulate_loss'] == 'sum':
+            if hasattr(data, 'x_ang_batch') and hasattr(data, 'x_ang_batch'):
+                preds = pred[0].sum() + pred[1].sum() + pred[2].sum()
+            else:
+                preds = pred[0].sum() + pred[1].sum()
+            y = data.y.flatten().sum()
+
+        loss = loss_fn(preds,y)
         total_loss += loss.item()
 
         if parameters['write_indv_pred']:

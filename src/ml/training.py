@@ -59,38 +59,52 @@ def train(loader,model,parameters,optimizer):
 
             pred = model(data)
 
-            d = pred[0].flatten()
-            x = torch.unique(data['x_atm_batch'])
-            sorted_atms = [None] * len(x)
-            dd = data['x_atm_batch']
-            for i,xx in enumerate(x):
-                xw = torch.where(dd == xx)
-                sorted_atms[i] = d[xw]
-            d = pred[1].flatten()
-            x = torch.unique(data['x_bnd_batch'])
-            sorted_bnds = [None] * len(x)
-            dd = data['x_bnd_batch']
-            for i,xx in enumerate(x):
-                xw = torch.where(dd == xx)
-                sorted_bnds[i] = d[xw]
-            if hasattr(data,'x_ang_batch'):
-                d = pred[2].flatten()
-                x = torch.unique(data['x_ang_batch'])
-                sorted_angs = [None] * len(x)
-                dd = data['x_ang_batch']
-                for i,xx in enumerate(x):
-                    xw = torch.where(dd == xx)
-                    sorted_angs[i] = d[xw]
+            if parameters['model_dict']['accumulate_loss'] == 'exact':
+                if hasattr(data, 'x_atm_batch'):
+                    d = pred[0].flatten()
+                    x = torch.unique(data['x_atm_batch'])
+                    sorted_atms = [None] * len(x)
+                    dd = data['x_atm_batch']
+                    for i,xx in enumerate(x):
+                        xw = torch.where(dd == xx)
+                        sorted_atms[i] = d[xw]
+                    d = pred[1].flatten()
+                    x = torch.unique(data['x_bnd_batch'])
+                    sorted_bnds = [None] * len(x)
+                    dd = data['x_bnd_batch']
+                    for i,xx in enumerate(x):
+                        xw = torch.where(dd == xx)
+                        sorted_bnds[i] = d[xw]
+                    if hasattr(data,'x_ang_batch'):
+                        d = pred[2].flatten()
+                        x = torch.unique(data['x_ang_batch'])
+                        sorted_angs = [None] * len(x)
+                        dd = data['x_ang_batch']
+                        for i,xx in enumerate(x):
+                            xw = torch.where(dd == xx)
+                            sorted_angs[i] = d[xw]
 
-            preds = []
-            for i in range(len(sorted_atms)):
-                if hasattr(data, 'x_ang_batch'):
-                    preds.append(sorted_atms[i].sum() + sorted_angs[i].sum() + sorted_bnds[i].sum())
+                    preds = []
+                    for i in range(len(sorted_atms)):
+                        if hasattr(data, 'x_ang_batch'):
+                            preds.append(sorted_atms[i].sum() + sorted_angs[i].sum() + sorted_bnds[i].sum())
+                        else:
+                            preds.append(sorted_atms[i].sum() + sorted_bnds[i].sum())
+                    preds = torch.stack(preds)
+
+                    y = data.y.flatten()
                 else:
-                    preds.append(sorted_atms[i].sum() + sorted_bnds[i].sum())
-            preds = torch.stack(preds)
+                    '''
+                    Implement generic routines here for non alignn systems
+                    '''
+                    pass
+            elif parameters['model_dict']['accumulate_loss'] == 'sum':
+                if hasattr(data, 'x_ang_batch') and hasattr(data, 'x_ang_batch'):
+                    preds = pred[0].sum() + pred[1].sum() + pred[2].sum()
+                else:
+                    preds = pred[0].sum() + pred[1].sum()
+                y = data.y.flatten().sum()
 
-            y = data.y.flatten()
             loss = loss_fn(preds,y)
             nonlocal total_loss
             total_loss += loss.item()
@@ -99,9 +113,8 @@ def train(loader,model,parameters,optimizer):
             optimizer.step()
             return loss
         optimizer.step(closure)
-
-        if parameters['run_ddp']:
-            data.detach()
+        #if parameters['run_ddp']:
+        #    data.detach()
     return total_loss/(len(loader)*parameters['world_size'])
 
 def run_training(rank,ml=None):
@@ -157,7 +170,8 @@ def run_training(rank,ml=None):
                                       follow_batch=follow_batch,
                                       sampler=DistributedSampler(data['training'],
                                                                  shuffle=False),num_workers=parameters['loader_dict']['num_workers'])
-            loader_valid = DataLoader(data['validation'], batch_size=1,pin_memory=parameters['pin_memory'],
+            loader_valid = DataLoader(data['validation'], follow_batch=follow_batch,batch_size=int(
+                        parameters['loader_dict']['batch_size'][2] / parameters['world_size']),pin_memory=parameters['pin_memory'],
                                       shuffle=False, sampler=DistributedSampler(data['validation']),num_workers=parameters['loader_dict']['num_workers'])
         else:
             loader_train = DataLoader(data['training'], pin_memory=parameters['pin_memory'],
@@ -166,8 +180,9 @@ def run_training(rank,ml=None):
                                       follow_batch=follow_batch,
                                       num_workers=parameters['loader_dict']['num_workers'])
 
-            loader_valid = DataLoader(data['validation'],pin_memory=parameters['pin_memory'],
-                                      batch_size=1, shuffle=False,num_workers=parameters['loader_dict']['num_workers'])
+            loader_valid = DataLoader(data['validation'],follow_batch=follow_batch,pin_memory=parameters['pin_memory'],
+                                      batch_size=int(
+                        parameters['loader_dict']['batch_size'][2] / parameters['world_size']), shuffle=False,num_workers=parameters['loader_dict']['num_workers'])
         L_train, L_valid = [], []
         min_loss_train = 1.0E30
         min_loss_valid = 1.0E30
@@ -253,6 +268,9 @@ def run_training(rank,ml=None):
             loss_valid = test_non_intepretable(loader_valid, model, parameters)
             L_valid.append(loss_valid)
             if rank == 0:
+                epoch_times.append(time.time() - start_time)
+                print('epoch_time = ',time.time() - start_time,' seconds')
+            if rank == 0:
                 stats_file = open(os.path.join(parameters['model_save_dir'], 'loss.data'), 'a')
                 stats_file.write(str(loss_train) + '     ' + str(loss_valid) + '\n')
                 stats_file.close()
@@ -275,11 +293,9 @@ def run_training(rank,ml=None):
                 if rank == 0:
                     print('Validation and training losses satisy set tolerance...exiting training loop...')
                 break
-            if rank == 0:
-                epoch_times.append(time.time() - start_time)
-                print('epoch_time = ',time.time() - start_time,' seconds')
+
         if rank == 0:
-            print('Average epoch time = ',sum(epoch_times)/float(len(epoch_times)),' seconds')
+            print('Average epoch time = ',sum(epoch_times[1:])/float(len(epoch_times)-1),' seconds')
         if parameters['run_ddp']:
             ddp_destroy()
 def run_pre_training(rank,ml=None):

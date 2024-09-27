@@ -86,16 +86,17 @@ if __name__ == "__main__":
                          results_dir=None,
                          loader_dict = dict(
                              shuffle_loader=False,
-                             batch_size=[10, 20],
+                             batch_size=[10, 4000,1000],
                              num_workers=0
                          ),
                          model_dict = dict(
                              n_models=1,
-                             num_epochs=[10, 100],
-                             train_tolerance=1e-5,
+                             num_epochs=[10, 10],
+                             train_tolerance=1e-3,
+                             accumulate_loss='exact',
                              loss_func=torch.nn.MSELoss(),
                              model = ALIGNN(
-                                    encoder=Encoder(num_species=119,cutoff=4.0,dim=10,act_func=nn.SiLU()),
+                                    encoder=Encoder(num_species=1,cutoff=4.0,dim=10,act_func=nn.SiLU()),
                                     processor=Processor(num_convs=5, dim=10,conv_type='mesh'),
                                     decoder=PositiveScalarsDecoder(dim=10),
                             ),
@@ -105,7 +106,7 @@ if __name__ == "__main__":
                                  dist_type='exp',
                                  optimizer = 'AdamW',
                                  params_group = {
-                                     'lr':0.001
+                                     'lr':0.0001
                                  }
                              )
                          )
