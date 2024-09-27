@@ -139,9 +139,8 @@ def run_training(rank,ml=None):
         data = dict(training=partitioned_data.item().get('training'),
                        validation=partitioned_data.item().get('validation'))
 
-
-        #for i in range(len(data['training'])):
-        #    data['training'][i]['y'] = data['training'][i]['y'][0][0]
+        if rank == 0:
+            print('Training using ',len(data['training']), ' training points and ',len(data['validation']),' validation points...')
 
         if parameters['run_ddp']:
             ddp_setup(rank,parameters['world_size'],parameters['ddp_backend'])
@@ -206,11 +205,12 @@ def run_training(rank,ml=None):
 
         import time
         epoch_times = []
+        running_valid_delta = []
         for ep in range(parameters['model_dict']['num_epochs'][1]):
             if rank == 0:
                 start_time = time.time()
             if rank == 0:
-                print('Epoch ',ep+1,' of ',parameters['model_dict']['num_epochs'][1],  ' lr_rate: ',lr_data[ep])
+                print('Epoch ',ep+1,' of ',parameters['model_dict']['num_epochs'][1],  ' lr_rate: ',lr_data[ep], 'loss_accum: ',parameters['model_dict']['accumulate_loss'])
                 sys.stdout.flush()
 
             if parameters['loader_dict']['shuffle_loader'] == True: #reshuffle training data to avoid overfitting
@@ -264,16 +264,24 @@ def run_training(rank,ml=None):
             optimizer_to(optimizer,parameters['device'])
 
             loss_train = train(loader_train, model, parameters, optimizer);
-            L_train.append(loss_train)
             loss_valid = test_non_intepretable(loader_valid, model, parameters)
-            L_valid.append(loss_valid)
+
             if rank == 0:
                 epoch_times.append(time.time() - start_time)
-                print('epoch_time = ',time.time() - start_time,' seconds')
-            if rank == 0:
+                print('epoch_time = ', time.time() - start_time, ' seconds Average epoch time = ', sum(epoch_times) / float(len(epoch_times)), ' seconds')
+                print('Train loss = ',loss_train,' Validation loss = ',loss_valid)
+                if ep > 0:
+                    delta_val = loss_valid - L_valid[-1]
+                    running_valid_delta.append(abs(delta_val))
+                    if len(running_valid_delta) > 5:
+                        running_valid_delta.pop(0)
+                    print('Running validation delta = ',sum(running_valid_delta)/len(running_valid_delta))
                 stats_file = open(os.path.join(parameters['model_save_dir'], 'loss.data'), 'a')
                 stats_file.write(str(loss_train) + '     ' + str(loss_valid) + '\n')
                 stats_file.close()
+            L_train.append(loss_train)
+            L_valid.append(loss_valid)
+
             if loss_train < min_loss_train:
                 min_loss_train = loss_train
                 if loss_valid < min_loss_valid:
@@ -283,19 +291,19 @@ def run_training(rank,ml=None):
                         if len(model_name) > 0 and rank == 0:
                             os.remove(model_name[0])
                     if rank == 0:
+                        print('Saving model...')
                         now = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-                        print('Min train loss: ', min_loss_train, ' min valid loss: ', min_loss_valid)
                         if parameters['run_ddp']:
                             torch.save(model.module.state_dict(), os.path.join(parameters['model_save_dir'], 'model_' + str(now)+'_ep-'+str(ep)))
                         else:
-                            torch.save(model.state_dict(), os.path.join(parameters['model_save_dir'], 'model_' + str(now)))
-            if loss_valid < parameters['model_dict']['train_tolerance']:
-                if rank == 0:
-                    print('Validation and training losses satisy set tolerance...exiting training loop...')
-                break
-
-        if rank == 0:
-            print('Average epoch time = ',sum(epoch_times[1:])/float(len(epoch_times)-1),' seconds')
+                            torch.save(model.state_dict(), os.path.join(parameters['model_save_dir'], 'model_' + str(now)+'_ep-'+str(ep)))
+            if len(running_valid_delta) > 3:
+                if sum(running_valid_delta)/len(running_valid_delta)< parameters['model_dict']['train_tolerance']:
+                    if rank == 0:
+                        if parameters['run_ddp']:
+                            ddp_destroy()
+                        print('Validation delta satisfies set tolerance...exiting training loop...')
+                    break
         if parameters['run_ddp']:
             ddp_destroy()
 def run_pre_training(rank,ml=None):

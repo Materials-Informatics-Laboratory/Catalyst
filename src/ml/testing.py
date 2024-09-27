@@ -121,7 +121,7 @@ def test_non_intepretable(loader,model,parameters,ind_fn='all',PIN_MEMORY = Fals
             of.write(str(data.y.item()) + '          ' + str(all_sum.item()) + '\n')
     if parameters['write_indv_pred']:
         of.close()
-    return total_loss / len(loader)
+    return total_loss/(len(loader)*parameters['world_size'])
 
 @torch.no_grad()
 def predict_non_intepretable(loader,model,parameters,ind_fn='all',PIN_MEMORY = False):
