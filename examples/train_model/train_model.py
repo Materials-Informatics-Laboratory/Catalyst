@@ -27,37 +27,6 @@ def ddp_destroy():
         device.reset()
         cuda.close()
 
-def main(ml_parameters):
-    # initialize ML class
-    ml = ML()
-    ml.set_params(ml_parameters)
-    
-    # create model directories
-    if ml_parameters['restart_training']:
-        ml.parameters['model_dir'] = os.path.join(ml_parameters['main_path'], 'models_restart')
-    else:
-        ml.parameters['model_dir'] = os.path.join(ml_parameters['main_path'], 'models')
-    if os.path.isdir(ml.parameters['model_dir']):
-        shutil.rmtree(ml.parameters['model_dir'])
-    os.mkdir(ml.parameters['model_dir'])
-
-    # run pretraining  
-    if ml.parameters['run_pretrain']:
-        print('Performing pretraining...')
-
-        if ml.parameters['run_ddp']:
-            mp.spawn(run_pre_training, args=(ml,), nprocs=ml_parameters['world_size'], join=True)
-            ddp_destroy()
-        else:
-            run_pre_training(rank=0, ml=ml)
-
-    if ml.parameters['run_ddp']:
-        mp.spawn(run_training, args=(ml,), nprocs=ml.parameters['world_size'],
-                join=True)
-        ddp_destroy()
-    else:
-        run_training(rank=0,ml=ml)
-        
 if __name__ == "__main__":
     import time
     start_time = time.time()
@@ -69,8 +38,8 @@ if __name__ == "__main__":
                          sampling_seed=12345,
                          remove_old_model=False,
                          interpretable=False,
-                         pre_training=False,
-                         run_pretrain=False,
+                         pre_training=True,
+                         run_pretrain=True,
                          write_indv_pred=False,
                          restart_training=False,
                          run_ddp = True,
@@ -86,14 +55,14 @@ if __name__ == "__main__":
                          results_dir=None,
                          loader_dict = dict(
                              shuffle_loader=False,
-                             batch_size=[10, 4000,1000],
-                             num_workers=0
+                             batch_size=[10,1000,1000],
+                             num_workers=1
                          ),
                          model_dict = dict(
                              n_models=1,
-                             num_epochs=[10, 10],
-                             train_tolerance=1e-3,
-                             accumulate_loss='exact',
+                             num_epochs=[100,100],
+                             train_tolerance=100000000.0,
+                             accumulate_loss=['sum','exact','exact'],
                              loss_func=torch.nn.MSELoss(),
                              model = ALIGNN(
                                     encoder=Encoder(num_species=1,cutoff=4.0,dim=10,act_func=nn.SiLU()),
@@ -106,14 +75,59 @@ if __name__ == "__main__":
                                  dist_type='exp',
                                  optimizer = 'AdamW',
                                  params_group = {
-                                     'lr':0.0001
+                                     'lr':0.01
                                  }
                              )
                          )
                     )
 
-    #tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-    main(ml_parameters)
+    ml = ML()
+    ml.set_params(ml_parameters)
+
+    # create model directories
+    if ml_parameters['restart_training']:
+        ml.parameters['model_dir'] = os.path.join(ml_parameters['main_path'], 'models_restart')
+    else:
+        ml.parameters['model_dir'] = os.path.join(ml_parameters['main_path'], 'models')
+    if os.path.isdir(ml.parameters['model_dir']):
+        shutil.rmtree(ml.parameters['model_dir'])
+    os.mkdir(ml.parameters['model_dir'])
+
+    # run pretraining
+    if ml.parameters['run_pretrain']:
+        print('Performing pretraining...')
+
+        if ml.parameters['run_ddp']:
+            # mp.spawn(run_pre_training, args=(ml,), nprocs=ml_parameters['world_size'], join=True)
+            ml.set_model()
+            ml.model.share_memory()
+            processes = []
+            for rank in range(ml.parameters['world_size']):
+                p = mp.Process(target=run_pre_training, args=(rank, ml,))
+                p.start()
+                processes.append(p)
+            for p in processes:
+                p.join()
+            ddp_destroy()
+        else:
+            run_pre_training(rank=0, ml=ml)
+
+    if ml.parameters['run_ddp']:
+        print('Performing training...')
+        ml.set_model()
+        ml.model.share_memory()
+        processes = []
+        for rank in range(ml.parameters['world_size']):
+            p = mp.Process(target=run_training, args=(rank, ml,))
+            p.start()
+            processes.append(p)
+        for p in processes:
+            p.join()
+        #ddp_destroy()
+        #mp.spawn(run_training, args=(ml,), nprocs=ml.parameters['world_size'], join=True)
+        ddp_destroy()
+    else:
+        run_training(rank=0, ml=ml)
 
     print("--- %s seconds ---" % (time.time() - start_time))
 

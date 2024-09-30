@@ -68,7 +68,7 @@ def test_non_intepretable(loader,model,parameters,ind_fn='all',PIN_MEMORY = Fals
         data = data.to(parameters['device'], non_blocking=PIN_MEMORY)
         pred = model(data)
 
-        if parameters['model_dict']['accumulate_loss'] == 'exact':
+        if parameters['model_dict']['accumulate_loss'][2] == 'exact':
             if hasattr(data, 'x_atm_batch'):
                 d = pred[0].flatten()
                 x = torch.unique(data['x_atm_batch'])
@@ -107,7 +107,7 @@ def test_non_intepretable(loader,model,parameters,ind_fn='all',PIN_MEMORY = Fals
                 Implement generic routines here for non alignn systems
                 '''
                 pass
-        elif parameters['model_dict']['accumulate_loss'] == 'sum':
+        elif parameters['model_dict']['accumulate_loss'][2] == 'sum':
             if hasattr(data, 'x_ang_batch') and hasattr(data, 'x_ang_batch'):
                 preds = pred[0].sum() + pred[1].sum() + pred[2].sum()
             else:

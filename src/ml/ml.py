@@ -80,15 +80,18 @@ class ML():
         self.model = self.parameters['model_dict']['model']
 
     def set_params(self,new_params,save_params=True):
-        check = False
+        check = [0,0,0]
         if 'accumulate_loss' in new_params['model_dict']:
-            for option in self.accumulate_loss_options:
-                if option == new_params['model_dict']['accumulate_loss']:
-                    check = True
-                    break
-        if check == False:
-            print('WARNING: Loss accumulation type not set...setting to exact')
-            new_params['model_dict']['accumulate_loss'] = 'exact'
+            for i,curr_option in enumerate(new_params['model_dict']['accumulate_loss']):
+                for option in self.accumulate_loss_options:
+                    if option == curr_option:
+                        check[i] = 1
+                        break
+        if sum(check) < 3:
+            for i, curr_option in enumerate(new_params['model_dict']['accumulate_loss']):
+                if check[i] == 0:
+                    print('WARNING: Loss accumulation at element ',i,' has bad option...setting to exact')
+                new_params['model_dict']['accumulate_loss'][i] = 'exact'
         check = False
         if 'device' in new_params:
             for option in self.device_options:
