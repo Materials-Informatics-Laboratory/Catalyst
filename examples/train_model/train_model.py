@@ -98,21 +98,22 @@ if __name__ == "__main__":
                          pretrain_dir=os.path.join(path, 'pre_training'),
                          results_dir=None,
                          loader_dict = dict(
-                             shuffle_loader=False,
-                             batch_size=[10,1000,1000],
-                             num_workers=0
+                             shuffle_loader=True,
+                             batch_size=[10,100,100],
+                             num_workers=0,
+                             shuffle_steps=10
                          ),
                          model_dict = dict(
-                             n_models=2,
-                             num_epochs=[100,100],
-                             train_tolerance=0.01,
-                             max_deltas=5,
+                             n_models=1,
+                             num_epochs=[100,1000],
+                             train_tolerance=0.0001, # should probably make this a list for [pretrain,train]
+                             max_deltas=10,
                              accumulate_loss=['sum','exact','exact'],
                              loss_func=torch.nn.MSELoss(),
                              model = ALIGNN(
-                                    encoder=Encoder(num_species=1,cutoff=4.0,dim=10,act_func=nn.SiLU()),
-                                    processor=Processor(num_convs=5, dim=10,conv_type='mesh'),
-                                    decoder=PositiveScalarsDecoder(dim=10),
+                                    encoder=Encoder(num_species=1,cutoff=4.0,dim=50,act_func=nn.SiLU()),
+                                    processor=Processor(num_convs=5, dim=50,conv_type='mesh'),
+                                    decoder=PositiveScalarsDecoder(dim=50),
                             ),
                              optimizer_params=dict(
                                  lr_scale=[1.0, 0.05],
@@ -120,7 +121,7 @@ if __name__ == "__main__":
                                  dist_type='exp',
                                  optimizer = 'AdamW',
                                  params_group = {
-                                     'lr':0.01
+                                     'lr':0.0001
                                  }
                              )
                          )

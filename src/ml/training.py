@@ -228,18 +228,24 @@ def run_training(rank,iteration,ml=None):
             sys.stdout.flush()
 
         if parameters['loader_dict']['shuffle_loader'] == True: #reshuffle training data to avoid overfitting
-            if rank == 0:
-                print('Shuffling training data...')
-            if parameters['run_ddp']:
-                if ep > 0:
+            if ep % parameters['loader_dict']['shuffle_steps'] == 0 and ep > 0:
+                if rank == 0:
+                    print('Shuffling training data...')
+                if parameters['run_ddp']:
                     loader_train.sampler.set_epoch(ep)
                     loader_valid.sampler.set_epoch(ep)
-                loader_train = DataLoader(data['training'], batch_size=int(
-                        parameters['loader_dict']['batch_size'][1] / parameters['world_size']),
-                                              pin_memory=parameters['pin_memory'],
+                    loader_train = DataLoader(data['training'], batch_size=int(
+                            parameters['loader_dict']['batch_size'][1] / parameters['world_size']),
+                                                  pin_memory=parameters['pin_memory'],
+                                                  follow_batch=follow_batch,
+                                                  sampler=DistributedSampler(data['training'],shuffle=parameters['loader_dict']['shuffle_loader'],
+                                                                             seed=random.randint(-sys.maxsize - 1, sys.maxsize)),
+                                                  num_workers=parameters['loader_dict']['num_workers'])
+                else:
+                    loader_train = DataLoader(data['training'], pin_memory=parameters['pin_memory'],
+                                              batch_size=parameters['loader_dict']['batch_size'][1],
+                                              shuffle=parameters['loader_dict']['shuffle_loader'],
                                               follow_batch=follow_batch,
-                                              sampler=DistributedSampler(data['training'],shuffle=parameters['loader_dict']['shuffle_loader'],
-                                                                         seed=random.randint(-sys.maxsize - 1, sys.maxsize)),
                                               num_workers=parameters['loader_dict']['num_workers'])
 
         parameters['model_dict']['optimizer_params']['params_group']['lr'] = lr_data[ep]
@@ -345,7 +351,7 @@ def run_pre_training(rank,ml=None):
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
         model = DDP(model, device_ids=[rank],find_unused_parameters=True)
 
-    follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm']
+    follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm'] # need to rework this
     if parameters['run_ddp']:
         loader_train = DataLoader(data['training'], batch_size=parameters['loader_dict']['batch_size'][0],
                                   pin_memory=parameters['pin_memory'],
@@ -379,18 +385,23 @@ def run_pre_training(rank,ml=None):
             print('Epoch ', ep+1, ' of ', parameters['model_dict']['num_epochs'][0], ' lr_rate: ',lr_data[ep])
             sys.stdout.flush()
 
-        if parameters['loader_dict']['shuffle_loader'] == True:  # reshuffle training data to avoid overfitting
-            if rank == 0:
-                print('Shuffling training data...')
-            if parameters['run_ddp']:
-                if ep > 0:
+        if parameters['loader_dict']['shuffle_loader'] == True and ep > 0:  # reshuffle training data to avoid overfitting
+            if ep % parameters['loader_dict']['shuffle_steps'] == 0:
+                if rank == 0:
+                    print('Shuffling training data...')
+                if parameters['run_ddp']:
                     loader_train.sampler.set_epoch(ep)
-                loader_train = DataLoader(data['training'], batch_size=int(
-                    parameters['loader_dict']['batch_size'][0] / parameters['world_size']),
-                                          pin_memory=parameters['pin_memory'],follow_batch=follow_batch,
-                                          sampler=DistributedSampler(data['training'],shuffle=parameters['loader_dict']['shuffle_loader'],
-                                          seed=random.randint(-sys.maxsize - 1,sys.maxsize)),
-                                          num_workers=parameters['loader_dict']['num_workers'])
+                    loader_train = DataLoader(data['training'], batch_size=int(
+                        parameters['loader_dict']['batch_size'][0] / parameters['world_size']),
+                                              pin_memory=parameters['pin_memory'],follow_batch=follow_batch,
+                                              sampler=DistributedSampler(data['training'],shuffle=parameters['loader_dict']['shuffle_loader'],
+                                              seed=random.randint(-sys.maxsize - 1,sys.maxsize)),
+                                              num_workers=parameters['loader_dict']['num_workers'])
+                else:
+                    loader_train = DataLoader(data['training'], pin_memory=parameters['pin_memory'],
+                                              batch_size=parameters['loader_dict']['batch_size'][0], shuffle=parameters['loader_dict']['shuffle_loader'],
+                                              follow_batch=follow_batch)
+
 
         parameters['model_dict']['optimizer_params']['params_group']['lr'] = lr_data[ep]
         if parameters['run_ddp']:

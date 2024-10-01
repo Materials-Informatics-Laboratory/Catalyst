@@ -141,6 +141,9 @@ class ML():
         if not 'max_deltas' in new_params['model_dict']:
             print('WARNGING: max_deltas not set...setting to 3')
             new_params['model_dict']['max_deltas'] = 3
+        if not 'shuffle_steps' in new_params['loader_dict']:
+            print('WARNGING: shuffle_Steps not set...setting to 10')
+            new_params['loader_dict']['shuffle_steps'] = 10
         if not 'n_models' in new_params['model_dict']:
             print('WARNGING: n_models not set...setting to 1')
             new_params['model_dict']['num_models'] = 1
