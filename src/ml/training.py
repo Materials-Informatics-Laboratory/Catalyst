@@ -49,6 +49,14 @@ def ddp_destroy():
     dist.barrier()
     destroy_process_group()
 
+def reduce_tensor(tensor):
+    rt = tensor.clone().detach()
+    dist.all_reduce(rt, op=dist.ReduceOp.SUM)
+    rt /= (
+        torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
+    )
+    return rt
+
 def train(loader,model,parameters,optimizer,pretrain=False):
     model.train()
 
@@ -123,9 +131,9 @@ def train(loader,model,parameters,optimizer,pretrain=False):
             optimizer.step()
             return loss
         optimizer.step(closure)
-        #if parameters['run_ddp']:
-        #    data.detach()
-    return total_loss/(len(loader)*parameters['world_size'])
+    total_loss = reduce_tensor(torch.tensor(total_loss).to(parameters['device']))
+    total_loss = total_loss.item()
+    return total_loss
 
 def run_training(rank,ml=None):
 
@@ -214,10 +222,11 @@ def run_training(rank,ml=None):
         L_train, L_valid = [], []
         min_loss_train = 1.0E30
         min_loss_valid = 1.0E30
-        for ep in range(parameters['model_dict']['num_epochs'][1]):
+        ep = 0
+        while ep < parameters['model_dict']['num_epochs'][1]:
             if rank == 0:
                 start_time = time.time()
-                print('Epoch ',ep+1,' of ',parameters['model_dict']['num_epochs'][1],  ' lr_rate: ',lr_data[ep], 'loss_accum: ',parameters['model_dict']['accumulate_loss'])
+                print('Epoch ',ep+1,' of ',parameters['model_dict']['num_epochs'][1],  ' lr_rate: ',lr_data[ep], 'loss_accum: ',parameters['model_dict']['accumulate_loss'][1])
                 sys.stdout.flush()
 
             if parameters['loader_dict']['shuffle_loader'] == True: #reshuffle training data to avoid overfitting
@@ -307,10 +316,9 @@ def run_training(rank,ml=None):
             if len(running_valid_delta) > 2:
                 if sum(running_valid_delta)/len(running_valid_delta)< parameters['model_dict']['train_tolerance']:
                     if rank == 0:
-                        if parameters['run_ddp']:
-                            ddp_destroy()
                         print('Validation delta satisfies set tolerance...exiting training loop...')
-                    break
+                    ep = parameters['model_dict']['num_epochs'][1]
+            ep += 1
         if parameters['run_ddp']:
             ddp_destroy()
 
@@ -458,8 +466,6 @@ def run_pre_training(rank,ml=None):
                 ep = parameters['model_dict']['num_epochs'][0]
         ep += 1
     if parameters['run_ddp']:
-        gc.collect()
-        torch.cuda.empty_cache()
         destroy_process_group()
 
 

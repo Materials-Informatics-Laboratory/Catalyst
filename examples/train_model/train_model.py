@@ -27,60 +27,7 @@ def ddp_destroy():
         device.reset()
         cuda.close()
 
-if __name__ == "__main__":
-    import time
-    start_time = time.time()
-
-    # setup parameters
-    path = str(Path(__file__).parent)
-    ml_parameters = dict(
-                         world_size = torch.cuda.device_count(),
-                         sampling_seed=12345,
-                         remove_old_model=False,
-                         interpretable=False,
-                         pre_training=True,
-                         run_pretrain=True,
-                         write_indv_pred=False,
-                         restart_training=False,
-                         run_ddp = True,
-                         pin_memory=False,
-                         main_path=path,
-                         ddp_backend='gloo',
-                         device='cuda',
-                         restart_model_name=None,
-                         graph_data_dir=os.path.join(path, 'data'),
-                         model_dir=None,
-                         model_save_dir=None,
-                         pretrain_dir=os.path.join(path, 'pre_training'),
-                         results_dir=None,
-                         loader_dict = dict(
-                             shuffle_loader=False,
-                             batch_size=[10,1000,1000],
-                             num_workers=1
-                         ),
-                         model_dict = dict(
-                             n_models=1,
-                             num_epochs=[100,100],
-                             train_tolerance=100000000.0,
-                             accumulate_loss=['sum','exact','exact'],
-                             loss_func=torch.nn.MSELoss(),
-                             model = ALIGNN(
-                                    encoder=Encoder(num_species=1,cutoff=4.0,dim=10,act_func=nn.SiLU()),
-                                    processor=Processor(num_convs=5, dim=10,conv_type='mesh'),
-                                    decoder=PositiveScalarsDecoder(dim=10),
-                            ),
-                             optimizer_params=dict(
-                                 lr_scale=[1.0, 0.05],
-                                 dynamic_lr=False,
-                                 dist_type='exp',
-                                 optimizer = 'AdamW',
-                                 params_group = {
-                                     'lr':0.01
-                                 }
-                             )
-                         )
-                    )
-
+def main(ml_parameters):
     ml = ML()
     ml.set_params(ml_parameters)
 
@@ -123,11 +70,67 @@ if __name__ == "__main__":
             processes.append(p)
         for p in processes:
             p.join()
-        #ddp_destroy()
-        #mp.spawn(run_training, args=(ml,), nprocs=ml.parameters['world_size'], join=True)
+        # ddp_destroy()
+        # mp.spawn(run_training, args=(ml,), nprocs=ml.parameters['world_size'], join=True)
         ddp_destroy()
     else:
         run_training(rank=0, ml=ml)
+
+if __name__ == "__main__":
+    import time
+    start_time = time.time()
+
+    # setup parameters
+    path = str(Path(__file__).parent)
+    ml_parameters = dict(
+                         world_size = torch.cuda.device_count(),
+                         sampling_seed=12345,
+                         remove_old_model=False,
+                         interpretable=False,
+                         pre_training=True,
+                         run_pretrain=True,
+                         write_indv_pred=False,
+                         restart_training=False,
+                         run_ddp = True,
+                         pin_memory=False,
+                         main_path=path,
+                         ddp_backend='gloo',
+                         device='cuda',
+                         restart_model_name=None,
+                         graph_data_dir=os.path.join(path, 'data'),
+                         model_dir=None,
+                         model_save_dir=None,
+                         pretrain_dir=os.path.join(path, 'pre_training'),
+                         results_dir=None,
+                         loader_dict = dict(
+                             shuffle_loader=False,
+                             batch_size=[10,1000,1000],
+                             num_workers=0
+                         ),
+                         model_dict = dict(
+                             n_models=2,
+                             num_epochs=[100,100],
+                             train_tolerance=100000000.0,
+                             accumulate_loss=['sum','exact','exact'],
+                             loss_func=torch.nn.MSELoss(),
+                             model = ALIGNN(
+                                    encoder=Encoder(num_species=1,cutoff=4.0,dim=10,act_func=nn.SiLU()),
+                                    processor=Processor(num_convs=5, dim=10,conv_type='mesh'),
+                                    decoder=PositiveScalarsDecoder(dim=10),
+                            ),
+                             optimizer_params=dict(
+                                 lr_scale=[1.0, 0.05],
+                                 dynamic_lr=False,
+                                 dist_type='exp',
+                                 optimizer = 'AdamW',
+                                 params_group = {
+                                     'lr':0.01
+                                 }
+                             )
+                         )
+                    )
+
+    main(ml_parameters)
 
     print("--- %s seconds ---" % (time.time() - start_time))
 
