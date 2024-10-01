@@ -2,6 +2,7 @@ from torch import nn
 import numpy as np
 import torch
 import os
+import gc
 
 class ML():
     def __init__(self):
@@ -76,6 +77,8 @@ class ML():
 
     def set_model(self):
         del self.model
+        gc.collect()
+        torch.cuda.empty_cache()
         self.model = None
         self.model = self.parameters['model_dict']['model']
 
@@ -135,6 +138,9 @@ class ML():
         if not 'train_tolerance' in new_params['model_dict']:
             print('WARNGING: training tolerance not set...setting to 1e-3')
             new_params['model_dict']['train_tolerance'] = 1e-3
+        if not 'max_deltas' in new_params['model_dict']:
+            print('WARNGING: max_deltas not set...setting to 3')
+            new_params['model_dict']['max_deltas'] = 3
         if not 'n_models' in new_params['model_dict']:
             print('WARNGING: n_models not set...setting to 1')
             new_params['model_dict']['num_models'] = 1

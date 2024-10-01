@@ -1,11 +1,11 @@
 from pathlib import Path
 import shutil
+import time
 import os
 import gc
 
-from numba import cuda
-
 import torch.multiprocessing as mp
+from numba import cuda
 import torch as torch
 from torch import nn
 
@@ -45,7 +45,6 @@ def main(ml_parameters):
         print('Performing pretraining...')
 
         if ml.parameters['run_ddp']:
-            # mp.spawn(run_pre_training, args=(ml,), nprocs=ml_parameters['world_size'], join=True)
             ml.set_model()
             ml.model.share_memory()
             processes = []
@@ -59,25 +58,21 @@ def main(ml_parameters):
         else:
             run_pre_training(rank=0, ml=ml)
 
-    if ml.parameters['run_ddp']:
-        print('Performing training...')
-        ml.set_model()
-        ml.model.share_memory()
-        processes = []
-        for rank in range(ml.parameters['world_size']):
-            p = mp.Process(target=run_training, args=(rank, ml,))
-            p.start()
-            processes.append(p)
-        for p in processes:
-            p.join()
-        # ddp_destroy()
-        # mp.spawn(run_training, args=(ml,), nprocs=ml.parameters['world_size'], join=True)
-        ddp_destroy()
-    else:
-        run_training(rank=0, ml=ml)
+    for iteration in range(ml.parameters['model_dict']['n_models']):
+        if ml.parameters['run_ddp']:
+            print('Performing training on model ',iteration)
+            processes = []
+            for rank in range(ml.parameters['world_size']):
+                p = mp.Process(target=run_training, args=(rank, iteration,ml,))
+                p.start()
+                processes.append(p)
+            for p in processes:
+                p.join()
+            ddp_destroy()
+        else:
+            run_training(rank=0, ml=ml)
 
 if __name__ == "__main__":
-    import time
     start_time = time.time()
 
     # setup parameters
@@ -110,7 +105,8 @@ if __name__ == "__main__":
                          model_dict = dict(
                              n_models=2,
                              num_epochs=[100,100],
-                             train_tolerance=100000000.0,
+                             train_tolerance=0.01,
+                             max_deltas=5,
                              accumulate_loss=['sum','exact','exact'],
                              loss_func=torch.nn.MSELoss(),
                              model = ALIGNN(
