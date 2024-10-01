@@ -1,7 +1,7 @@
 <!-- badges: start -->
 <!-- WARNING: -->
 <!-- The ?branch=release-x.y.y is updated automatically by the initiate_version_release workflow -->
-
+![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 <!-- badges: end -->
 
 ![Screenshot](https://github.com/Materials-Informatics-Laboratory/Catalyst/blob/main/visuals/catalyst.jpg?raw=true)
