@@ -1,11 +1,7 @@
 <!-- badges: start -->
 <!-- WARNING: -->
 <!-- The ?branch=release-x.y.y is updated automatically by the initiate_version_release workflow -->
-[![Codecov](https://img.shields.io/codecov/c/github/furrer-lab/abn)](https://app.codecov.io/gh/Materials-Informatics-Laboratory/Catalyst)
-[![GitHub R package version](https://img.shields.io/github/r-package/v/Materials-Informatics-Laboratory/Catalyst)](https://github.com/Materials-Informatics-Laboratory/Catalyst/tags)
-![cran](https://www.r-pkg.org/badges/version-ago/Catalyst) 
-![downloads](https://cranlogs.r-pkg.org/badges/grand-total/Catalyst) 
-![LICENCE](https://img.shields.io/cran/l/Catalyst)
+
 <!-- badges: end -->
 
 ![Screenshot](https://github.com/Materials-Informatics-Laboratory/Catalyst/blob/main/visuals/catalyst.jpg?raw=true)
