@@ -10,7 +10,7 @@ def ddp_setup(rank: int ,world_size ,backend):
     os.environ["MASTER_PORT"] = "12355"
     torch.cuda.set_device(rank)
 
-    init_process_group(backend=backend, rank=rank, world_size=world_size)
+    init_process_group(backend=backend, rank=rank, world_size=world_size,init_method="env://?use_libuv=False")
 
 def cuda_destroy():
     # collect memory via garbage collection

@@ -10,17 +10,19 @@ from torch_geometric.loader import DataLoader
 import torch as torch
 from torch import nn
 
-from catalyst.src.ml.nn.models.alignn import Encoder, Processor, Decoder, ALIGNN
+from catalyst.src.ml.nn.models.alignn import Encoder, Processor, Decoder, ALIGNN, PositiveScalarsDecoder
 import catalyst.src.utilities.sampling as sampling
 from catalyst.src.sodas.model.sodas import SODAS
 from catalyst.src.ml.ml import ML
+
+import pickle
 
 def main(ml_parameters):
     # initialize ML class and load graph data
     ml = ML()
     ml.set_params(ml_parameters)
     graph_data = []
-    take = 1
+    take = 50
     for i,graph in enumerate(glob.glob(os.path.join(ml.parameters['graph_data_dir'],'*.pt'))):
         if i % take == 0:
             graph_data.append(torch.load(graph))
@@ -50,6 +52,9 @@ def main(ml_parameters):
             projections = projected_data,
             graphs = graph_data
         )
+        #pickle.dump(stored_projections, os.path.join(ml.parameters['sodas_dict']['projection_dir'], 'saved_projection_data.data'),
+        #            protocol=4)
+        #print('saved')
         np.save(os.path.join(ml.parameters['sodas_dict']['projection_dir'], 'saved_projection_data.npy'), stored_projections)
     elif ml.parameters['sodas_projection']:
         # when loading projections, you must have saved the data in the dictionary format used in the ml.parameters['run_sodas_projection'] section
@@ -98,12 +103,12 @@ def main(ml_parameters):
         shutil.rmtree(ml.parameters['samples_dir'])
     os.mkdir(ml.parameters['samples_dir'])
 
-    np.save(os.path.join(ml.parameters['samples_dir'], 'test_data.npy'), test_data)
+    np.save(os.path.join(ml.parameters['samples_dir'], 'test_data.npy'), np.array(test_data,dtype=object),fix_imports=False)
     np.save(os.path.join(ml.parameters['samples_dir'], 'test_data_projected.npy'), projected_data_test)
-    np.save(os.path.join(ml.parameters['samples_dir'], 'remaining_data.npy'), data)
+    np.save(os.path.join(ml.parameters['samples_dir'], 'remaining_data.npy'), np.array(data,dtype=object),fix_imports=False)
     np.save(os.path.join(ml.parameters['samples_dir'], 'remaining_data_projected.npy'), projected_data)
     if ml.parameters['run_pretrain']:
-        np.save(os.path.join(ml.parameters['samples_dir'], 'pretraining_data.npy'), pretraining_data)
+        np.save(os.path.join(ml.parameters['samples_dir'], 'pretraining_data.npy'), np.array(pretraining_data,dtype=object),fix_imports=False)
         np.save(os.path.join(ml.parameters['samples_dir'], 'pretraining_data_projected.npy'), projected_data_pretrain)
 
     # loop over number of requested models
@@ -180,8 +185,36 @@ if __name__ == "__main__":
                                  ls_mod=umap_.UMAP(n_neighbors=15, min_dist=0.5, n_components=2)
                              ),
                              projection_dir=os.path.join(path, 'sodas_projection')
-                         )
+                         ),
+                         loader_dict=dict(
+                             shuffle_loader=True,
+                             batch_size=[10, 100, 100],
+                             num_workers=0,
+                             shuffle_steps=10
+                         ),
+                         model_dict=dict(
+                             n_models=1,
+                             num_epochs=[2, 2],
+                             train_tolerance=0.0001,  # should probably make this a list for [pretrain,train]
+                             max_deltas=10,
+                             accumulate_loss=['sum', 'exact', 'exact'],
+                             loss_func=torch.nn.MSELoss(),
+                             model=ALIGNN(
+                                 encoder=Encoder(num_species=1, cutoff=4.0, dim=50, act_func=nn.SiLU()),
+                                 processor=Processor(num_convs=5, dim=50, conv_type='mesh'),
+                                 decoder=PositiveScalarsDecoder(dim=50),
+                             ),
+                             optimizer_params=dict(
+                                 lr_scale=[1.0, 0.05],
+                                 dynamic_lr=False,
+                                 dist_type='exp',
+                                 optimizer='AdamW',
+                                 params_group={
+                                     'lr': 0.0001
+                                 }
+                             )
                         )
+                    )
 
     main(ml_parameters)
 
