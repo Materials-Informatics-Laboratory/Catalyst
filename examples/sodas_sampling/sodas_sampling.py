@@ -10,7 +10,7 @@ from torch_geometric.loader import DataLoader
 import torch as torch
 from torch import nn
 
-from src.ml.nn.models.alignn import Encoder, Processor, Decoder, ALIGNN
+from catalyst.src.ml.nn.models.alignn import Encoder, Processor, Decoder, ALIGNN
 import catalyst.src.utilities.sampling as sampling
 from catalyst.src.sodas.model.sodas import SODAS
 from catalyst.src.ml.ml import ML
@@ -173,7 +173,7 @@ if __name__ == "__main__":
                                             ),
                          sodas_dict=dict(
                              sodas_model=SODAS(mod=ALIGNN(
-                                 encoder=Encoder(num_species=119, cutoff=4.0, dim=100, act_func=nn.SiLU()),
+                                 encoder=Encoder(num_species=1, cutoff=4.0, dim=100, act_func=nn.SiLU()),
                                  processor=Processor(num_convs=5, dim=100),
                                  decoder=Decoder(in_dim=100, out_dim=10, act_func=nn.SiLU())
                              ),
