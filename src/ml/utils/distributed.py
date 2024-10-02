@@ -1,0 +1,38 @@
+from torch.distributed import init_process_group,destroy_process_group
+import torch.distributed as dist
+from numba import cuda
+import torch
+import gc
+import os
+
+def ddp_setup(rank: int ,world_size ,backend):
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "12355"
+    torch.cuda.set_device(rank)
+
+    init_process_group(backend=backend, rank=rank, world_size=world_size)
+
+def cuda_destroy():
+    # collect memory via garbage collection
+    gc.collect()
+    # loop through active devices (assumes you are using all devices available), clear their memory, and then reset the device and close cuda
+    for gpu_id in range(torch.cuda.device_count()):
+        cuda.select_device(gpu_id)
+        torch.cuda.empty_cache()
+        device = cuda.get_current_device()
+        device.reset()
+        cuda.close()
+
+def ddp_destroy():
+    dist.barrier()
+    destroy_process_group()
+
+def reduce_tensor(tensor):
+    rt = tensor.clone().detach()
+    dist.all_reduce(rt, op=dist.ReduceOp.SUM)
+    rt /= (
+        torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
+    )
+    return rt
+
+

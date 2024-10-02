@@ -5,27 +5,15 @@ import os
 import gc
 
 import torch.multiprocessing as mp
-from numba import cuda
 import torch as torch
 from torch import nn
 
 from src.ml.nn.models.alignn import Encoder, Processor, PositiveScalarsDecoder, ALIGNN
 from catalyst.src.ml.training import run_training, run_pre_training
+from catalyst.src.ml.utils.distributed import cuda_destroy
 from catalyst.src.ml.ml import ML
 
 torch.set_float32_matmul_precision
-
-# ddp_destory is needed when calling mp.spawn() multiple times within a SLURM or ORACLE scheduling environment
-def ddp_destroy():
-    # collect memory via garbage collection
-    gc.collect()
-    # loop through active devices (assumes you are using all devices available), clear their memory, and then reset the device and close cuda
-    for gpu_id in range(torch.cuda.device_count()):
-        cuda.select_device(gpu_id)
-        torch.cuda.empty_cache()
-        device = cuda.get_current_device()
-        device.reset()
-        cuda.close()
 
 def main(ml_parameters):
     ml = ML()
@@ -45,8 +33,6 @@ def main(ml_parameters):
         print('Performing pretraining...')
 
         if ml.parameters['run_ddp']:
-            ml.set_model()
-            ml.model.share_memory()
             processes = []
             for rank in range(ml.parameters['world_size']):
                 p = mp.Process(target=run_pre_training, args=(rank, ml,))
@@ -54,7 +40,7 @@ def main(ml_parameters):
                 processes.append(p)
             for p in processes:
                 p.join()
-            ddp_destroy()
+            cuda_destroy()
         else:
             run_pre_training(rank=0, ml=ml)
 
@@ -68,9 +54,9 @@ def main(ml_parameters):
                 processes.append(p)
             for p in processes:
                 p.join()
-            ddp_destroy()
+            cuda_destroy()
         else:
-            run_training(rank=0, ml=ml)
+            run_training(rank=0, iteration=iteration,ml=ml)
 
 if __name__ == "__main__":
     start_time = time.time()
@@ -105,7 +91,7 @@ if __name__ == "__main__":
                          ),
                          model_dict = dict(
                              n_models=1,
-                             num_epochs=[100,1000],
+                             num_epochs=[2,2],
                              train_tolerance=0.0001, # should probably make this a list for [pretrain,train]
                              max_deltas=10,
                              accumulate_loss=['sum','exact','exact'],

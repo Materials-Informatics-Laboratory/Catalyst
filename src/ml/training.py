@@ -9,6 +9,9 @@ import torch
 
 from .testing import test_intepretable, test_non_intepretable
 from ..utilities.distributions import get_distribution
+from .utils.distributed import ddp_destroy, ddp_setup, reduce_tensor
+from .utils.optimizer import set_optimizer
+from .utils.memory import optimizer_to
 
 from datetime import datetime
 import numpy as np
@@ -19,43 +22,6 @@ import time
 import sys
 import os
 import gc
-
-def optimizer_to(optim, device):
-    for param in optim.state.values():
-        # Not sure there are any global tensors in the state dict
-        if isinstance(param, torch.Tensor):
-            param.data = param.data.to(device)
-            if param._grad is not None:
-                param._grad.data = param._grad.data.to(device)
-        elif isinstance(param, dict):
-            for subparam in param.values():
-                if isinstance(subparam, torch.Tensor):
-                    subparam.data = subparam.data.to(device)
-                    if subparam._grad is not None:
-                        subparam._grad.data = subparam._grad.data.to(device)
-def ddp_setup(rank: int,world_size,backend):
-    """
-    Args:
-    rank: Unique identifier of each process
-    world_size: Total number of processes
-    """
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "12355"
-    torch.cuda.set_device(rank)
-    
-    init_process_group(backend=backend, rank=rank, world_size=world_size)
-
-def ddp_destroy():
-    dist.barrier()
-    destroy_process_group()
-
-def reduce_tensor(tensor):
-    rt = tensor.clone().detach()
-    dist.all_reduce(rt, op=dist.ReduceOp.SUM)
-    rt /= (
-        torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
-    )
-    return rt
 
 def train(loader,model,parameters,optimizer,pretrain=False):
     model.train()
@@ -131,8 +97,9 @@ def train(loader,model,parameters,optimizer,pretrain=False):
             optimizer.step()
             return loss
         optimizer.step(closure)
-    total_loss = reduce_tensor(torch.tensor(total_loss).to(parameters['device']))
-    total_loss = total_loss.item()
+    if parameters['run_ddp']:
+        total_loss = reduce_tensor(torch.tensor(total_loss).to(parameters['device'])).item()
+        #total_loss = total_loss.item()
     return total_loss
 
 def run_training(rank,iteration,ml=None):
@@ -182,8 +149,7 @@ def run_training(rank,iteration,ml=None):
 
     follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm','x_bnd']
     if parameters['run_ddp']:
-        if parameters['loader_dict']['shuffle_loader'] == False:
-            loader_train = DataLoader(data['training'], batch_size=int(
+        loader_train = DataLoader(data['training'], batch_size=int(
                 parameters['loader_dict']['batch_size'][1] / parameters['world_size']),
                                       pin_memory=parameters['pin_memory'],
                                       follow_batch=follow_batch,
@@ -255,32 +221,7 @@ def run_training(rank,iteration,ml=None):
         else:
             parameters['model_dict']['optimizer_params']['params_group']['params'] = model.processor.parameters()
 
-        if parameters['model_dict']['optimizer_params']['optimizer'] == 'AdamW':
-            optimizer = torch.optim.AdamW([parameters['model_dict']['optimizer_params']['params_group']])
-        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'Adadelta':
-            optimizer = torch.optim.Adadelta([parameters['model_dict']['optimizer_params']['params_group']])
-        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'Adagrad':
-            optimizer = torch.optim.Adagrad([parameters['model_dict']['optimizer_params']['params_group']])
-        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'Adam':
-            optimizer = torch.optim.Adam([parameters['model_dict']['optimizer_params']['params_group']])
-        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'SparseAdam':
-            optimizer = torch.optim.SparseAdam([parameters['model_dict']['optimizer_params']['params_group']])
-        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'Adamax':
-            optimizer = torch.optim.Adamax([parameters['model_dict']['optimizer_params']['params_group']])
-        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'ASGD':
-            optimizer = torch.optim.ASGD([parameters['model_dict']['optimizer_params']['params_group']])
-        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'LBFGS':
-            optimizer = torch.optim.LBFGS([parameters['model_dict']['optimizer_params']['params_group']])
-        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'NAdam':
-            optimizer = torch.optim.NAdam([parameters['model_dict']['optimizer_params']['params_group']])
-        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'RAdam':
-            optimizer = torch.optim.RAdam([parameters['model_dict']['optimizer_params']['params_group']])
-        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'RMSprop':
-            optimizer = torch.optim.RMSprop([parameters['model_dict']['optimizer_params']['params_group']])
-        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'Rprop':
-            optimizer = torch.optim.Rprop([parameters['model_dict']['optimizer_params']['params_group']])
-        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'SGD':
-            optimizer = torch.optim.SGD([parameters['model_dict']['optimizer_params']['params_group']])
+        optimizer = set_optimizer(parameters)
         optimizer_to(optimizer,parameters['device'])
 
         loss_train = train(loader_train, model, parameters, optimizer);
@@ -335,6 +276,7 @@ def run_pre_training(rank,ml=None):
             shutil.rmtree(parameters['pretrain_dir'])
         os.mkdir(parameters['pretrain_dir'])
 
+    ml.set_model()
     model = ml.model
     partitioned_data = np.load(os.path.join(parameters['graph_data_dir'], 'pre_training', 'train_valid_split.npy'),
                                allow_pickle=True)
@@ -410,32 +352,7 @@ def run_pre_training(rank,ml=None):
         else:
             parameters['model_dict']['optimizer_params']['params_group']['params'] = model.processor.parameters()
 
-        if parameters['model_dict']['optimizer_params']['optimizer'] == 'AdamW':
-            optimizer = torch.optim.AdamW([parameters['model_dict']['optimizer_params']['params_group']])
-        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'Adadelta':
-            optimizer = torch.optim.Adadelta([parameters['model_dict']['optimizer_params']['params_group']])
-        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'Adagrad':
-            optimizer = torch.optim.Adagrad([parameters['model_dict']['optimizer_params']['params_group']])
-        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'Adam':
-            optimizer = torch.optim.Adam([parameters['model_dict']['optimizer_params']['params_group']])
-        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'SparseAdam':
-            optimizer = torch.optim.SparseAdam([parameters['model_dict']['optimizer_params']['params_group']])
-        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'Adamax':
-            optimizer = torch.optim.Adamax([parameters['model_dict']['optimizer_params']['params_group']])
-        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'ASGD':
-            optimizer = torch.optim.ASGD([parameters['model_dict']['optimizer_params']['params_group']])
-        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'LBFGS':
-            optimizer = torch.optim.LBFGS([parameters['model_dict']['optimizer_params']['params_group']])
-        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'NAdam':
-            optimizer = torch.optim.NAdam([parameters['model_dict']['optimizer_params']['params_group']])
-        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'RAdam':
-            optimizer = torch.optim.RAdam([parameters['model_dict']['optimizer_params']['params_group']])
-        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'RMSprop':
-            optimizer = torch.optim.RMSprop([parameters['model_dict']['optimizer_params']['params_group']])
-        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'Rprop':
-            optimizer = torch.optim.Rprop([parameters['model_dict']['optimizer_params']['params_group']])
-        elif parameters['model_dict']['optimizer_params']['optimizer'] == 'SGD':
-            optimizer = torch.optim.SGD([parameters['model_dict']['optimizer_params']['params_group']])
+        optimizer = set_optimizer(parameters)
         optimizer_to(optimizer, parameters['device'])
 
         loss_train = train(loader_train, model, parameters,optimizer,pretrain=True);
