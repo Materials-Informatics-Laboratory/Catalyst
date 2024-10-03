@@ -81,6 +81,8 @@ def alignnd(atoms,cutoff,dihedral=False, store_atoms=False, use_pt=False,include
             ang_amounts=None,
         )
 
+    data.generate_gid()
+
     return data
 
 def realignnd(structures,cutoff,dihedral=False,store_atoms=False,use_pt=False,include_angs=True, atom_labels=''):
@@ -231,6 +233,8 @@ def realignnd(structures,cutoff,dihedral=False,store_atoms=False,use_pt=False,in
             mask_dih_ang=None
         )
 
+    data.generate_gid()
+
     return data
 
 def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[],store_atoms=False,use_pt=False,include_angs=True,store_atoms_type='ase-atoms',atom_labels=''):
@@ -338,8 +342,11 @@ def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[],store_atoms=False
         except:
             print('Failed graph gen...')
             data.append(None)
-    return data
 
+    for graph in data:
+        graph.generate_gid()
+
+    return data
 def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False, store_atoms=False,return_ids=False,include_angs=True,store_atoms_type='ase-atoms'):
     data_amounts = dict(x_atm=[], x_bnd=[], x_ang=[])
     atm = None
@@ -418,6 +425,8 @@ def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False, store_a
                     ang_amounts=torch.tensor(data_amounts['x_ang'], dtype=torch.long),
                 )
             )
+    for graph in data:
+        graph.generate_gid()
 
     if return_ids:
         return data, unique_atoms

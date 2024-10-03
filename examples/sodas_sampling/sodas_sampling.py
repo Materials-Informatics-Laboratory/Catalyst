@@ -15,14 +15,12 @@ import catalyst.src.utilities.sampling as sampling
 from catalyst.src.sodas.model.sodas import SODAS
 from catalyst.src.ml.ml import ML
 
-import pickle
-
 def main(ml_parameters):
     # initialize ML class and load graph data
     ml = ML()
     ml.set_params(ml_parameters)
     graph_data = []
-    take = 50
+    take = 1
     for i,graph in enumerate(glob.glob(os.path.join(ml.parameters['graph_data_dir'],'*.pt'))):
         if i % take == 0:
             graph_data.append(torch.load(graph))
@@ -37,8 +35,10 @@ def main(ml_parameters):
         os.mkdir(ml.parameters['sodas_dict']['projection_dir'])
 
         encoded_data = []
+        gids = []
         for data in graph_data:
             y_values.append(data.y.item())
+            gids.append(data.gid)
             follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data, 'x_ang') else ['x_atm','x_bnd']
             loader = DataLoader([data], batch_size=1, shuffle=False, follow_batch=follow_batch)
             encoded_data.append(ml.parameters['sodas_dict']['sodas_model'].generate_gnn_latent_space(loader=loader, device=ml.parameters['device'])[0])
@@ -50,66 +50,64 @@ def main(ml_parameters):
 
         stored_projections = dict(
             projections = projected_data,
-            graphs = graph_data
+            gids = gids
         )
-        #pickle.dump(stored_projections, os.path.join(ml.parameters['sodas_dict']['projection_dir'], 'saved_projection_data.data'),
-        #            protocol=4)
-        #print('saved')
         np.save(os.path.join(ml.parameters['sodas_dict']['projection_dir'], 'saved_projection_data.npy'), stored_projections)
     elif ml.parameters['sodas_projection']:
         # when loading projections, you must have saved the data in the dictionary format used in the ml.parameters['run_sodas_projection'] section
         # this stored the graphs and projections in the correct order, together, so that they can be indexed together
         # note, this will rewrite the data variable to ensure that data and projected_data are in the same order
         loaded_projections = np.load(os.path.join(ml.parameters['sodas_dict']['projection_dir'], 'saved_projection_data.npy'),allow_pickle=True)
-        data = loaded_projections.item().get('graphs')
+        gids = loaded_projections.item().get('gids')
+        check = 0
+        for data in graph_data:
+            if data.gid not in gids:
+                check = 1
+                break
+        if check:
+            print('Projected data does not match loaded graphs...killing run...')
+            exit(0)
         projected_data = loaded_projections.item().get('projections')
+    ml.parameters['samples_dir'] = os.path.join(ml_parameters['main_path'], 'sampled_data')
+    if os.path.isdir(ml.parameters['samples_dir']):
+        shutil.rmtree(ml.parameters['samples_dir'])
+    os.mkdir(ml.parameters['samples_dir'])
 
     # remove test data
     rng = np.random.default_rng(seed=ml.parameters['sampling_seed'])
-    #note that y values are added ehre as the test set is sampled via y_binning
+    #note that y values are added here as the test set is sampled via y_binning
     test_idx, nontest_idx = sampling.run_sampling(graph_data,sampling_type=ml.parameters['sampling_dict']['test_sampling_type'],
                                                            split=ml.parameters['sampling_dict']['split'][0],rng=rng,
                                                            nclusters=ml.parameters['sampling_dict']['clusters'],y=y_values)
-    test_data = [graph_data[index] for index in test_idx]
+    #test_data = [graph_data[index].gid for index in test_idx]
     data = [graph_data[index] for index in nontest_idx]
-    projected_data_test = [projected_data[index] for index in test_idx]
-    projected_data = [projected_data[index] for index in nontest_idx]
+    stored_test_data = dict(
+        projections=[projected_data[index] for index in test_idx],
+        gids=[graph_data[index].gid for index in test_idx]
+    )
+    np.save(os.path.join(ml.parameters['samples_dir'], 'stored_test_data.npy'),stored_test_data)
 
     # run pretraining
     pretraining_data = None
     if ml.parameters['run_pretrain']:
+        # perform pretraining
+        if os.path.isdir(ml.parameters['pretrain_dir']):
+            shutil.rmtree(ml.parameters['pretrain_dir'])
+        os.mkdir(ml.parameters['pretrain_dir'])
         # remove pretrain data
         pretrain_idx, nonpretrain_idx = sampling.run_sampling(projected_data, sampling_type=ml.parameters['sampling_dict'][
                 'pretraining_sampling_type'],
                                                           split=ml.parameters['sampling_dict']['split'][1],rng=rng,
                                                           nclusters=ml.parameters['sampling_dict']['clusters'])
-        pretraining_data = [graph_data[index] for index in pretrain_idx]
         data = [graph_data[index] for index in nonpretrain_idx]
-        projected_data_pretrain = [projected_data[index] for index in pretrain_idx]
-        projected_data = [projected_data[index] for index in nonpretrain_idx]
-
-        # perform pretraining
-        if os.path.isdir(ml.parameters['pretrain_dir']):
-            shutil.rmtree(ml.parameters['pretrain_dir'])
-        os.mkdir(ml.parameters['pretrain_dir'])
-        
-        partitioned_data = dict(training=pretraining_data,
-                                    validation=None)
-        np.save(os.path.join(ml.parameters['pretrain_dir'], 'train_valid_split.npy'), partitioned_data)
-       
-    # save different bins of data
-    ml.parameters['samples_dir'] = os.path.join(ml_parameters['main_path'],'sampled_data')
-    if os.path.isdir(ml.parameters['samples_dir']):
-        shutil.rmtree(ml.parameters['samples_dir'])
-    os.mkdir(ml.parameters['samples_dir'])
-
-    np.save(os.path.join(ml.parameters['samples_dir'], 'test_data.npy'), np.array(test_data,dtype=object),fix_imports=False)
-    np.save(os.path.join(ml.parameters['samples_dir'], 'test_data_projected.npy'), projected_data_test)
-    np.save(os.path.join(ml.parameters['samples_dir'], 'remaining_data.npy'), np.array(data,dtype=object),fix_imports=False)
-    np.save(os.path.join(ml.parameters['samples_dir'], 'remaining_data_projected.npy'), projected_data)
-    if ml.parameters['run_pretrain']:
-        np.save(os.path.join(ml.parameters['samples_dir'], 'pretraining_data.npy'), np.array(pretraining_data,dtype=object),fix_imports=False)
-        np.save(os.path.join(ml.parameters['samples_dir'], 'pretraining_data_projected.npy'), projected_data_pretrain)
+        #pretraining_data = [graph_data[index].gid for index in pretrain_idx]
+        stored_pretrain_data = dict(
+            training_projections=[projected_data[index] for index in pretrain_idx],
+            validation_projections=None,
+            training=[graph_data[index].gid for index in pretrain_idx],
+            validation=None
+        )
+        np.save(os.path.join(ml.parameters['pretrain_dir'], 'train_valid_split.npy'), stored_pretrain_data, fix_imports=False)
 
     # loop over number of requested models
     ml.parameters['model_dir'] = os.path.join(ml.parameters['main_path'],'model_samples')
@@ -126,11 +124,15 @@ def main(ml_parameters):
         train_idx, valid_idx = sampling.run_sampling(projected_data,sampling_type=ml.parameters['sampling_dict']['sampling_type'],
                                                            split=ml.parameters['sampling_dict']['split'][2],rng=rng,
                                                            nclusters=ml.parameters['sampling_dict']['clusters'])
-        train_data = [graph_data[index] for index in train_idx]
-        valid_data = [graph_data[index] for index in valid_idx]
+        train_data = [graph_data[index].gid for index in train_idx]
+        valid_data = [graph_data[index].gid for index in valid_idx]
         print('Using the remaining ',len(valid_data),' for validation')
-        partitioned_data = dict(training=train_data,
-                                validation=valid_data)
+        partitioned_data = dict(
+            training_projections=[projected_data[index] for index in train_idx],
+            validation_projections=[projected_data[index] for index in valid_idx],
+            training=train_data,
+            validation=valid_data
+        )
         np.save(os.path.join(ml.parameters['model_save_dir'],'train_valid_split.npy'), partitioned_data)
          
 if __name__ == "__main__":
@@ -144,7 +146,7 @@ if __name__ == "__main__":
                          num_inputs=5,
                          num_epochs=10,
                          BATCH_SIZE=1,
-                         n_models=1,
+                         n_models=3,
                          world_size = torch.cuda.device_count(),
                          sampling_seed=12345,
                          graph_cutoff=4.0,
@@ -163,7 +165,7 @@ if __name__ == "__main__":
                          main_path=path,
                          device='cuda',
                          restart_model_name=None,
-                         graph_data_dir=os.path.join(path, 'graphs'),
+                         graph_data_dir=os.path.join(path, 'graph_data'),
                          model_dir=None,
                          model_save_dir=None,
                          pretrain_dir=os.path.join(path, 'pre_training'),
@@ -178,7 +180,7 @@ if __name__ == "__main__":
                                             ),
                          sodas_dict=dict(
                              sodas_model=SODAS(mod=ALIGNN(
-                                 encoder=Encoder(num_species=1, cutoff=4.0, dim=100, act_func=nn.SiLU()),
+                                 encoder=Encoder(num_species=119, cutoff=4.0, dim=100, act_func=nn.SiLU()),
                                  processor=Processor(num_convs=5, dim=100),
                                  decoder=Decoder(in_dim=100, out_dim=10, act_func=nn.SiLU())
                              ),

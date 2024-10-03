@@ -1,5 +1,5 @@
 from ..utilities.rankings import organize_rankings
-
+from .utils.distributed import reduce_tensor
 from torch import nn
 import torch
 
@@ -51,10 +51,12 @@ def test_intepretable(loader,model,parameters,PIN_MEMORY = False):
                 ranked_data['ang_data'].append(angle_contrib[a])
         np.save(os.path.join(parameters['results_dir'], str(i) + '_rankings.npy'), ranked_data)
 
-        loss = loss_fn(all_sum, data.y.unsqueeze(1))
+        loss = loss_fn(all_sum, data.y)
         total_loss += loss
 
-    return total_loss / len(loader)
+    if parameters['run_ddp']:
+        total_loss = reduce_tensor(torch.tensor(total_loss).to(parameters['device'])).item()
+    return total_loss
 
 @torch.no_grad()
 def test_non_intepretable(loader,model,parameters,ind_fn='all',PIN_MEMORY = False):
@@ -121,7 +123,9 @@ def test_non_intepretable(loader,model,parameters,ind_fn='all',PIN_MEMORY = Fals
             of.write(str(data.y.item()) + '          ' + str(all_sum.item()) + '\n')
     if parameters['write_indv_pred']:
         of.close()
-    return total_loss/(len(loader)*parameters['world_size'])
+    if parameters['run_ddp']:
+        total_loss = reduce_tensor(torch.tensor(total_loss).to(parameters['device'])).item()
+    return total_loss
 
 @torch.no_grad()
 def predict_non_intepretable(loader,model,parameters,ind_fn='all',PIN_MEMORY = False):

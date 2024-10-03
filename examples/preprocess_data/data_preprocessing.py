@@ -59,10 +59,4 @@ for i,A_structure in enumerate(A_files):
                     structures = [snapshots[0][i][-1],snapshots[1][j][-1],snapshots[2][k][-1]]
                     graph_data = realignnd(structures, cutoff=4.0, dihedral=False,store_atoms=False,use_pt=True)
                     graph_data.y = torch.tensor(H_mix + y_scale)
-                    torch.save(graph_data, os.path.join(graph_dir, str(i) + '_' + str(j) + '_' + str(k) + '_graph.pt'))
-
-
-
-
-
-
+                    torch.save(graph_data, os.path.join(graph_dir, graph_data.gid + '.pt'))

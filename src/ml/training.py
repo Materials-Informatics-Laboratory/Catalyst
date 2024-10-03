@@ -12,6 +12,7 @@ from ..utilities.distributions import get_distribution
 from .utils.distributed import ddp_destroy, ddp_setup, reduce_tensor
 from .utils.optimizer import set_optimizer
 from .utils.memory import optimizer_to
+from ..io.io import read_training_data
 
 from datetime import datetime
 import numpy as np
@@ -99,7 +100,6 @@ def train(loader,model,parameters,optimizer,pretrain=False):
         optimizer.step(closure)
     if parameters['run_ddp']:
         total_loss = reduce_tensor(torch.tensor(total_loss).to(parameters['device'])).item()
-        #total_loss = total_loss.item()
     return total_loss
 
 def run_training(rank,iteration,ml=None):
@@ -113,17 +113,9 @@ def run_training(rank,iteration,ml=None):
         if os.path.isdir(parameters['model_save_dir']):
             shutil.rmtree(parameters['model_save_dir'])
         os.mkdir(parameters['model_save_dir'])
-    #ml.set_model()
-    #model = ml.model
-    if parameters['restart_training']:
-        print('Restarting model training using model ', parameters['restart_model_name'])
 
-    partitioned_data = np.load(
-        os.path.join(parameters['graph_data_dir'], 'model_samples', str(iteration), 'train_valid_split.npy'),
-        allow_pickle=True)
-
-    data = dict(training=partitioned_data.item().get('training'),
-                       validation=partitioned_data.item().get('validation'))
+    data = read_training_data(parameters,
+                              os.path.join(parameters['samples_dir'], 'model_samples', str(iteration), 'train_valid_split.npy'))
     if rank == 0:
         print('Training model ', iteration)
         print('Training using ',len(data['training']), ' training points and ',len(data['validation']),' validation points...')
@@ -136,6 +128,7 @@ def run_training(rank,iteration,ml=None):
     model = ml.model
     if parameters['pre_training'] == False:
         if parameters['restart_training']:
+            print('Restarting model training using model ', parameters['restart_model_name'])
             model.load_state_dict(torch.load(ml.parameters['restart_model_name'],map_location=ml.parameters['device']))
         if parameters['run_ddp']:
             model = DDP(model, device_ids=[rank],find_unused_parameters=True)
@@ -278,9 +271,8 @@ def run_pre_training(rank,ml=None):
 
     ml.set_model()
     model = ml.model
-    partitioned_data = np.load(os.path.join(parameters['graph_data_dir'], 'pre_training', 'train_valid_split.npy'),
-                               allow_pickle=True)
-    data = dict(training=partitioned_data.item().get('training'), validation=None)
+
+    data = read_training_data(parameters,os.path.join(parameters['samples_dir'], 'pre_training', 'train_valid_split.npy'),pretrain=True)
     if rank == 0:
         print('Training using ', len(data['training']), ' training points')
         stats_file = open(os.path.join(parameters['pretrain_dir'], 'loss.data'), 'w')

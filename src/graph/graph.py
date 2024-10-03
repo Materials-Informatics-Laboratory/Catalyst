@@ -1,7 +1,9 @@
 from ase.neighborlist import neighbor_list
 
+from random import randint
 import pandas as pd
 import numpy as np
+import sys
 
 from torch_geometric.data import Data
 
@@ -48,6 +50,8 @@ class Graph_Data(Data):
         self.bnd_amounts = bnd_amounts
         self.ang_amounts = ang_amounts
 
+        self.gid = None
+
     def __inc__(self, key, value, *args, **kwargs):
         if key == 'edge_index_G':
             return self.x_atm.size(0)
@@ -55,6 +59,9 @@ class Graph_Data(Data):
             return self.x_bnd.size(0)
         else:
             return super().__inc__(key, value, *args, **kwargs)
+
+    def generate_gid(self):
+        self.gid = hex(randint(-sys.maxsize - 1, sys.maxsize))
 
 def index2mask(idx_arr, n):
     mask = np.zeros(n, dtype=int)
