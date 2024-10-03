@@ -13,11 +13,11 @@ General-purpose toolkit for analyzing atomistic simulations via graph-based mach
 ## Installation
 
 The following dependencies need to be installed before installing `catalyst`. The installation time is typically within 10 minutes on a normal local machine.
-- PyTorch (`pytorch>=1.8.1`)
-- PyTorch-Geometric (`pyg>=2.0.1`): for implementing graph representations
-- Networkx (`networkx>=2.8.6`): for using SODAS sampling
-- Scipy (`scipy>=1.9.0`)
-- Numpy (`numpy>=1.21.1`)
+- PyTorch (`pytorch=2.4.1`)
+- PyTorch-Geometric (`pyg>=2.6.1`): for implementing graph representations
+- Networkx (`networkx>=3.3`): for using SODAS sampling
+- Scipy (`scipy>=1.13.0`)
+- Numpy (`numpy>=2.0.2`)
 - Atomic Simulation Environment (`ase>= 3.22.1`): for reading/writing atomic structures
 - PeriodicTable (`periodictable >= 1.7.1`): for graph construction
 - Numbda (`numba >= 0.60.0`): for CUDA calls
