@@ -78,7 +78,7 @@ if __name__ == "__main__":
                          ddp_backend='gloo',
                          device='cuda',
                          restart_model_name=None,
-                         graph_data_dir=os.path.join(path, '..\preprocess_data\data\graphs'),
+                         graph_data_dir=os.path.join(path, '..\sodas_sampling\graph_data'),
                          model_dir=None,
                          model_save_dir=None,
                          pretrain_dir=os.path.join(path, 'pre_training'),
@@ -86,7 +86,7 @@ if __name__ == "__main__":
                          samples_dir=os.path.join(path, 'data'),
                          loader_dict = dict(
                              shuffle_loader=True,
-                             batch_size=[4,4,4],
+                             batch_size=[1,1,1],
                              num_workers=0,
                              shuffle_steps=10
                          ),

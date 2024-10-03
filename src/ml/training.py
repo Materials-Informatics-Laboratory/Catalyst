@@ -159,8 +159,7 @@ def run_training(rank,iteration,ml=None):
                                       num_workers=parameters['loader_dict']['num_workers'])
 
         loader_valid = DataLoader(data['validation'],follow_batch=follow_batch,pin_memory=parameters['pin_memory'],
-                                      batch_size=int(
-                        parameters['loader_dict']['batch_size'][2] / parameters['world_size']), shuffle=False,num_workers=parameters['loader_dict']['num_workers'])
+                                      batch_size=parameters['loader_dict']['batch_size'][2], shuffle=False,num_workers=parameters['loader_dict']['num_workers'])
 
     if parameters['model_dict']['optimizer_params']['dynamic_lr']:
         dist_params = dict(
