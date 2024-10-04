@@ -8,19 +8,21 @@ def read_training_data(params,samples_file,pretrain=False):
     validation_graphs = []
 
     graph_files = glob.glob(os.path.join(params['graph_data_dir'],'*'))
-    training_samples = np.load(samples_file,allow_pickle=True).item().get('training')
-    for sample in training_samples:
-        for graph in graph_files:
-            fn = graph.split('\\')[-1].split('.')[0]
-            if fn == sample:
-                training_graphs.append(torch.load(graph))
+    samples = np.load(samples_file, allow_pickle=True)
+    training_samples = samples.item().get('training')
+
+    graph_names = [graph.split('\\')[-1].split('.')[0] for graph in graph_files]
+    cross_list = set(training_samples).intersection(graph_names)
+    idx = [graph_names.index(x) for x in cross_list]
+    selected_graphs = [graph_files[i] for i in idx]
+    training_graphs = [torch.load(x) for x in selected_graphs]
+
     if pretrain == False:
-        validation_samples = np.load(samples_file, allow_pickle=True).item().get('validation')
-        for sample in validation_samples:
-            for graph in graph_files:
-                fn = graph.split('\\')[-1].split('.')[0]
-                if fn == sample:
-                    validation_graphs.append(torch.load(graph))
+        validation_samples = samples.item().get('validation')
+        cross_list = set(validation_samples).intersection(graph_names)
+        idx = [graph_names.index(x) for x in cross_list]
+        selected_graphs = [graph_files[i] for i in idx]
+        validation_graphs = [torch.load(x) for x in selected_graphs]
 
     return dict(training=training_graphs, validation=validation_graphs)
 
