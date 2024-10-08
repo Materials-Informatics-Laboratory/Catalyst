@@ -34,12 +34,12 @@ def train(loader,model,parameters,optimizer,pretrain=False):
 
     total_loss = 0.0
 
-    if parameters['run_ddp'] == False:
-        model.to(parameters['device'])
+    if parameters['device_dict']['run_ddp'] == False:
+        model.to(parameters['device_dict']['device'])
     loss_fn = parameters['model_dict']['loss_func']
     for data in loader:
         def closure():
-            data.to(parameters['device'], non_blocking=True)
+            data.to(parameters['device_dict']['device'], non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
 
             pred = model(data)
@@ -98,67 +98,68 @@ def train(loader,model,parameters,optimizer,pretrain=False):
             optimizer.step()
             return loss
         optimizer.step(closure)
-    if parameters['run_ddp']:
-        total_loss = reduce_tensor(torch.tensor(total_loss).to(parameters['device'])).item()
+    if parameters['device_dict']['run_ddp']:
+        total_loss = reduce_tensor(torch.tensor(total_loss).to(parameters['device_dict']['device'])).item()
     return total_loss
 
 def run_training(rank,iteration,ml=None):
 
     parameters = ml.parameters
-    if parameters['run_ddp']:
-        ddp_setup(rank, parameters['world_size'], parameters['ddp_backend'])
+    if parameters['device_dict']['run_ddp']:
+        ddp_setup(rank, parameters['device_dict']['world_size'], parameters['device_dict']['ddp_backend'])
     #for iteration in range(parameters['model_dict']['n_models']):
-    parameters['model_save_dir'] = os.path.join(parameters['model_dir'], str(iteration))
+    parameters['io_dict']['model_save_dir'] = os.path.join(parameters['io_dict']['model_dir'], str(iteration))
     if rank == 0:
-        if os.path.isdir(parameters['model_save_dir']):
-            shutil.rmtree(parameters['model_save_dir'])
-        os.mkdir(parameters['model_save_dir'])
+        if os.path.isdir(parameters['io_dict']['model_save_dir']):
+            shutil.rmtree(parameters['io_dict']['model_save_dir'])
+        os.mkdir(parameters['io_dict']['model_save_dir'])
+        print('Reading data...')
 
     data = read_training_data(parameters,
-                              os.path.join(parameters['samples_dir'], 'model_samples', str(iteration), 'train_valid_split.npy'))
+                              os.path.join(parameters['io_dict']['samples_dir'], 'model_samples', str(iteration), 'train_valid_split.npy'))
     if rank == 0:
         print('Training model ', iteration)
         print('Training using ',len(data['training']), ' training points and ',len(data['validation']),' validation points...')
-        stats_file = open(os.path.join(parameters['model_save_dir'], 'loss.data'), 'w')
+        stats_file = open(os.path.join(parameters['io_dict']['model_save_dir'], 'loss.data'), 'w')
         stats_file.write('Training_loss     Validation loss\n')
         stats_file.close()
 
     ml.set_model()
-    ml.model.to(ml.parameters['device'])
+    ml.model.to(ml.parameters['device_dict']['device'])
     model = ml.model
-    if parameters['pre_training'] == False:
-        if parameters['restart_training']:
-            print('Restarting model training using model ', parameters['restart_model_name'])
-            model.load_state_dict(torch.load(ml.parameters['restart_model_name'],map_location=ml.parameters['device']))
-        if parameters['run_ddp']:
+    if parameters['model_dict']['pre_training'] == False:
+        if parameters['model_dict']['restart_training']:
+            print('Restarting model training using model ', parameters['io_dict']['restart_model_name'])
+            model.load_state_dict(torch.load(ml.parameters['io_dict']['restart_model_name'],map_location=ml.parameters['device_dict']['device']))
+        if parameters['device_dict']['run_ddp']:
             model = DDP(model, device_ids=[rank],find_unused_parameters=True)
             model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
     else:
-        model_name = glob.glob(os.path.join(parameters['pretrain_dir'], 'model_*'))
-        model.load_state_dict(torch.load(model_name[0],map_location=ml.parameters['device']))
-        if parameters['run_ddp']:
+        model_name = glob.glob(os.path.join(parameters['io_dict']['pretrain_dir'], 'model_*'))
+        model.load_state_dict(torch.load(model_name[0],map_location=ml.parameters['device_dict']['device']))
+        if parameters['device_dict']['run_ddp']:
             model = DDP(model, device_ids=[rank], find_unused_parameters=True)
             model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
 
     follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm','x_bnd']
-    if parameters['run_ddp']:
+    if parameters['device_dict']['run_ddp']:
         loader_train = DataLoader(data['training'], batch_size=int(
-                parameters['loader_dict']['batch_size'][1] / parameters['world_size']),
-                                      pin_memory=parameters['pin_memory'],
+                parameters['loader_dict']['batch_size'][1] / parameters['device_dict']['world_size']),
+                                      pin_memory=parameters['device_dict']['pin_memory'],
                                       follow_batch=follow_batch,
                                       sampler=DistributedSampler(data['training'],
                                                                  shuffle=False),num_workers=parameters['loader_dict']['num_workers'])
         loader_valid = DataLoader(data['validation'], follow_batch=follow_batch,batch_size=int(
-                        parameters['loader_dict']['batch_size'][2] / parameters['world_size']),pin_memory=parameters['pin_memory'],
+                        parameters['loader_dict']['batch_size'][2] / parameters['device_dict']['world_size']),pin_memory=parameters['device_dict']['pin_memory'],
                                       shuffle=False, sampler=DistributedSampler(data['validation']),num_workers=parameters['loader_dict']['num_workers'])
     else:
-        loader_train = DataLoader(data['training'], pin_memory=parameters['pin_memory'],
+        loader_train = DataLoader(data['training'], pin_memory=parameters['device_dict']['pin_memory'],
                                       batch_size=parameters['loader_dict']['batch_size'][1],
                                       shuffle=parameters['loader_dict']['shuffle_loader'],
                                       follow_batch=follow_batch,
                                       num_workers=parameters['loader_dict']['num_workers'])
 
-        loader_valid = DataLoader(data['validation'],follow_batch=follow_batch,pin_memory=parameters['pin_memory'],
+        loader_valid = DataLoader(data['validation'],follow_batch=follow_batch,pin_memory=parameters['device_dict']['pin_memory'],
                                       batch_size=parameters['loader_dict']['batch_size'][2], shuffle=False,num_workers=parameters['loader_dict']['num_workers'])
 
     if parameters['model_dict']['optimizer_params']['dynamic_lr']:
@@ -189,32 +190,32 @@ def run_training(rank,iteration,ml=None):
             if ep % parameters['loader_dict']['shuffle_steps'] == 0 and ep > 0:
                 if rank == 0:
                     print('Shuffling training data...')
-                if parameters['run_ddp']:
+                if parameters['device_dict']['run_ddp']:
                     loader_train.sampler.set_epoch(ep)
                     loader_valid.sampler.set_epoch(ep)
                     loader_train = DataLoader(data['training'], batch_size=int(
-                            parameters['loader_dict']['batch_size'][1] / parameters['world_size']),
-                                                  pin_memory=parameters['pin_memory'],
+                            parameters['loader_dict']['batch_size'][1] / parameters['device_dict']['world_size']),
+                                                  pin_memory=parameters['device_dict']['pin_memory'],
                                                   follow_batch=follow_batch,
                                                   sampler=DistributedSampler(data['training'],shuffle=parameters['loader_dict']['shuffle_loader'],
                                                                              seed=random.randint(-sys.maxsize - 1, sys.maxsize)),
                                                   num_workers=parameters['loader_dict']['num_workers'])
                 else:
-                    loader_train = DataLoader(data['training'], pin_memory=parameters['pin_memory'],
+                    loader_train = DataLoader(data['training'], pin_memory=parameters['device_dict']['pin_memory'],
                                               batch_size=parameters['loader_dict']['batch_size'][1],
                                               shuffle=parameters['loader_dict']['shuffle_loader'],
                                               follow_batch=follow_batch,
                                               num_workers=parameters['loader_dict']['num_workers'])
 
         parameters['model_dict']['optimizer_params']['params_group']['lr'] = lr_data[ep]
-        if parameters['run_ddp']:
+        if parameters['device_dict']['run_ddp']:
             parameters['model_dict']['optimizer_params']['params_group'][
                     'params'] = model.module.processor.parameters()
         else:
             parameters['model_dict']['optimizer_params']['params_group']['params'] = model.processor.parameters()
 
         optimizer = set_optimizer(parameters)
-        optimizer_to(optimizer,parameters['device'])
+        optimizer_to(optimizer,parameters['device_dict']['device'])
 
         loss_train = train(loader_train, model, parameters, optimizer);
         loss_valid = test_non_intepretable(loader_valid, model, parameters)
@@ -223,7 +224,7 @@ def run_training(rank,iteration,ml=None):
             epoch_times.append(time.time() - start_time)
             print('epoch_time = ', time.time() - start_time, ' seconds Average epoch time = ', sum(epoch_times) / float(len(epoch_times)), ' seconds')
             print('Train loss = ',loss_train,' Validation loss = ',loss_valid)
-            stats_file = open(os.path.join(parameters['model_save_dir'], 'loss.data'), 'a')
+            stats_file = open(os.path.join(parameters['io_dict']['model_save_dir'], 'loss.data'), 'a')
             stats_file.write(str(loss_train) + '     ' + str(loss_valid) + '\n')
             stats_file.close()
         if ep > 0:
@@ -242,56 +243,56 @@ def run_training(rank,iteration,ml=None):
             if loss_valid < min_loss_valid:
                 min_loss_valid = loss_valid
                 if rank == 0:
-                     if parameters['remove_old_model']:
-                        model_name = glob.glob(os.path.join(parameters['model_save_dir'], 'model_*'))
+                     if parameters['io_dict']['remove_old_model']:
+                        model_name = glob.glob(os.path.join(parameters['io_dict']['model_save_dir'], 'model_*'))
                         if len(model_name) > 0 and rank == 0:
                             os.remove(model_name[0])
                      print('Saving model...')
                      now = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-                     if parameters['run_ddp']:
-                        torch.save(model.module.state_dict(), os.path.join(parameters['model_save_dir'], 'model_' + str(now)+'_ep-'+str(ep)))
+                     if parameters['device_dict']['run_ddp']:
+                        torch.save(model.module.state_dict(), os.path.join(parameters['io_dict']['model_save_dir'], 'model_' + str(now)+'_ep-'+str(ep)))
                      else:
-                        torch.save(model.state_dict(), os.path.join(parameters['model_save_dir'], 'model_' + str(now)+'_ep-'+str(ep)))
+                        torch.save(model.state_dict(), os.path.join(parameters['io_dict']['model_save_dir'], 'model_' + str(now)+'_ep-'+str(ep)))
         if len(running_valid_delta) == parameters['model_dict']['max_deltas']:
             if sum(running_valid_delta)/len(running_valid_delta)< parameters['model_dict']['train_tolerance']:
                 if rank == 0:
                     print('Validation delta satisfies set tolerance...exiting training loop...')
                 ep = parameters['model_dict']['num_epochs'][1]
         ep += 1
-    if parameters['run_ddp']:
+    if parameters['device_dict']['run_ddp']:
         ddp_destroy()
 
 def run_pre_training(rank,ml=None):
     parameters = ml.parameters
-    if rank == 0:
-        if os.path.isdir(parameters['pretrain_dir']):
-            shutil.rmtree(parameters['pretrain_dir'])
-        os.mkdir(parameters['pretrain_dir'])
-
     ml.set_model()
     model = ml.model
-
-    data = read_training_data(parameters,os.path.join(parameters['samples_dir'], 'pre_training', 'train_valid_split.npy'),pretrain=True)
+    if rank == 0:
+        if os.path.isdir(parameters['io_dict']['pretrain_dir']):
+            shutil.rmtree(parameters['io_dict']['pretrain_dir'])
+        os.mkdir(parameters['io_dict']['pretrain_dir'])
+        print('Reading graphs...')
+    data = read_training_data(parameters,os.path.join(parameters['io_dict']['samples_dir'], 'pre_training', 'train_valid_split.npy'),pretrain=True)
     if rank == 0:
         print('Training using ', len(data['training']), ' training points')
-        stats_file = open(os.path.join(parameters['pretrain_dir'], 'loss.data'), 'w')
+        stats_file = open(os.path.join(parameters['io_dict']['pretrain_dir'], 'loss.data'), 'w')
         stats_file.write('Training_loss\n')
         stats_file.close()
 
-    if parameters['run_ddp']:
-        ddp_setup(rank, parameters['world_size'],parameters['ddp_backend'])
-        model.to(parameters['device'])
+    if parameters['device_dict']['run_ddp']:
+        ddp_setup(rank, parameters['device_dict']['world_size'],parameters['device_dict']['ddp_backend'])
+        model.to(parameters['device_dict']['device'])
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
         model = DDP(model, device_ids=[rank],find_unused_parameters=True)
 
     follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm'] # need to rework this
-    if parameters['run_ddp']:
-        loader_train = DataLoader(data['training'], batch_size=parameters['loader_dict']['batch_size'][0],
-                                  pin_memory=parameters['pin_memory'],
+    if parameters['device_dict']['run_ddp']:
+        loader_train = DataLoader(data['training'], batch_size=int(
+                        parameters['loader_dict']['batch_size'][0] / parameters['device_dict']['world_size']),
+                                  pin_memory=parameters['device_dict']['pin_memory'],
                                   shuffle=False, follow_batch=follow_batch,
                                   sampler=DistributedSampler(data['training']))
     else:
-        loader_train = DataLoader(data['training'], pin_memory=parameters['pin_memory'],
+        loader_train = DataLoader(data['training'], pin_memory=parameters['device_dict']['pin_memory'],
                                   batch_size=parameters['loader_dict']['batch_size'][0], shuffle=True, follow_batch=follow_batch)
 
     if parameters['model_dict']['optimizer_params']['dynamic_lr']:
@@ -322,29 +323,29 @@ def run_pre_training(rank,ml=None):
             if ep % parameters['loader_dict']['shuffle_steps'] == 0:
                 if rank == 0:
                     print('Shuffling training data...')
-                if parameters['run_ddp']:
+                if parameters['device_dict']['run_ddp']:
                     loader_train.sampler.set_epoch(ep)
                     loader_train = DataLoader(data['training'], batch_size=int(
-                        parameters['loader_dict']['batch_size'][0] / parameters['world_size']),
-                                              pin_memory=parameters['pin_memory'],follow_batch=follow_batch,
+                        parameters['loader_dict']['batch_size'][0] / parameters['device_dict']['world_size']),
+                                              pin_memory=parameters['device_dict']['pin_memory'],follow_batch=follow_batch,
                                               sampler=DistributedSampler(data['training'],shuffle=parameters['loader_dict']['shuffle_loader'],
                                               seed=random.randint(-sys.maxsize - 1,sys.maxsize)),
                                               num_workers=parameters['loader_dict']['num_workers'])
                 else:
-                    loader_train = DataLoader(data['training'], pin_memory=parameters['pin_memory'],
+                    loader_train = DataLoader(data['training'], pin_memory=parameters['device_dict']['pin_memory'],
                                               batch_size=parameters['loader_dict']['batch_size'][0], shuffle=parameters['loader_dict']['shuffle_loader'],
                                               follow_batch=follow_batch)
 
 
         parameters['model_dict']['optimizer_params']['params_group']['lr'] = lr_data[ep]
-        if parameters['run_ddp']:
+        if parameters['device_dict']['run_ddp']:
             parameters['model_dict']['optimizer_params']['params_group'][
                 'params'] = model.module.processor.parameters()
         else:
             parameters['model_dict']['optimizer_params']['params_group']['params'] = model.processor.parameters()
 
         optimizer = set_optimizer(parameters)
-        optimizer_to(optimizer, parameters['device'])
+        optimizer_to(optimizer, parameters['device_dict']['device'])
 
         loss_train = train(loader_train, model, parameters,optimizer,pretrain=True);
         if rank == 0:
@@ -352,7 +353,7 @@ def run_pre_training(rank,ml=None):
             print('epoch_time = ', time.time() - start_time, ' seconds Average epoch time = ',
                   sum(epoch_times) / float(len(epoch_times)), ' seconds')
             print('Train loss = ', loss_train)
-            stats_file = open(os.path.join(parameters['pretrain_dir'], 'loss.data'), 'a')
+            stats_file = open(os.path.join(parameters['io_dict']['pretrain_dir'], 'loss.data'), 'a')
             stats_file.write(str(loss_train) + '\n')
             stats_file.close()
 
@@ -369,22 +370,22 @@ def run_pre_training(rank,ml=None):
             min_loss_train = loss_train
 
             if rank == 0:
-                model_name = glob.glob(os.path.join(parameters['pretrain_dir'], 'model_*'))
+                model_name = glob.glob(os.path.join(parameters['io_dict']['pretrain_dir'], 'model_*'))
                 if len(model_name) > 0:
                     os.remove(model_name[0])
                 print('Saving model...')
                 now = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-                if parameters['run_ddp']:
-                    torch.save(model.module.state_dict(), os.path.join(parameters['pretrain_dir'], 'model_pre_'+str(now)))
+                if parameters['device_dict']['run_ddp']:
+                    torch.save(model.module.state_dict(), os.path.join(parameters['io_dict']['pretrain_dir'], 'model_pre_'+str(now)))
                 else:
-                    torch.save(model.state_dict(), os.path.join(parameters['pretrain_dir'], 'model_pre_'+str(now)))
+                    torch.save(model.state_dict(), os.path.join(parameters['io_dict']['pretrain_dir'], 'model_pre_'+str(now)))
         if len(running_train_delta) == parameters['model_dict']['max_deltas']:
             if sum(running_train_delta) / len(running_train_delta) < parameters['model_dict']['train_tolerance']:
                 if rank == 0:
                     print('Training delta satisfies set tolerance...exiting training loop...')
                 ep = parameters['model_dict']['num_epochs'][0]
         ep += 1
-    if parameters['run_ddp']:
+    if parameters['device_dict']['run_ddp']:
         destroy_process_group()
 
 

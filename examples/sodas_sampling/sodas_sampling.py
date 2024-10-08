@@ -10,9 +10,9 @@ from torch_geometric.loader import DataLoader
 import torch as torch
 from torch import nn
 
-from catalyst.src.ml.nn.models.alignn import Encoder, Processor, Decoder, ALIGNN, PositiveScalarsDecoder
+from catalyst.src.ml.nn.models.alignn import Encoder, Processor, Decoder, ALIGNN
 import catalyst.src.utilities.sampling as sampling
-from catalyst.src.sodas.model.sodas import SODAS
+from catalyst.src.characterization.sodas.model.sodas import SODAS
 from catalyst.src.ml.ml import ML
 
 def main(ml_parameters):
@@ -21,7 +21,10 @@ def main(ml_parameters):
     ml.set_params(ml_parameters)
     graph_data = []
     take = 1
-    for i,graph in enumerate(glob.glob(os.path.join(ml.parameters['graph_data_dir'],'*.pt'))):
+
+    #port_graphs_without_gids(ml.parameters)
+
+    for i,graph in enumerate(glob.glob(os.path.join(ml.parameters['io_dict']['graph_data_dir'],'*.pt'))):
         if i % take == 0:
             graph_data.append(torch.load(graph))
     print('Found ',len(graph_data),' graphs')
@@ -29,21 +32,25 @@ def main(ml_parameters):
 # sodas: either perform sodas projection or load a previously projected set of data
     projected_data = None
     y_values = []
-    if ml.parameters['run_sodas_projection']:
-        if os.path.isdir(ml.parameters['sodas_dict']['projection_dir']):
-            shutil.rmtree(ml.parameters['sodas_dict']['projection_dir'])
-        os.mkdir(ml.parameters['sodas_dict']['projection_dir'])
+    if ml.parameters['sodas_dict']['run_sodas']:
+        print('Performing graph projections...')
+        if os.path.isdir(ml.parameters['io_dict']['projection_dir']):
+            shutil.rmtree(ml.parameters['io_dict']['projection_dir'])
+        os.mkdir(ml.parameters['io_dict']['projection_dir'])
 
         encoded_data = []
         gids = []
+        follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(graph_data[0], 'x_ang') else ['x_atm', 'x_bnd']
+        loader = DataLoader(graph_data, batch_size=1, shuffle=False, follow_batch=follow_batch,
+                            num_workers=ml_parameters['loader_dict']['num_workers'])
+        encoded_data = ml.parameters['sodas_dict']['sodas_model'].generate_gnn_latent_space(loader=loader,
+                                                                                                 device=ml.parameters['device_dict']['device'])
+        ml.parameters['sodas_dict']['sodas_model'].clear_gpu_memory()
         for data in graph_data:
             y_values.append(data.y.item())
             gids.append(data.gid)
-            follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data, 'x_ang') else ['x_atm','x_bnd']
-            loader = DataLoader([data], batch_size=1, shuffle=False, follow_batch=follow_batch)
-            encoded_data.append(ml.parameters['sodas_dict']['sodas_model'].generate_gnn_latent_space(loader=loader, device=ml.parameters['device'])[0])
-        ml.parameters['sodas_dict']['sodas_model'].clear_gpu_memory()
-        encoded_data = np.array(encoded_data)
+
+        #encoded_data = np.array(encoded_data)
         ml.parameters['sodas_dict']['sodas_model'].fit_preprocess(data=encoded_data)
         ml.parameters['sodas_dict']['sodas_model'].fit_dim_red(data=encoded_data)
         projected_data =  ml.parameters['sodas_dict']['sodas_model'].project_data(data=encoded_data)
@@ -52,12 +59,13 @@ def main(ml_parameters):
             projections = projected_data,
             gids = gids
         )
-        np.save(os.path.join(ml.parameters['sodas_dict']['projection_dir'], 'saved_projection_data.npy'), stored_projections)
-    elif ml.parameters['sodas_projection']:
+        np.save(os.path.join(ml.parameters['io_dict']['projection_dir'], 'saved_projection_data.npy'), stored_projections)
+    else:
+        print('Loading graph projections...')
         # when loading projections, you must have saved the data in the dictionary format used in the ml.parameters['run_sodas_projection'] section
         # this stored the graphs and projections in the correct order, together, so that they can be indexed together
         # note, this will rewrite the data variable to ensure that data and projected_data are in the same order
-        loaded_projections = np.load(os.path.join(ml.parameters['sodas_dict']['projection_dir'], 'saved_projection_data.npy'),allow_pickle=True)
+        loaded_projections = np.load(os.path.join(ml.parameters['io_dict']['projection_dir'], 'saved_projection_data.npy'),allow_pickle=True)
         gids = loaded_projections.item().get('gids')
         check = 0
         for data in graph_data:
@@ -68,13 +76,13 @@ def main(ml_parameters):
             print('Projected data does not match loaded graphs...killing run...')
             exit(0)
         projected_data = loaded_projections.item().get('projections')
-    ml.parameters['samples_dir'] = os.path.join(ml_parameters['main_path'], 'sampled_data')
-    if os.path.isdir(ml.parameters['samples_dir']):
-        shutil.rmtree(ml.parameters['samples_dir'])
-    os.mkdir(ml.parameters['samples_dir'])
+    ml.parameters['io_dict']['samples_dir'] = os.path.join(ml_parameters['io_dict']['main_path'], 'sampled_data')
+    if os.path.isdir(ml.parameters['io_dict']['samples_dir']):
+        shutil.rmtree(ml.parameters['io_dict']['samples_dir'])
+    os.mkdir(ml.parameters['io_dict']['samples_dir'])
 
     # remove test data
-    rng = np.random.default_rng(seed=ml.parameters['sampling_seed'])
+    rng = np.random.default_rng(seed=ml.parameters['sampling_dict']['sampling_seed'])
     #note that y values are added here as the test set is sampled via y_binning
     test_idx, nontest_idx = sampling.run_sampling(graph_data,sampling_type=ml.parameters['sampling_dict']['test_sampling_type'],
                                                            split=ml.parameters['sampling_dict']['split'][0],rng=rng,
@@ -85,15 +93,15 @@ def main(ml_parameters):
         projections=[projected_data[index] for index in test_idx],
         gids=[graph_data[index].gid for index in test_idx]
     )
-    np.save(os.path.join(ml.parameters['samples_dir'], 'stored_test_data.npy'),stored_test_data)
+    np.save(os.path.join(ml.parameters['io_dict']['samples_dir'], 'stored_test_data.npy'),stored_test_data)
 
     # run pretraining
     pretraining_data = None
-    if ml.parameters['run_pretrain']:
+    if ml.parameters['model_dict']['pre_training']:
         # perform pretraining
-        if os.path.isdir(ml.parameters['pretrain_dir']):
-            shutil.rmtree(ml.parameters['pretrain_dir'])
-        os.mkdir(ml.parameters['pretrain_dir'])
+        if os.path.isdir(ml.parameters['io_dict']['pretrain_dir']):
+            shutil.rmtree(ml.parameters['io_dict']['pretrain_dir'])
+        os.mkdir(ml.parameters['io_dict']['pretrain_dir'])
         # remove pretrain data
         pretrain_idx, nonpretrain_idx = sampling.run_sampling(projected_data, sampling_type=ml.parameters['sampling_dict'][
                 'pretraining_sampling_type'],
@@ -107,18 +115,18 @@ def main(ml_parameters):
             training=[graph_data[index].gid for index in pretrain_idx],
             validation=None
         )
-        np.save(os.path.join(ml.parameters['pretrain_dir'], 'train_valid_split.npy'), stored_pretrain_data, fix_imports=False)
+        np.save(os.path.join(ml.parameters['io_dict']['pretrain_dir'], 'train_valid_split.npy'), stored_pretrain_data, fix_imports=False)
 
     # loop over number of requested models
-    ml.parameters['model_dir'] = os.path.join(ml.parameters['main_path'],'model_samples')
-    if os.path.isdir(ml.parameters['model_dir']):
-        shutil.rmtree(ml.parameters['model_dir'])
-    os.mkdir(ml.parameters['model_dir'])
-    for iteration in range(ml.parameters['n_models']):
-        ml.parameters['model_save_dir'] = os.path.join(ml.parameters['model_dir'], str(iteration))
-        if os.path.isdir(ml.parameters['model_save_dir']):
-            shutil.rmtree(ml.parameters['model_save_dir'])
-        os.mkdir(ml.parameters['model_save_dir'])
+    ml.parameters['io_dict']['model_dir'] = os.path.join(ml.parameters['io_dict']['main_path'],'model_samples')
+    if os.path.isdir(ml.parameters['io_dict']['model_dir']):
+        shutil.rmtree(ml.parameters['io_dict']['model_dir'])
+    os.mkdir(ml.parameters['io_dict']['model_dir'])
+    for iteration in range(ml.parameters['model_dict']['n_models']):
+        ml.parameters['io_dict']['model_save_dir'] = os.path.join(ml.parameters['io_dict']['model_dir'], str(iteration))
+        if os.path.isdir(ml.parameters['io_dict']['model_save_dir']):
+            shutil.rmtree(ml.parameters['io_dict']['model_save_dir'])
+        os.mkdir(ml.parameters['io_dict']['model_save_dir'])
         
         # sample data and train model
         train_idx, valid_idx = sampling.run_sampling(projected_data,sampling_type=ml.parameters['sampling_dict']['sampling_type'],
@@ -133,7 +141,7 @@ def main(ml_parameters):
             training=train_data,
             validation=valid_data
         )
-        np.save(os.path.join(ml.parameters['model_save_dir'],'train_valid_split.npy'), partitioned_data)
+        np.save(os.path.join(ml.parameters['io_dict']['model_save_dir'],'train_valid_split.npy'), partitioned_data)
          
 if __name__ == "__main__":
     import time
@@ -141,82 +149,48 @@ if __name__ == "__main__":
 
     # setup parameters
     path = str(Path(__file__).parent)
-    ml_parameters = dict(gnn_dim=100,
-                         num_convs=5,
-                         num_inputs=5,
-                         num_epochs=10,
-                         BATCH_SIZE=1,
-                         n_models=3,
-                         world_size = torch.cuda.device_count(),
-                         sampling_seed=12345,
-                         graph_cutoff=4.0,
-                         LEARN_RATE=2e-4,
-                         train_tolerance=1e-5,
-                         is_dihedral=False,
-                         remove_old_model=False,
-                         interpretable=False,
-                         pre_training=True,
-                         run_pretrain=True,
-                         write_indv_pred=False,
-                         restart_training=False,
-                         sodas_projection=True,
-                         run_sodas_projection=True,
-                         run_ddp = False,
-                         main_path=path,
-                         device='cuda',
-                         restart_model_name=None,
-                         graph_data_dir=os.path.join(path, 'graph_data'),
-                         model_dir=None,
-                         model_save_dir=None,
-                         pretrain_dir=os.path.join(path, 'pre_training'),
-                         results_dir=None,
-                         samples_dir=None,
-                         elements=['Al'],
-                         sampling_dict=dict(test_sampling_type='y_bin',
-                                            pretraining_sampling_type='kmeans',
-                                            sampling_type='gaussian_mixture',
-                                            split=[0.2, 0.1, 0.9],
-                                            clusters=5
-                                            ),
-                         sodas_dict=dict(
-                             sodas_model=SODAS(mod=ALIGNN(
-                                 encoder=Encoder(num_species=119, cutoff=4.0, dim=100, act_func=nn.SiLU()),
-                                 processor=Processor(num_convs=5, dim=100),
-                                 decoder=Decoder(in_dim=100, out_dim=10, act_func=nn.SiLU())
-                             ),
-                                 ls_mod=umap_.UMAP(n_neighbors=15, min_dist=0.5, n_components=2)
-                             ),
-                             projection_dir=os.path.join(path, 'sodas_projection')
-                         ),
-                         loader_dict=dict(
-                             shuffle_loader=True,
-                             batch_size=[10, 100, 100],
-                             num_workers=0,
-                             shuffle_steps=10
-                         ),
-                         model_dict=dict(
-                             n_models=1,
-                             num_epochs=[2, 2],
-                             train_tolerance=0.0001,  # should probably make this a list for [pretrain,train]
-                             max_deltas=10,
-                             accumulate_loss=['sum', 'exact', 'exact'],
-                             loss_func=torch.nn.MSELoss(),
-                             model=ALIGNN(
-                                 encoder=Encoder(num_species=1, cutoff=4.0, dim=50, act_func=nn.SiLU()),
-                                 processor=Processor(num_convs=5, dim=50, conv_type='mesh'),
-                                 decoder=PositiveScalarsDecoder(dim=50),
-                             ),
-                             optimizer_params=dict(
-                                 lr_scale=[1.0, 0.05],
-                                 dynamic_lr=False,
-                                 dist_type='exp',
-                                 optimizer='AdamW',
-                                 params_group={
-                                     'lr': 0.0001
-                                 }
-                             )
-                        )
-                    )
+    ml_parameters = dict(
+        device_dict=dict(
+            device='cuda',
+            pin_memory=False,
+        ),
+        io_dict=dict(
+            main_path=path,
+            restart_model_name='',
+            graph_data_dir=os.path.join(path, 'graph_data'),
+            model_dir='',
+            model_save_dir='',
+            results_dir='',
+            pretrain_dir=os.path.join(path, 'pre_training'),
+            samples_dir='',
+            projection_dir=os.path.join(path, 'sodas_projection'),
+        ),
+        sampling_dict=dict(test_sampling_type='y_bin',
+                           pretraining_sampling_type='gaussian_mixture',
+                           sampling_type='gaussian_mixture',
+                           split=[0.2, 0.2, 0.9],
+                           clusters=5,
+                           sampling_seed=12345,
+                           ),
+        loader_dict=dict(
+            num_workers=0,
+        ),
+        model_dict=dict(
+            n_models=2,
+            pre_training=True
+        ),
+        sodas_dict=dict(
+            run_sodas=True,
+            sodas_model=SODAS(mod=ALIGNN(
+                encoder=Encoder(num_species=1, cutoff=4.0, dim=100, act_func=nn.SiLU()),
+                processor=Processor(num_convs=5, dim=100),
+                decoder=Decoder(in_dim=100, out_dim=10, act_func=nn.SiLU())
+            ),
+                ls_mod=umap_.UMAP(n_neighbors=15, min_dist=0.5, n_components=2)
+            ),
+        )
+    )
+
 
     main(ml_parameters)
 

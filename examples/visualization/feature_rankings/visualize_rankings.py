@@ -117,6 +117,7 @@ def plot_data(data):
 
         bp = ax2[i].boxplot(sub_data, patch_artist=True, boxprops=dict(facecolor=colors[i], color='k'))
 
+        sub_data = [x for x in sub_data if x != []]
         vp = ax3[i].violinplot(sub_data)
 
         violin_parts = vp

@@ -1,6 +1,6 @@
 from ..utilities.structure_properties import *
 from ..utilities.physics_database import Physics_data
-from ..sodas.utils.alignn import *
+from src.characterization.sodas.utils.alignn import *
 from .graph import Graph_Data
 from .graph import atoms2graph
 import torch

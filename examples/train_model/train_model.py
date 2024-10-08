@@ -20,21 +20,21 @@ def main(ml_parameters):
     ml.set_params(ml_parameters)
 
     # create model directories
-    if ml_parameters['restart_training']:
-        ml.parameters['model_dir'] = os.path.join(ml_parameters['main_path'], 'models_restart')
+    if ml_parameters['model_dict']['restart_training']:
+        ml.parameters['io_dict']['model_dir'] = os.path.join(ml_parameters['io_dict']['main_path'], 'models_restart')
     else:
-        ml.parameters['model_dir'] = os.path.join(ml_parameters['main_path'], 'models')
-    if os.path.isdir(ml.parameters['model_dir']):
-        shutil.rmtree(ml.parameters['model_dir'])
-    os.mkdir(ml.parameters['model_dir'])
+        ml.parameters['io_dict']['model_dir'] = os.path.join(ml_parameters['io_dict']['main_path'], 'models')
+    if os.path.isdir(ml.parameters['io_dict']['model_dir']):
+        shutil.rmtree(ml.parameters['io_dict']['model_dir'])
+    os.mkdir(ml.parameters['io_dict']['model_dir'])
 
     # run pretraining
-    if ml.parameters['run_pretrain']:
+    if ml.parameters['model_dict']['pre_training']:
         print('Performing pretraining...')
 
-        if ml.parameters['run_ddp']:
+        if ml.parameters['device_dict']['run_ddp']:
             processes = []
-            for rank in range(ml.parameters['world_size']):
+            for rank in range(ml.parameters['device_dict']['world_size']):
                 p = mp.Process(target=run_pre_training, args=(rank, ml,))
                 p.start()
                 processes.append(p)
@@ -45,10 +45,10 @@ def main(ml_parameters):
             run_pre_training(rank=0, ml=ml)
 
     for iteration in range(ml.parameters['model_dict']['n_models']):
-        if ml.parameters['run_ddp']:
-            print('Performing training on model ',iteration)
+        print('Performing training on model ', iteration)
+        if ml.parameters['device_dict']['run_ddp']:
             processes = []
-            for rank in range(ml.parameters['world_size']):
+            for rank in range(ml.parameters['device_dict']['world_size']):
                 p = mp.Process(target=run_training, args=(rank, iteration,ml,))
                 p.start()
                 processes.append(p)
@@ -64,55 +64,57 @@ if __name__ == "__main__":
     # setup parameters
     path = str(Path(__file__).parent)
     ml_parameters = dict(
-                         world_size = torch.cuda.device_count(),
-                         sampling_seed=12345,
-                         remove_old_model=False,
-                         interpretable=False,
-                         pre_training=True,
-                         run_pretrain=True,
-                         write_indv_pred=False,
-                         restart_training=False,
-                         run_ddp = False,
-                         pin_memory=False,
-                         main_path=path,
-                         ddp_backend='gloo',
-                         device='cuda',
-                         restart_model_name=None,
-                         graph_data_dir=os.path.join(path, '..\sodas_sampling\graph_data'),
-                         model_dir=None,
-                         model_save_dir=None,
-                         pretrain_dir=os.path.join(path, 'pre_training'),
-                         results_dir=None,
-                         samples_dir=os.path.join(path, 'data'),
-                         loader_dict = dict(
-                             shuffle_loader=True,
-                             batch_size=[1,1,1],
-                             num_workers=0,
-                             shuffle_steps=10
-                         ),
-                         model_dict = dict(
-                             n_models=1,
-                             num_epochs=[2,2],
-                             train_tolerance=0.0001, # should probably make this a list for [pretrain,train]
-                             max_deltas=10,
-                             accumulate_loss=['sum','exact','exact'],
-                             loss_func=torch.nn.MSELoss(),
-                             model = ALIGNN(
-                                    encoder=Encoder(num_species=119,cutoff=4.0,dim=10,act_func=nn.SiLU()),
-                                    processor=Processor(num_convs=5, dim=10,conv_type='mesh'),
-                                    decoder=PositiveScalarsDecoder(dim=10),
-                            ),
-                             optimizer_params=dict(
-                                 lr_scale=[1.0, 0.05],
-                                 dynamic_lr=False,
-                                 dist_type='exp',
-                                 optimizer = 'AdamW',
-                                 params_group = {
-                                     'lr':0.0001
-                                 }
-                             )
-                         )
-                    )
+                               device_dict = dict(
+                                   world_size=torch.cuda.device_count(),
+                                   device='cuda',
+                                   ddp_backend='gloo',
+                                   run_ddp=True,
+                                   pin_memory=False,
+                               ),
+                               io_dict = dict(
+                                   main_path=path,
+                                   restart_model_name='',
+                                   graph_data_dir=os.path.join(path, '..\sodas_sampling\graph_data'),
+                                   model_dir='',
+                                   model_save_dir='',
+                                   results_dir='',
+                                   pretrain_dir=os.path.join(path, 'pre_training'),
+                                   samples_dir=os.path.join(path, 'data'),
+                                   remove_old_model=False,
+                                   write_indv_pred=False,
+                               ),
+                               loader_dict=dict(
+                                    shuffle_loader=True,
+                                    batch_size=[100, 10, 10],
+                                    num_workers=0,
+                                    shuffle_steps=10
+                                ),
+                               model_dict=dict(
+                                    n_models=2,
+                                    num_epochs=[2,2],
+                                    train_tolerance=0.0001,  # should probably make this a list for [pretrain,train]
+                                    max_deltas=10,
+                                    accumulate_loss=['sum', 'exact', 'exact'],
+                                    loss_func=torch.nn.MSELoss(),
+                                    interpretable=False,
+                                    pre_training=True,
+                                    restart_training=False,
+                                    model=ALIGNN(
+                                        encoder=Encoder(num_species=1, cutoff=4.0, dim=100, act_func=nn.SiLU()),
+                                        processor=Processor(num_convs=5, dim=100, conv_type='mesh'),
+                                        decoder=PositiveScalarsDecoder(dim=100),
+                                    ),
+                                    optimizer_params=dict(
+                                        lr_scale=[1.0, 0.05],
+                                        dynamic_lr=False,
+                                        dist_type='exp',
+                                        optimizer='AdamW',
+                                        params_group={
+                                            'lr': 0.01
+                                        }
+                                    )
+                                )
+                            )
 
     main(ml_parameters)
 
