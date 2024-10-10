@@ -14,12 +14,11 @@ class GOP():
 
         self.params = params
 
-    def predict(self,data):
+    def predict(self,data,flatten=False):
         '''
         data = ASE atoms object
         '''
         predictions = []
-
         for snapshot in data:
             predictions.append([])
             symbols = np.unique(snapshot.get_chemical_symbols())
@@ -78,7 +77,20 @@ class GOP():
                             p_ii = counts[ii]/sum(counts)
                             op += p_ii*math.log(p_ii) + deg*p_ii
                         predictions[-1][-1][-1][-1] += math.pow(op,self.params['k'])
-        return predictions
+
+        if flatten:
+            flattened_predictions = []
+            for pred in predictions:
+                flattened_predictions.append([])
+                for p1 in pred:
+                    for p2 in p1:
+                        if len(flattened_predictions[-1]) == 0:
+                            flattened_predictions[-1] = p2
+                        else:
+                            flattened_predictions[-1] = flattened_predictions[-1] + p2
+            return predictions, flattened_predictions
+        else:
+            return predictions
 
 
 
