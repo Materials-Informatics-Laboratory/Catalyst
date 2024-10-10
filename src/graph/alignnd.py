@@ -1,7 +1,7 @@
 from ..utilities.structure_properties import *
 from ..utilities.physics_database import Physics_data
 from src.characterization.sodas.utils.alignn import *
-from .graph import Graph_Data
+from .graph import Atomic_Graph_Data
 from .graph import atoms2graph
 import torch
 
@@ -55,7 +55,7 @@ def alignnd(atoms,cutoff,dihedral=False, store_atoms=False, use_pt=False,include
             x_ang = np.concatenate([x_bnd_ang])
             mask_dih_ang = [False]
 
-        data = Graph_Data(
+        data = Atomic_Graph_Data(
             atoms = atms,
             edge_index_G=torch.tensor(edge_index_G, dtype=torch.long),
             edge_index_A=torch.tensor(edge_index_A, dtype=torch.long),
@@ -68,7 +68,7 @@ def alignnd(atoms,cutoff,dihedral=False, store_atoms=False, use_pt=False,include
             ang_amounts = torch.tensor(data_amounts['x_ang'], dtype=torch.long),
         )
     else:
-        data = Graph_Data(
+        data = Atomic_Graph_Data(
             atoms=atms,
             edge_index_G=torch.tensor(edge_index_G, dtype=torch.long),
             edge_index_A=None,
@@ -207,7 +207,7 @@ def realignnd(structures,cutoff,dihedral=False,store_atoms=False,use_pt=False,in
         scale += len(atoms)
 
     if include_angs:
-        data = Graph_Data(
+        data = Atomic_Graph_Data(
             atoms=atms,
             edge_index_G=torch.tensor(f_edge_index_G, dtype=torch.long),
             edge_index_A=torch.tensor(f_edge_index_A, dtype=torch.long),
@@ -220,7 +220,7 @@ def realignnd(structures,cutoff,dihedral=False,store_atoms=False,use_pt=False,in
             mask_dih_ang = torch.tensor(f_mask_dih_ang, dtype=torch.bool)
         )
     else:
-        data = Graph_Data(
+        data = Atomic_Graph_Data(
             atoms=atms,
             edge_index_G=torch.tensor(f_edge_index_G, dtype=torch.long),
             edge_index_A=None,
@@ -314,7 +314,7 @@ def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[],store_atoms=False
                 if dihedral:
                     data_amounts["x_dih_ang"].append(len(x_dih_ang) - 1)
 
-                data.append(Graph_Data(
+                data.append(Atomic_Graph_Data(
                     atoms=atms,
                     edge_index_G=torch.tensor(tmp_edge_index_G, dtype=torch.long),
                     edge_index_A=torch.tensor(edge_index_A, dtype=torch.long),
@@ -327,7 +327,7 @@ def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[],store_atoms=False
                     mask_dih_ang=torch.tensor(mask_dih_ang, dtype=torch.bool)
                 ))
             else:
-                data.append(Graph_Data(
+                data.append(Atomic_Graph_Data(
                     atoms=atms,
                     edge_index_G=torch.tensor(tmp_edge_index_G, dtype=torch.long),
                     edge_index_A=None,
@@ -398,7 +398,7 @@ def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False, store_a
                 x_ang = np.concatenate([x_bnd_ang])
                 mask_dih_ang = [False]
 
-            data.append(Graph_Data(
+            data.append(Atomic_Graph_Data(
                     atoms=atm,
                     edge_index_G=torch.tensor(edge_index_G, dtype=torch.long),
                     edge_index_A=torch.tensor(edge_index_A, dtype=torch.long),
@@ -412,7 +412,7 @@ def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False, store_a
                 )
             )
         else:
-            data.append(Graph_Data(
+            data.append(Atomic_Graph_Data(
                     atoms=atm,
                     edge_index_G=torch.tensor(edge_index_G, dtype=torch.long),
                     edge_index_A=None,

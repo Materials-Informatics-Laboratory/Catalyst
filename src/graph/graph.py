@@ -1,15 +1,50 @@
 from ase.neighborlist import neighbor_list
 
-from random import randint
 import pandas as pd
 import numpy as np
+import secrets
 import sys
 
 from torch_geometric.data import Data
 
 mask2index = lambda mask: np.flatnonzero(mask)
 
-class Graph_Data(Data):
+class Generic_Graph_Data(Data):
+    """Custom PyG data for representing a pair of two graphs: one for the original graph and the other for its line grpah variant.
+    This data is used to represent an arbitrary graph and does not hard-code variables based on their atomistic connection.
+    """
+
+    def __init__(self,
+                 reference,
+                 edge_index_G,
+                 edge_index_A,
+                 node_G,
+                 node_A,
+                 edge_A,
+                 mask_edge_A=None
+                 ):
+        super().__init__()
+        self.reference = reference
+        self.edge_index_G = edge_index_G
+        self.edge_index_A = edge_index_A
+        self.node_G = node_G
+        self.node_A = node_A
+        self.edge_A = edge_A
+        self.mask_edge_A = mask_edge_A
+        self.gid = None
+
+    def __inc__(self, key, value, *args, **kwargs):
+        if key == 'edge_index_G':
+            return self.node_G.size(0)
+        if key == 'edge_index_A':
+            return self.node_A.size(0)
+        else:
+            return super().__inc__(key, value, *args, **kwargs)
+
+    def generate_gid(self):
+        self.gid = secrets.token_hex(64)
+
+class Atomic_Graph_Data(Data):
     """Custom PyG data for representing a pair of two graphs: one for regular atomic
     structure (atom and bonds) and the other for bond/dihedral angles.
 
@@ -61,7 +96,7 @@ class Graph_Data(Data):
             return super().__inc__(key, value, *args, **kwargs)
 
     def generate_gid(self):
-        self.gid = hex(randint(-sys.maxsize - 1, sys.maxsize))
+        self.gid = secrets.token_hex(64)
 
 def index2mask(idx_arr, n):
     mask = np.zeros(n, dtype=int)
@@ -157,3 +192,60 @@ def atoms2knngraph(atoms, cutoff, k=12, scale_inv=True):
     edge_attr = D.astype(np.float32)
 
     return edge_index, edge_attr
+
+'''
+DEPRECIATED CLASS: To remove prior to v1.0
+'''
+class Graph_Data(Data):
+    """Custom PyG data for representing a pair of two graphs: one for regular atomic
+    structure (atom and bonds) and the other for bond/dihedral angles.
+
+    The following arguments assume an atomic graph of `N_atm` atoms with `N_bnd` bonds,
+    and an angular graph of `N_ang` angles (including dihedral angles, if there's any).
+
+    Args:
+        edge_index_G (LongTensor): Edge index of the atomic graph "G".
+        x_atm (Tensor): Atom features.
+        x_bnd (Tensor): Bond features.
+        edge_index_A (LongTensor): Edge index of the angular graph "A".
+        x_ang (Tensor): Angle features.
+        mask_dih_ang (Boolean Tensor, optional): If the angular graph contains dihedral
+            angles, this mask indicates which angles are dihedral angles.
+    """
+
+    def __init__(self,
+                 atoms,
+                 edge_index_G,
+                 edge_index_A,
+                 x_atm,
+                 x_bnd,
+                 x_ang,
+                 atm_amounts,
+                 bnd_amounts,
+                 ang_amounts,
+                 mask_dih_ang=None
+                 ):
+        super().__init__()
+        self.atoms = atoms
+        self.edge_index_G = edge_index_G
+        self.edge_index_A = edge_index_A
+        self.x_atm = x_atm
+        self.x_bnd = x_bnd
+        self.x_ang = x_ang
+        self.mask_dih_ang = mask_dih_ang
+        self.atm_amounts = atm_amounts
+        self.bnd_amounts = bnd_amounts
+        self.ang_amounts = ang_amounts
+
+        self.gid = None
+
+    def __inc__(self, key, value, *args, **kwargs):
+        if key == 'edge_index_G':
+            return self.x_atm.size(0)
+        if key == 'edge_index_A':
+            return self.x_bnd.size(0)
+        else:
+            return super().__inc__(key, value, *args, **kwargs)
+
+    def generate_gid(self):
+        self.gid = secrets.token_hex(64)

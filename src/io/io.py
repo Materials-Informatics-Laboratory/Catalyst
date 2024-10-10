@@ -1,4 +1,4 @@
-from ..graph.graph import Graph_Data
+from ..graph.graph import Atomic_Graph_Data, Graph_Data
 import numpy as np
 import torch
 import glob
@@ -26,9 +26,52 @@ def read_training_data(params,samples_file,pretrain=False):
         validation_graphs = [torch.load(x) for x in selected_graphs]
 
     return dict(training=training_graphs, validation=validation_graphs)
+def port_graphdata_to_atomicgraphdata(path):
+    graph_files = glob.glob(os.path.join(path, '*'))
+    for graph in graph_files:
+        data = torch.load(graph)
+        if isinstance(data,Graph_Data):
+            if not hasattr(data, 'atoms'):
+                atoms = None
+            else:
+                atoms = data.atoms
+            if not hasattr(data, 'y'):
+                y = None
+            else:
+                y = data.y
+            if not hasattr(data, 'x_ang'):
+                x_ang = None
+            else:
+                x_ang = data.x_ang
+            if not hasattr(data, 'mask_dih_ang'):
+                mask_dih_ang = None
+            else:
+                mask_dih_ang = data.mask_dih_ang
+            if not hasattr(data, 'ang_amounts'):
+                ang_amounts = None
+            else:
+                ang_amounts = data.ang_amounts
+            new_data = Atomic_Graph_Data(
+                atoms=atoms,
+                edge_index_G=data.edge_index_G,
+                edge_index_A=data.edge_index_A,
+                x_atm=data.x_atm,
+                x_bnd=data.x_bnd,
+                x_ang=x_ang,
+                mask_dih_ang=mask_dih_ang,
+                atm_amounts=data.atm_amounts,
+                bnd_amounts=data.bnd_amounts,
+                ang_amounts=ang_amounts,
+            )
+            new_data.y = y
+            if not hasattr(data, 'gid'):
+                new_data.generate_gid()
+            else:
+                new_data.gid = data.gid
+            os.remove(graph)
+            torch.save(new_data, os.path.join(path, new_data.gid + '.pt'))
 
 def port_graphs_without_gids(params):
-    print('Porting graphs')
     graph_files = glob.glob(os.path.join(params['graph_data_dir'], '*'))
 
     check = 1
@@ -36,7 +79,7 @@ def port_graphs_without_gids(params):
         data = torch.load(graph)
         if not hasattr(data, 'gid'):
             if check:
-                from ..graph.graph import Graph_Data
+                from ..graph.graph import Atomic_Graph_Data
                 check = 0
 
             if not hasattr(data, 'atoms'):
@@ -60,7 +103,7 @@ def port_graphs_without_gids(params):
             else:
                 ang_amounts = data.ang_amounts
 
-            new_data = Graph_Data(
+            new_data = Atomic_Graph_Data(
                 atoms=atoms,
                 edge_index_G=data.edge_index_G,
                 edge_index_A=data.edge_index_A,
