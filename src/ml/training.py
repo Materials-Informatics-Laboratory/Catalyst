@@ -24,16 +24,87 @@ import sys
 import os
 import gc
 
+def accumulate_predictions(pred,data,loss_tag):
+    if loss_tag == 'exact':
+        if hasattr(data, 'x_atm_batch'): #atomic graph
+            d = pred[0].flatten()
+            x = torch.unique(data['x_atm_batch'])
+            sorted_atms = [None] * len(x)
+            dd = data['x_atm_batch']
+            for i, xx in enumerate(x):
+                xw = torch.where(dd == xx)
+                sorted_atms[i] = d[xw]
+            d = pred[1].flatten()
+            x = torch.unique(data['x_bnd_batch'])
+            sorted_bnds = [None] * len(x)
+            dd = data['x_bnd_batch']
+            for i, xx in enumerate(x):
+                xw = torch.where(dd == xx)
+                sorted_bnds[i] = d[xw]
+            if hasattr(data, 'x_ang_batch'):
+                d = pred[2].flatten()
+                x = torch.unique(data['x_ang_batch'])
+                sorted_angs = [None] * len(x)
+                dd = data['x_ang_batch']
+                for i, xx in enumerate(x):
+                    xw = torch.where(dd == xx)
+                    sorted_angs[i] = d[xw]
+            preds = []
+            for i in range(len(sorted_atms)):
+                if hasattr(data, 'x_ang_batch'):
+                    preds.append(sorted_atms[i].sum() + sorted_angs[i].sum() + sorted_bnds[i].sum())
+                else:
+                    preds.append(sorted_atms[i].sum() + sorted_bnds[i].sum())
+            preds = torch.stack(preds)
+        if hasattr(data, 'node_G_batch'): # generic graph
+            d = pred[0].flatten()
+            x = torch.unique(data['node_G_batch'])
+            sorted_nodes_G = [None] * len(x)
+            dd = data['node_G_batch']
+            for i, xx in enumerate(x):
+                xw = torch.where(dd == xx)
+                sorted_nodes_G[i] = d[xw]
+            d = pred[1].flatten()
+            x = torch.unique(data['node_A_batch'])
+            sorted_nodes_A = [None] * len(x)
+            dd = data['node_A_batch']
+            for i, xx in enumerate(x):
+                xw = torch.where(dd == xx)
+                sorted_nodes_A[i] = d[xw]
+            if hasattr(data, 'edge_A_batch'):
+                d = pred[2].flatten()
+                x = torch.unique(data['edge_A_batch'])
+                sorted_edges_A = [None] * len(x)
+                dd = data['edge_A_batch']
+                for i, xx in enumerate(x):
+                    xw = torch.where(dd == xx)
+                    sorted_edges_A[i] = d[xw]
+            preds = []
+            for i in range(len(sorted_nodes_G)):
+                if hasattr(data, 'edge_A_batch'):
+                    preds.append(sorted_nodes_G[i].sum() + sorted_nodes_A[i].sum() + sorted_edges_A[i].sum())
+                else:
+                    preds.append(sorted_nodes_G[i].sum() + sorted_nodes_A[i].sum())
+            preds = torch.stack(preds)
+        y = data.y.flatten()
+    elif loss_tag == 'sum':
+        preds = None
+        for p in pred:
+            if preds is None:
+                preds = p.sum()
+            else:
+                preds += p.sum()
+        y = data.y.flatten().sum()
+
+    return preds, y
+
 def train(loader,model,parameters,optimizer,pretrain=False):
     model.train()
-
     if pretrain:
         loss_accum = parameters['model_dict']['accumulate_loss'][0]
     else:
         loss_accum = parameters['model_dict']['accumulate_loss'][1]
-
     total_loss = 0.0
-
     if parameters['device_dict']['run_ddp'] == False:
         model.to(parameters['device_dict']['device'])
     loss_fn = parameters['model_dict']['loss_func']
@@ -43,53 +114,7 @@ def train(loader,model,parameters,optimizer,pretrain=False):
             optimizer.zero_grad(set_to_none=True)
 
             pred = model(data)
-
-            if loss_accum == 'exact':
-                if hasattr(data, 'x_atm_batch'):
-                    d = pred[0].flatten()
-                    x = torch.unique(data['x_atm_batch'])
-                    sorted_atms = [None] * len(x)
-                    dd = data['x_atm_batch']
-                    for i,xx in enumerate(x):
-                        xw = torch.where(dd == xx)
-                        sorted_atms[i] = d[xw]
-                    d = pred[1].flatten()
-                    x = torch.unique(data['x_bnd_batch'])
-                    sorted_bnds = [None] * len(x)
-                    dd = data['x_bnd_batch']
-                    for i,xx in enumerate(x):
-                        xw = torch.where(dd == xx)
-                        sorted_bnds[i] = d[xw]
-                    if hasattr(data,'x_ang_batch'):
-                        d = pred[2].flatten()
-                        x = torch.unique(data['x_ang_batch'])
-                        sorted_angs = [None] * len(x)
-                        dd = data['x_ang_batch']
-                        for i,xx in enumerate(x):
-                            xw = torch.where(dd == xx)
-                            sorted_angs[i] = d[xw]
-
-                    preds = []
-                    for i in range(len(sorted_atms)):
-                        if hasattr(data, 'x_ang_batch'):
-                            preds.append(sorted_atms[i].sum() + sorted_angs[i].sum() + sorted_bnds[i].sum())
-                        else:
-                            preds.append(sorted_atms[i].sum() + sorted_bnds[i].sum())
-                    preds = torch.stack(preds)
-
-                    y = data.y.flatten()
-                else:
-                    '''
-                    Implement generic routines here for non alignn systems
-                    '''
-                    pass
-            elif loss_accum == 'sum':
-                if hasattr(data, 'x_ang_batch') and hasattr(data, 'x_ang_batch'):
-                    preds = pred[0].sum() + pred[1].sum() + pred[2].sum()
-                else:
-                    preds = pred[0].sum() + pred[1].sum()
-                y = data.y.flatten().sum()
-
+            preds, y = accumulate_predictions(pred,data,loss_accum)
             loss = loss_fn(preds,y)
             nonlocal total_loss
             total_loss += loss.item()
