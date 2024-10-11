@@ -212,6 +212,9 @@ class ML():
             print('No loader dictionary set...killing run...')
             exit(0)
 
+        if new_params['device_dict']['run_ddp'] == False:
+            new_params['device_dict']['world_size'] = 1
+
         self.parameters = new_params
 
         if save_params:

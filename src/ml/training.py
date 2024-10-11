@@ -125,7 +125,7 @@ def train(loader,model,parameters,optimizer,pretrain=False):
         optimizer.step(closure)
     if parameters['device_dict']['run_ddp']:
         total_loss = reduce_tensor(torch.tensor(total_loss).to(parameters['device_dict']['device'])).item()
-    return total_loss
+    return total_loss / (len(loader)*parameters['device_dict']['world_size'])
 
 def run_training(rank,iteration,ml=None):
 
