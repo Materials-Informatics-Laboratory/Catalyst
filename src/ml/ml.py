@@ -27,28 +27,34 @@ class ML():
                                    remove_old_model=False,
                                    write_indv_pred=False,
                                ),
-                               sampling_dict = dict(test_sampling_type = '',
-                                                    pretraining_sampling_type = '',
-                                                    sampling_type = '',
-                                                    train_split = 0.8,
-                                                    clusters=1,
+                               sampling_dict = dict(sampling_types=['random','random','random'],
+                                                    split=[0.5,0.5,0.5],
                                                     sampling_seed=112358,
+                                                    params_groups = [{
+                                                        'clusters':1,
+                                                    },{
+                                                        'clusters':1,
+                                                    },{
+                                                        'clusters':1,
+                                                    }]
                                 ),
                                 loader_dict=dict(
                                     shuffle_loader=False,
-                                    batch_size=[1,1],
+                                    batch_size=[1,1,1],
+                                    shuffle_steps=10,
                                     num_workers=0
                                 ),
-                               sodas_dict = dict(
-                                    run_sodas=True,
-                                    sodas_model = None
+                               characterization_dict = dict(
+                                    run_characterization=True,
+                                    model = None
                                 ),
                                model_dict = dict(
                                    n_models=1,
                                    num_epochs=[1, 1],
                                    train_tolerance=1.0,
+                                   max_deltas=4,
+                                   accumulate_loss=['sum', 'sum', 'sum'],
                                    model = None,
-                                   accumulate_loss='',
                                    interpretable=False,
                                    pre_training=False,
                                    restart_training=False,
@@ -78,17 +84,16 @@ class ML():
         self.model = self.parameters['model_dict']['model']
 
     def set_params(self,new_params,save_params=True):
-        if not 'sodas_dict' in new_params:
-            print('WARNING: No SODAS dictionary set...')
-        if 'sodas_dict' in new_params:
-            if not 'sodas_model' in new_params['sodas_dict']:
-                print('No sodas model in sodas dictionary...killing job...')
-                exit(0)
-            if not 'run_sodas' in new_params['sodas_dict']:
-                print('WARNING: run_sodas not set in sodas dictionary...setting to True')
-                new_params['run_sodas']['gen_encodings'] = True
+        if not 'characterization_dict' in new_params:
+            print('WARNING: No characterization dictionary set...')
+        if 'characterization_dict' in new_params:
+            if not 'model' in new_params['characterization_dict']:
+                print('Warning: no model in characterization dictionary...')
+            if not 'run_characterization' in new_params['characterization_dict']:
+                print('WARNING: run_characterization not set in characterization dictionary...setting to True')
+                new_params['characterization_dict']['characterization'] = True
             if 'run_ddp' in new_params['device_dict']:
-                print('run_ddp cannot be used during SODAS sampling...setting to false')
+                print('run_ddp cannot be used with cahracterization routines...setting to false')
                 new_params['device_dict']['run_ddp'] = False
         else:
             if not 'model_dict' in new_params:
@@ -151,6 +156,8 @@ class ML():
                     print(
                         'world_size not set while using DDP...attempting to grab current world_size based on GPU count...')
                     new_params['device_dict']['world_size'] = torch.cuda.device_count()
+            if new_params['device_dict']['run_ddp'] == False:
+                new_params['device_dict']['world_size'] = 1
             if not 'dynamic_lr' in new_params['model_dict']['optimizer_params']:
                 print('WARNING: Dynamic learning rates not set...detting to false')
                 new_params['model_dict']['optimizer_params']['dynamic_lr'] = False
@@ -209,9 +216,6 @@ class ML():
         if not 'loader_dict' in new_params:
             print('No loader dictionary set...killing run...')
             exit(0)
-
-        if new_params['device_dict']['run_ddp'] == False:
-            new_params['device_dict']['world_size'] = 1
 
         self.parameters = new_params
 

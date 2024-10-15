@@ -2,7 +2,9 @@ from sklearn.cluster import SpectralClustering
 from sklearn.mixture import GaussianMixture
 from sklearn.cluster import KMeans
 from sklearn.cluster import Birch
+import networkx as nx
 import numpy as np
+import math
 
 def check_clusters(data,labels):
     import matplotlib.pyplot as plt
@@ -16,14 +18,14 @@ def check_samples(data,samples,non_samples):
     plt.show()
 
 def random(data,split,rng):
-    npoints = int(split * float(len(data)))
+    npoints = math.ceil(split * float(len(data)))
     X = np.arange(len(data))
     sampled_data = rng.choice(X, npoints, replace=False)
     non_samples = np.delete(X, sampled_data)
     return sampled_data, non_samples
 
 def kmeans(data,split,clusters,rng):
-    points_per_cluster = int(split*float(len(data))/float(clusters))
+    points_per_cluster = math.ceil(split*float(len(data))/float(clusters))
     kmeans = KMeans(n_clusters=clusters, random_state=0, n_init=10).fit(data)
     labels = kmeans.labels_
     sampled_data = None
@@ -71,7 +73,7 @@ def property_binning(data,y,split,clusters,rng):
             else:
                 binned_idx[i + 1].append(id)
     binned_idx = [bx for bx in binned_idx if bx != []]
-    points_per_cluster = int(split * float(len(data)) / float(len(binned_idx)))
+    points_per_cluster = math.ceil(split * float(len(data)) / float(len(binned_idx)))
 
     sampled_data = None
     remaining_data = None
@@ -96,7 +98,8 @@ def property_binning(data,y,split,clusters,rng):
     return sampled_data, remaining_data
 
 def gaussian_mixture(data,split,clusters,rng):
-    points_per_cluster = int(split * float(len(data)) / float(clusters))
+    points_per_cluster = math.ceil(split * float(len(data)) / float(clusters))
+
     labels = GaussianMixture(n_components=clusters).fit_predict(data)
 
     sampled_data = None
@@ -124,7 +127,7 @@ def gaussian_mixture(data,split,clusters,rng):
     return sampled_data, remaining_data
 
 def spectral(data,split,clusters,rng):
-    points_per_cluster = int(split * float(len(data)) / float(clusters))
+    points_per_cluster = math.ceil(split * float(len(data)) / float(clusters))
     labels = SpectralClustering(n_components=clusters).fit_predict(data)
 
     sampled_data = None
@@ -152,7 +155,7 @@ def spectral(data,split,clusters,rng):
     return sampled_data, remaining_data
 
 def birch(data,split,clusters,rng):
-    points_per_cluster = int(split * float(len(data)) / float(clusters))
+    points_per_cluster = math.ceil(split * float(len(data)) / float(clusters))
     labels = Birch(threshold=0.01, n_clusters=clusters).fit_predict(data)
 
     sampled_data = None
@@ -179,21 +182,42 @@ def birch(data,split,clusters,rng):
     print('Found ', len(sampled_data), ' points out of ', points_per_cluster * clusters, ' requested points')
     return sampled_data, remaining_data
 
-def run_sampling(data,sampling_type,split,rng,nclusters=1,y=None):
+def graph_clustering(data,split,leaf_size,neighbors,metric,rng):
+    from sklearn.neighbors import KDTree
+    G = nx.Graph()
+    tree = KDTree(data,metric=metric,leaf_size=leaf_size)
+    dist, ind = tree.query(data,k=neighbors+1)
+    for i, x in enumerate(data):
+        G.add_node(int(i))
+        for j in range(len(dist[i])):
+            if i != ind[i][j]:
+                G.add_edge(i,ind[i][j])
+    SG = list(nx.connected_components(G))
+    points_per_cluster = math.ceil(split * float(len(data)) / float(len(SG)))
+    for i,sg in enumerate(SG):
+        idg = list(G.subgraph(sg).copy().nodes())
+        if len(idg) > points_per_cluster:
+            sampled_data = rng.choice(idg, points_per_cluster, replace=False)
+    non_samples = np.delete(list(G.copy().nodes()), sampled_data)
+    return sampled_data, non_samples
+
+def run_sampling(data,sampling_type,split,rng,params_group,y=None):
     print('Performing',sampling_type,'sampling using a training ratio of',str(split*100.0),'%')
     if sampling_type == 'random':
         sampled_data, remaining_data = random(data=data,split=split,rng=rng)
     elif sampling_type == 'kmeans':
-        sampled_data, remaining_data = kmeans(data=data,split=split,clusters=nclusters,rng=rng)
+        sampled_data, remaining_data = kmeans(data=data,split=split,clusters=params_group['clusters'],rng=rng)
     elif sampling_type == 'y_bin':
-        sampled_data, remaining_data = property_binning(data=data,y=y,split=split,clusters=nclusters,rng=rng)
+        sampled_data, remaining_data = property_binning(data=data,y=y,split=split,clusters=params_group['clusters'],rng=rng)
     elif sampling_type == 'gaussian_mixture':
-        sampled_data, remaining_data = gaussian_mixture(data=data,split=split,clusters=nclusters,rng=rng)
+        sampled_data, remaining_data = gaussian_mixture(data=data,split=split,clusters=params_group['clusters'],rng=rng)
     elif sampling_type == 'spectral':
-        sampled_data, remaining_data = spectral(data=data,split=split,clusters=nclusters,rng=rng)
+        sampled_data, remaining_data = spectral(data=data,split=split,clusters=params_group['clusters'],rng=rng)
     elif sampling_type == 'birch':
-        sampled_data, remaining_data = birch(data=data,split=split,clusters=nclusters,rng=rng)
-
+        sampled_data, remaining_data = birch(data=data,split=split,clusters=params_group['clusters'],rng=rng)
+    elif sampling_type == 'graph_clustering':
+        sampled_data, remaining_data = graph_clustering(data=data,split=split,leaf_size=params_group['leaf_size'],
+                                            neighbors=params_group['neighbors'],metric=params_group['metric'],rng=rng)
     return sampled_data, remaining_data
 
 

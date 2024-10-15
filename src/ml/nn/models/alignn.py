@@ -9,13 +9,6 @@ from ..conv import GatedGCN
 from ..mlp import MLP
 
 class Encoder(nn.Module):
-    """ALIGNN/ALIGNN-d Encoder.
-    The encoder must take a PyG graph object `data` and output the same `data`
-    with additional fields `h_atm`, `h_bnd`, and `h_ang` that correspond to the atom, bond, and angle embedding.
-
-    The input `data` must have three fields `x_atm`, `x_bnd`, and `x_ang` that describe the atom type
-    (in onehot vectors), the bond lengths, and bond/dihedral angles (in radians).
-    """
     def __init__(self, num_species, cutoff,act_func, dim=128, dihedral=False):
         super().__init__()
         self.num_species = num_species
@@ -59,7 +52,7 @@ class Encoder(nn.Module):
 
 
 class Processor(nn.Module):
-    """ALIGNN Processor.
+    """
     The processor updates atom, bond, and angle embeddings.
     """
     def __init__(self, num_convs, dim,conv_type='mesh'):
@@ -127,9 +120,7 @@ class PositiveScalarsDecoder(nn.Module):
             return [atm_scalars, bnd_scalars]
 
 class ALIGNN(nn.Module):
-    """ALIGNN model.
-    Can optinally encode dihedral angles.
-    """
+
     def __init__(self, encoder, processor, decoder):
         super().__init__()
         self.encoder   = encoder

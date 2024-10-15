@@ -8,10 +8,7 @@ from ..conv import MeshGraphNetsConv
 
 
 class Encoder(nn.Module):
-    """MeshGraphNets Encoder.
-    The encoder must take a PyG graph object `data` and output the same `data`
-    with additional fields `h_node` and `h_edge` that correspond to the node and edge embedding.
-    """
+
     def __init__(self, num_species, node_dim, edge_dim):
         super().__init__()
         self.num_species = num_species
@@ -103,21 +100,3 @@ class MeshGraphNets(nn.Module):
         data = self.processor(data)
         return self.decoder(data)
 
-
-class MeshGraphNets_dpm(MeshGraphNets):
-    """Time-dependent MeshGraphNets for diffusion model.
-    """
-    def forward(self, data, t, sigma=1.0):
-        data = self.encoder(data, t)
-        data = self.processor(data)
-        return self.decoder(data) / sigma
-
-
-class MeshGraphNets_dpm_cond(MeshGraphNets):
-    """Time-dependent, conditional MeshGraphNets for conditional diffusion model.
-    """
-    def forward(self, x, x_cond, t):
-        data = x_cond
-        data = self.encoder(x, data, t)
-        data = self.processor(data)
-        return self.decoder(data)
