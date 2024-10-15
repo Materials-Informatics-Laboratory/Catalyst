@@ -4,11 +4,54 @@ import torch
 import glob
 import os
 
-def read_training_data(params,samples_file,pretrain=False):
-    training_graphs = []
-    validation_graphs = []
+import platform
+import psutil
+import GPUtil
 
-    graph_files = glob.glob(os.path.join(params['io_dict']['graph_data_dir'],'*'))
+
+def get_system_info():
+    system_info = platform.uname()
+    memory_info = psutil.virtual_memory()
+    gpus = GPUtil.getGPUs()
+
+    if not gpus:
+        info = dict(
+            system=system_info.system,
+            node=system_info.node,
+            release=system_info.release,
+            version=system_info.version,
+            machine=system_info.machine,
+            processor=system_info.processor,
+            cpu_count=psutil.cpu_count(logical=False),
+            logical_count=psutil.cpu_count(logical=True),
+            total_memory=memory_info.total,
+            ngpus=len(gpus),
+        )
+    else:
+        info = dict(
+            system=system_info.system,
+            node=system_info.node,
+            release=system_info.release,
+            version=system_info.version,
+            machine=system_info.machine,
+            processor=system_info.processor,
+            cpu_count=psutil.cpu_count(logical=False),
+            logical_count=psutil.cpu_count(logical=True),
+            total_memory=memory_info.total,
+            ngpus=len(gpus),
+            gpu_type=gpus[0].name,
+            gpu_driver=gpus[0].driver,
+            gpu_memory=gpus[0].memoryTotal
+        )
+    return info
+
+def read_training_data(params,samples_file,pretrain=False):
+    training_graphs = None
+    training_samples = None
+    validation_graphs = None
+    validation_samples = None
+
+    graph_files = glob.glob(os.path.join(params['io_dict']['data_dir'],'*'))
     graph_names = [graph.split('\\')[-1].split('.')[0] for graph in graph_files]
     samples = np.load(samples_file, allow_pickle=True)
     training_samples = samples.item().get('training')
@@ -25,7 +68,7 @@ def read_training_data(params,samples_file,pretrain=False):
         selected_graphs = [graph_files[i] for i in idx]
         validation_graphs = [torch.load(x) for x in selected_graphs]
 
-    return dict(training=training_graphs, validation=validation_graphs)
+    return dict(training=training_graphs, validation=validation_graphs), dict(training_samples=training_samples,validation_samples=validation_samples)
 def port_graphdata_to_atomicgraphdata(path):
     graph_files = glob.glob(os.path.join(path, '*'))
     for graph in graph_files:
@@ -72,7 +115,7 @@ def port_graphdata_to_atomicgraphdata(path):
             torch.save(new_data, os.path.join(path, new_data.gid + '.pt'))
 
 def port_graphs_without_gids(params):
-    graph_files = glob.glob(os.path.join(params['graph_data_dir'], '*'))
+    graph_files = glob.glob(os.path.join(params['data_dir'], '*'))
 
     check = 1
     for graph in graph_files:
@@ -121,4 +164,4 @@ def port_graphs_without_gids(params):
         elif data.gid is None:
             data.generate_gid()
         os.remove(graph)
-        torch.save(data, os.path.join(params['graph_data_dir'], data.gid + '.pt'))
+        torch.save(data, os.path.join(params['data_dir'], data.gid + '.pt'))

@@ -12,10 +12,11 @@ from ..utilities.distributions import get_distribution
 from .utils.distributed import ddp_destroy, ddp_setup, reduce_tensor
 from .utils.optimizer import set_optimizer
 from .utils.memory import optimizer_to
-from ..io.io import read_training_data
+from ..io.io import read_training_data, get_system_info
 
 from datetime import datetime
 import numpy as np
+import secrets
 import random
 import shutil
 import glob
@@ -128,43 +129,42 @@ def train(loader,model,parameters,optimizer,pretrain=False):
     return total_loss / (len(loader)*parameters['device_dict']['world_size'])
 
 def run_training(rank,iteration,ml=None):
+    system_info = get_system_info()
 
     parameters = ml.parameters
     if parameters['device_dict']['run_ddp']:
         ddp_setup(rank, parameters['device_dict']['world_size'], parameters['device_dict']['ddp_backend'])
-    #for iteration in range(parameters['model_dict']['n_models']):
-    parameters['io_dict']['model_save_dir'] = os.path.join(parameters['io_dict']['model_dir'], str(iteration))
+    ml.set_model()
+    ml.model.to(parameters['device_dict']['device'])
+    model = ml.model
+
+    parameters['io_dict']['model_dir'] = None
+    del parameters['io_dict']['model_dir']
+    parameters['io_dict']['model_dir'] = os.path.join(parameters['io_dict']['main_path'],'models',
+                                                      'training', str(iteration))
     if rank == 0:
-        if os.path.isdir(parameters['io_dict']['model_save_dir']):
-            shutil.rmtree(parameters['io_dict']['model_save_dir'])
-        os.mkdir(parameters['io_dict']['model_save_dir'])
+        if os.path.isdir(parameters['io_dict']['model_dir']):
+            shutil.rmtree(parameters['io_dict']['model_dir'])
+        os.makedirs(parameters['io_dict']['model_dir'], exist_ok=True)
         print('Reading data...')
 
-    data = read_training_data(parameters,
-                              os.path.join(parameters['io_dict']['samples_dir'], 'model_samples', str(iteration), 'train_valid_split.npy'))
+    if parameters['model_dict']['pre_training']:
+        parameters['io_dict']['loaded_model_name'] = glob.glob(os.path.join(parameters['io_dict']['main_path'],'models','pretraining','pre*'))
+    model_data = torch.load(parameters['io_dict']['loaded_model_name'][0])
+    model.load_state_dict(model_data['model'])
+    model.to(parameters['device_dict']['device'])
+    if parameters['device_dict']['run_ddp']:
+        model = DDP(model, device_ids=[rank], find_unused_parameters=True)
+        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+
+    data, samples = read_training_data(parameters,
+                              os.path.join(parameters['io_dict']['samples_dir'][1], str(iteration), 'train_valid_split.npy'))
     if rank == 0:
         print('Training model ', iteration)
         print('Training using ',len(data['training']), ' training points and ',len(data['validation']),' validation points...')
-        stats_file = open(os.path.join(parameters['io_dict']['model_save_dir'], 'loss.data'), 'w')
+        stats_file = open(os.path.join(parameters['io_dict']['model_dir'], 'loss.data'), 'w')
         stats_file.write('Training_loss     Validation loss\n')
         stats_file.close()
-
-    ml.set_model()
-    ml.model.to(ml.parameters['device_dict']['device'])
-    model = ml.model
-    if parameters['model_dict']['pre_training'] == False:
-        if parameters['model_dict']['restart_training']:
-            print('Restarting model training using model ', parameters['io_dict']['restart_model_name'])
-            model.load_state_dict(torch.load(ml.parameters['io_dict']['restart_model_name'],map_location=ml.parameters['device_dict']['device']))
-        if parameters['device_dict']['run_ddp']:
-            model = DDP(model, device_ids=[rank],find_unused_parameters=True)
-            model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-    else:
-        model_name = glob.glob(os.path.join(parameters['io_dict']['pretrain_dir'], 'model_*'))
-        model.load_state_dict(torch.load(model_name[0],map_location=ml.parameters['device_dict']['device']))
-        if parameters['device_dict']['run_ddp']:
-            model = DDP(model, device_ids=[rank], find_unused_parameters=True)
-            model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
 
     follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm','x_bnd']
     if parameters['device_dict']['run_ddp']:
@@ -249,7 +249,7 @@ def run_training(rank,iteration,ml=None):
             epoch_times.append(time.time() - start_time)
             print('epoch_time = ', time.time() - start_time, ' seconds Average epoch time = ', sum(epoch_times) / float(len(epoch_times)), ' seconds')
             print('Train loss = ',loss_train,' Validation loss = ',loss_valid)
-            stats_file = open(os.path.join(parameters['io_dict']['model_save_dir'], 'loss.data'), 'a')
+            stats_file = open(os.path.join(parameters['io_dict']['model_dir'], 'loss.data'), 'a')
             stats_file.write(str(loss_train) + '     ' + str(loss_valid) + '\n')
             stats_file.close()
         if ep > 0:
@@ -269,15 +269,31 @@ def run_training(rank,iteration,ml=None):
                 min_loss_valid = loss_valid
                 if rank == 0:
                      if parameters['io_dict']['remove_old_model']:
-                        model_name = glob.glob(os.path.join(parameters['io_dict']['model_save_dir'], 'model_*'))
+                        model_name = glob.glob(os.path.join(parameters['io_dict']['model_dir'], 'model_*'))
                         if len(model_name) > 0 and rank == 0:
                             os.remove(model_name[0])
                      print('Saving model...')
                      now = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
                      if parameters['device_dict']['run_ddp']:
-                        torch.save(model.module.state_dict(), os.path.join(parameters['io_dict']['model_save_dir'], 'model_' + str(now)+'_ep-'+str(ep)))
+                         model_state = model.module.state_dict()
                      else:
-                        torch.save(model.state_dict(), os.path.join(parameters['io_dict']['model_save_dir'], 'model_' + str(now)+'_ep-'+str(ep)))
+                         model_state = model.state_dict()
+                     id = secrets.token_hex(32)
+                     model_data = dict(
+                         model_type='train',
+                         model=model_state,
+                         samples=samples,
+                         loss_info=dict(
+                             training=L_train[-1],
+                             validation=None
+                         ),
+                         id=id,
+                         time=str(now),
+                         parameters=parameters,
+                         system_info=system_info
+                     )
+                     torch.save(model_data,
+                                os.path.join(parameters['io_dict']['model_dir'], 'model_' + str(id) + '_' + str(now)))
         if len(running_valid_delta) == parameters['model_dict']['max_deltas']:
             if sum(running_valid_delta)/len(running_valid_delta)< parameters['model_dict']['train_tolerance']:
                 if rank == 0:
@@ -288,18 +304,21 @@ def run_training(rank,iteration,ml=None):
         ddp_destroy()
 
 def run_pre_training(rank,ml=None):
+    system_info = get_system_info()
+
     parameters = ml.parameters
     ml.set_model()
     model = ml.model
+    parameters['io_dict']['model_dir'] = os.path.join(parameters['io_dict']['main_path'],'models','pretraining')
     if rank == 0:
-        if os.path.isdir(parameters['io_dict']['pretrain_dir']):
-            shutil.rmtree(parameters['io_dict']['pretrain_dir'])
-        os.mkdir(parameters['io_dict']['pretrain_dir'])
+        if os.path.isdir(parameters['io_dict']['model_dir']):
+            shutil.rmtree(parameters['io_dict']['model_dir'])
+        os.mkdir(parameters['io_dict']['model_dir'])
         print('Reading graphs...')
-    data = read_training_data(parameters,os.path.join(parameters['io_dict']['samples_dir'], 'pre_training', 'train_valid_split.npy'),pretrain=True)
+    data, samples = read_training_data(parameters,os.path.join(parameters['io_dict']['samples_dir'][0], 'train_valid_split.npy'),pretrain=True)
     if rank == 0:
         print('Training using ', len(data['training']), ' training points')
-        stats_file = open(os.path.join(parameters['io_dict']['pretrain_dir'], 'loss.data'), 'w')
+        stats_file = open(os.path.join(parameters['io_dict']['model_dir'], 'loss.data'), 'w')
         stats_file.write('Training_loss\n')
         stats_file.close()
 
@@ -378,7 +397,7 @@ def run_pre_training(rank,ml=None):
             print('epoch_time = ', time.time() - start_time, ' seconds Average epoch time = ',
                   sum(epoch_times) / float(len(epoch_times)), ' seconds')
             print('Train loss = ', loss_train)
-            stats_file = open(os.path.join(parameters['io_dict']['pretrain_dir'], 'loss.data'), 'a')
+            stats_file = open(os.path.join(parameters['io_dict']['model_dir'], 'loss.data'), 'a')
             stats_file.write(str(loss_train) + '\n')
             stats_file.close()
 
@@ -395,15 +414,30 @@ def run_pre_training(rank,ml=None):
             min_loss_train = loss_train
 
             if rank == 0:
-                model_name = glob.glob(os.path.join(parameters['io_dict']['pretrain_dir'], 'model_*'))
+                model_name = glob.glob(os.path.join(parameters['io_dict']['model_dir'], 'model_*'))
                 if len(model_name) > 0:
                     os.remove(model_name[0])
                 print('Saving model...')
                 now = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
                 if parameters['device_dict']['run_ddp']:
-                    torch.save(model.module.state_dict(), os.path.join(parameters['io_dict']['pretrain_dir'], 'model_pre_'+str(now)))
+                    model_state = model.module.state_dict()
                 else:
-                    torch.save(model.state_dict(), os.path.join(parameters['io_dict']['pretrain_dir'], 'model_pre_'+str(now)))
+                    model_state = model.state_dict()
+                id = secrets.token_hex(32)
+                model_data = dict(
+                    model_type='pretrain',
+                    model = model_state,
+                    samples = samples,
+                    loss_info = dict(
+                        training = L_train[-1],
+                        validation = None
+                    ),
+                    id = id,
+                    time = str(now),
+                    parameters = parameters,
+                    system_info= system_info
+                )
+                torch.save(model_data,os.path.join(parameters['io_dict']['model_dir'],'pre_'+str(id)+'_'+str(now)))
         if len(running_train_delta) == parameters['model_dict']['max_deltas']:
             if sum(running_train_delta) / len(running_train_delta) < parameters['model_dict']['train_tolerance']:
                 if rank == 0:

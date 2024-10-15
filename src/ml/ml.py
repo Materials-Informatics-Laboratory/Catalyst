@@ -18,12 +18,10 @@ class ML():
                                ),
                                io_dict = dict(
                                    main_path='',
-                                   restart_model_name='',
-                                   graph_data_dir='',
+                                   loaded_model_name='',
+                                   data_dir='',
                                    model_dir='',
-                                   model_save_dir='',
                                    results_dir='',
-                                   pretrain_dir='',
                                    samples_dir='',
                                    projection_dir='',
                                    remove_old_model=False,
@@ -196,7 +194,7 @@ class ML():
             print('WARNING: num_workers not set...setting to 0')
             new_params['loader_dict']['num_workers'] = 0
 
-        if not 'graph_data_dir' in new_params['io_dict']:
+        if not 'data_dir' in new_params['io_dict']:
             print('Data directory not set...killing run...')
             exit(0)
         if not 'main_path' in new_params['io_dict']:
