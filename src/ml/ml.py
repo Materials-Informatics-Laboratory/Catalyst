@@ -88,7 +88,8 @@ class ML():
     def set_model(self):
         del self.model
         gc.collect()
-        torch.cuda.empty_cache()
+        if self.parameters['device_dict']['device'] == 'cuda':
+            torch.cuda.empty_cache()
         self.model = None
         self.model = self.parameters['model_dict']['model']
 
