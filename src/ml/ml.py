@@ -76,6 +76,15 @@ class ML():
         self.optimizer_options = ['AdamW','Adadelta','Adagrad','Adam','SparseAdam','Adamax','ASGD',
                                   'LBFGS','NAdam','RAdam','RMSprop','Rprop','SGD']
 
+        '''
+        graph clustering params
+        {
+            'leaf_size':2,
+            'neighbors':10,
+            'metric':'minkowski'
+        }
+        '''
+
     def set_model(self):
         del self.model
         gc.collect()

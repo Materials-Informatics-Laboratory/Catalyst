@@ -11,8 +11,8 @@ import torch as torch
 from torch import nn
 
 from catalyst.src.ml.nn.models.alignn import Encoder, Processor, Decoder, ALIGNN
-import catalyst.src.utilities.sampling as sampling
 from catalyst.src.characterization.sodas.model.sodas import SODAS
+import catalyst.src.utilities.sampling as sampling
 from catalyst.src.ml.ml import ML
 
 def main(ml_parameters):
@@ -21,10 +21,7 @@ def main(ml_parameters):
     ml.set_params(ml_parameters)
     graph_data = []
     take = 1
-
-    #port_graphs_without_gids(ml.parameters)
-
-    for i,graph in enumerate(glob.glob(os.path.join(ml.parameters['io_dict']['graph_data_dir'],'*.pt'))):
+    for i,graph in enumerate(glob.glob(os.path.join(ml.parameters['io_dict']['data_dir'],'*.pt'))):
         if i % take == 0:
             graph_data.append(torch.load(graph))
     print('Found ',len(graph_data),' graphs')
@@ -32,7 +29,7 @@ def main(ml_parameters):
 # sodas: either perform sodas projection or load a previously projected set of data
     projected_data = None
     y_values = []
-    if ml.parameters['sodas_dict']['run_sodas']:
+    if ml.parameters['characterization_dict']['run_characterization']:
         print('Performing graph projections...')
         if os.path.isdir(ml.parameters['io_dict']['projection_dir']):
             shutil.rmtree(ml.parameters['io_dict']['projection_dir'])
@@ -41,20 +38,20 @@ def main(ml_parameters):
         encoded_data = []
         gids = []
         follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(graph_data[0], 'x_ang') else ['x_atm', 'x_bnd']
-        loader = DataLoader(graph_data, batch_size=1, shuffle=False, follow_batch=follow_batch,
-                            num_workers=ml_parameters['loader_dict']['num_workers'])
-        encoded_data = ml.parameters['sodas_dict']['sodas_model'].generate_gnn_latent_space(loader=loader,
-                                                                                                 device=ml.parameters['device_dict']['device'])
-        ml.parameters['sodas_dict']['sodas_model'].clear_gpu_memory()
         for data in graph_data:
             y_values.append(data.y.item())
             gids.append(data.gid)
-
-        #encoded_data = np.array(encoded_data)
-        ml.parameters['sodas_dict']['sodas_model'].fit_preprocess(data=encoded_data)
-        ml.parameters['sodas_dict']['sodas_model'].fit_dim_red(data=encoded_data)
-        projected_data =  ml.parameters['sodas_dict']['sodas_model'].project_data(data=encoded_data)
-
+            loader = DataLoader([data], batch_size=1, shuffle=False, follow_batch=follow_batch,
+                                num_workers=ml_parameters['loader_dict']['num_workers'])
+            encoded_data.append(ml.parameters['characterization_dict']['model'].generate_gnn_latent_space(loader=loader,
+                                                                                                device=ml.parameters[
+                                                                                                    'device_dict'][
+                                                                                                    'device'])[0])
+        encoded_data = np.array(encoded_data)
+        ml.parameters['characterization_dict']['model'].fit_preprocess(data=encoded_data)
+        ml.parameters['characterization_dict']['model'].fit_dim_red(data=encoded_data)
+        projected_data =  ml.parameters['characterization_dict']['model'].project_data(data=encoded_data)
+        ml.parameters['characterization_dict']['model'].clear_gpu_memory()
         stored_projections = dict(
             projections = projected_data,
             gids = gids
@@ -84,15 +81,16 @@ def main(ml_parameters):
     # remove test data
     rng = np.random.default_rng(seed=ml.parameters['sampling_dict']['sampling_seed'])
     #note that y values are added here as the test set is sampled via y_binning
-    test_idx, nontest_idx = sampling.run_sampling(graph_data,sampling_type=ml.parameters['sampling_dict']['test_sampling_type'],
+    test_idx, nontest_idx = sampling.run_sampling(graph_data,sampling_type=ml.parameters['sampling_dict']['sampling_types'][0],
                                                            split=ml.parameters['sampling_dict']['split'][0],rng=rng,
-                                                           nclusters=ml.parameters['sampling_dict']['clusters'],y=y_values)
-    #test_data = [graph_data[index].gid for index in test_idx]
-    data = [graph_data[index] for index in nontest_idx]
+                                                           params_group=ml.parameters['sampling_dict']['params_groups'][0],y=y_values)
+    #data = [graph_data[index] for index in nontest_idx]
     stored_test_data = dict(
         projections=[projected_data[index] for index in test_idx],
         gids=[graph_data[index].gid for index in test_idx]
     )
+    projected_data = [projected_data[index] for index in nontest_idx]
+    graph_data = [graph_data[index] for index in nontest_idx]
     np.save(os.path.join(ml.parameters['io_dict']['samples_dir'], 'stored_test_data.npy'),stored_test_data)
 
     # run pretraining
@@ -103,18 +101,16 @@ def main(ml_parameters):
             shutil.rmtree(ml.parameters['io_dict']['pretrain_dir'])
         os.mkdir(ml.parameters['io_dict']['pretrain_dir'])
         # remove pretrain data
-        pretrain_idx, nonpretrain_idx = sampling.run_sampling(projected_data, sampling_type=ml.parameters['sampling_dict'][
-                'pretraining_sampling_type'],
-                                                          split=ml.parameters['sampling_dict']['split'][1],rng=rng,
-                                                          nclusters=ml.parameters['sampling_dict']['clusters'])
-        data = [graph_data[index] for index in nonpretrain_idx]
-        #pretraining_data = [graph_data[index].gid for index in pretrain_idx]
+        pretrain_idx, nonpretrain_idx = sampling.run_sampling(projected_data, sampling_type=ml.parameters['sampling_dict']['sampling_types'][1],split=ml.parameters['sampling_dict']['split'][1],rng=rng,params_group=ml.parameters['sampling_dict']['params_groups'][1])
+        #data = [graph_data[index] for index in nonpretrain_idx]
         stored_pretrain_data = dict(
             training_projections=[projected_data[index] for index in pretrain_idx],
             validation_projections=None,
             training=[graph_data[index].gid for index in pretrain_idx],
             validation=None
         )
+        projected_data = [projected_data[index] for index in nonpretrain_idx]
+        graph_data = [graph_data[index] for index in nonpretrain_idx]
         np.save(os.path.join(ml.parameters['io_dict']['pretrain_dir'], 'train_valid_split.npy'), stored_pretrain_data, fix_imports=False)
 
     # loop over number of requested models
@@ -129,9 +125,9 @@ def main(ml_parameters):
         os.mkdir(ml.parameters['io_dict']['model_save_dir'])
         
         # sample data and train model
-        train_idx, valid_idx = sampling.run_sampling(projected_data,sampling_type=ml.parameters['sampling_dict']['sampling_type'],
+        train_idx, valid_idx = sampling.run_sampling(projected_data,sampling_type=ml.parameters['sampling_dict']['sampling_types'][2],
                                                            split=ml.parameters['sampling_dict']['split'][2],rng=rng,
-                                                           nclusters=ml.parameters['sampling_dict']['clusters'])
+                                                           params_group=ml.parameters['sampling_dict']['params_groups'][2])
         train_data = [graph_data[index].gid for index in train_idx]
         valid_data = [graph_data[index].gid for index in valid_idx]
         print('Using the remaining ',len(valid_data),' for validation')
@@ -156,21 +152,23 @@ if __name__ == "__main__":
         ),
         io_dict=dict(
             main_path=path,
-            restart_model_name='',
-            graph_data_dir=os.path.join(path, 'graph_data'),
+            data_dir=os.path.join(path, 'graph_data'),
             model_dir='',
             model_save_dir='',
-            results_dir='',
             pretrain_dir=os.path.join(path, 'pre_training'),
             samples_dir='',
             projection_dir=os.path.join(path, 'sodas_projection'),
         ),
-        sampling_dict=dict(test_sampling_type='y_bin',
-                           pretraining_sampling_type='gaussian_mixture',
-                           sampling_type='gaussian_mixture',
+        sampling_dict=dict(sampling_types=['y_bin','gaussian_mixture','gaussian_mixture'],
                            split=[0.2, 0.2, 0.9],
-                           clusters=5,
-                           sampling_seed=12345,
+                           sampling_seed=112358,
+                           params_groups=[{
+                               'clusters': 5,
+                           },{
+                               'clusters': 5,
+                           },{
+                               'clusters': 5,
+                            }]
                            ),
         loader_dict=dict(
             num_workers=0,
@@ -179,10 +177,10 @@ if __name__ == "__main__":
             n_models=2,
             pre_training=True
         ),
-        sodas_dict=dict(
-            run_sodas=True,
-            sodas_model=SODAS(mod=ALIGNN(
-                encoder=Encoder(num_species=1, cutoff=4.0, dim=100, act_func=nn.SiLU()),
+        characterization_dict=dict(
+            run_characterization=True,
+            model=SODAS(mod=ALIGNN(
+                encoder=Encoder(num_species=119, cutoff=4.0, dim=100, act_func=nn.SiLU()),
                 processor=Processor(num_convs=5, dim=100),
                 decoder=Decoder(in_dim=100, out_dim=10, act_func=nn.SiLU())
             ),
@@ -190,7 +188,6 @@ if __name__ == "__main__":
             ),
         )
     )
-
 
     main(ml_parameters)
 
