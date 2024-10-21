@@ -4,6 +4,8 @@ import torch
 
 from torch_geometric.utils import scatter
 
+from ....graph.graph import Generic_Graph_Data, Atomic_Graph_Data
+
 class SODAS():
     def __init__(self, mod, ls_mod):
         super().__init__()
@@ -34,11 +36,18 @@ class SODAS():
         for data in loader:
             data = data.to(device)
             pred = self.model(data)
-            if hasattr(data, 'x_ang'):
-                pred = scatter(pred,torch.cat((data.x_atm_batch,data.x_bnd_batch,data.x_ang_batch),0), dim=0, reduce='mean')
-            else:
-                pred = scatter(pred, torch.cat((data.x_atm_batch, data.x_bnd_batch), 0), dim=0,
-                               reduce='mean')
+            if isinstance(data,Atomic_Graph_Data):
+                if hasattr(data, 'x_ang'):
+                    pred = scatter(pred,torch.cat((data.x_atm_batch,data.x_bnd_batch,data.x_ang_batch),0), dim=0, reduce='mean')
+                else:
+                    pred = scatter(pred, torch.cat((data.x_atm_batch, data.x_bnd_batch), 0), dim=0,
+                                   reduce='mean')
+            elif isinstance(data,Generic_Graph_Data):
+                if hasattr(data, 'edge_A'):
+                    pred = scatter(pred,torch.cat((data.node_G_batch,data.node_A_batch,data.edge_A_batch),0), dim=0, reduce='mean')
+                else:
+                    pred = scatter(pred, torch.cat((data.node_G_batch, data.node_A_batch), 0), dim=0,
+                                   reduce='mean')
             data.detach()
             tx = []
             for p in pred[0]:

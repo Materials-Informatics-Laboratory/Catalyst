@@ -1,16 +1,7 @@
 import torch
 from torch import nn
 
-
 class MLP(nn.Module):
-    """Multi-layer perceptron with custom activation functions.
-
-    Args:
-        hs (list of int): Input, hidden, and output dimensions.
-        act (torch activation function, or None): Activation function that
-            applies to all but the output layer. For example, `torch.nn.ReLU()`.
-            If None, no activation function is applied.
-    """
     def __init__(self, hs, act=None):
         super().__init__()
         self.hs = hs

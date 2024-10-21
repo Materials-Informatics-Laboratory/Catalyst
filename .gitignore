@@ -4,3 +4,5 @@
 *.npy
 *.data
 *.pt
+/examples/local_examples/
+/examples/preprocess_data/data/graphs
