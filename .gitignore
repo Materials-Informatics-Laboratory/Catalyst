@@ -4,8 +4,5 @@
 *.npy
 *.data
 *.pt
-/examples/gen_feature_rankings/
-/examples/predict_with_model/
-/examples/sodas_sampling/
-/examples/train_model/
-/examples/test_model/
+/examples/local_examples/
+/examples/preprocess_data/data/graphs
