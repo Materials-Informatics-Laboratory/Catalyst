@@ -15,12 +15,12 @@ class Generic_Graph_Data(Data):
     """
 
     def __init__(self,
-                 reference,
                  edge_index_G,
-                 edge_index_A,
                  node_G,
-                 node_A,
-                 edge_A,
+                 reference=None,
+                 edge_index_A=None,
+                 node_A=None,
+                 edge_A=None,
                  mask_edge_A=None
                  ):
         super().__init__()

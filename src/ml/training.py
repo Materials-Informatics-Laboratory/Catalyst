@@ -1,5 +1,5 @@
-from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group,destroy_process_group
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 from torch_geometric.loader import DataLoader
 import torch.distributed as dist
@@ -7,12 +7,13 @@ from numba import cuda
 from torch import nn
 import torch
 
+from .utils.distributed import ddp_destroy, ddp_setup, reduce_tensor
+from ..graph.graph import Atomic_Graph_Data, Generic_Graph_Data
 from .testing import test_intepretable, test_non_intepretable
 from ..utilities.distributions import get_distribution
-from .utils.distributed import ddp_destroy, ddp_setup, reduce_tensor
+from ..io.io import read_training_data, get_system_info
 from .utils.optimizer import set_optimizer
 from .utils.memory import optimizer_to
-from ..io.io import read_training_data, get_system_info
 
 from datetime import datetime
 import numpy as np
@@ -163,10 +164,13 @@ def run_training(rank,iteration,ml=None):
         print('Training model ', iteration)
         print('Training using ',len(data['training']), ' training points and ',len(data['validation']),' validation points...')
         stats_file = open(os.path.join(parameters['io_dict']['model_dir'], 'loss.data'), 'w')
-        stats_file.write('Training_loss     Validation loss\n')
+        stats_file.write('# Training_loss     Validation loss\n')
         stats_file.close()
 
-    follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm','x_bnd']
+    if isinstance(data['training'][0],Atomic_Graph_Data):
+        follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm','x_bnd']
+    elif isinstance(data['training'][0],Generic_Graph_Data):
+        follow_batch = ['node_G', 'node_A', 'edge_A'] if hasattr(data['training'][0], 'edge_A') else ['node_G', 'node_A']
     if parameters['device_dict']['run_ddp']:
         loader_train = DataLoader(data['training'], batch_size=int(
                 parameters['loader_dict']['batch_size'][1] / parameters['device_dict']['world_size']),
@@ -319,7 +323,7 @@ def run_pre_training(rank,ml=None):
     if rank == 0:
         print('Training using ', len(data['training']), ' training points')
         stats_file = open(os.path.join(parameters['io_dict']['model_dir'], 'loss.data'), 'w')
-        stats_file.write('Training_loss\n')
+        stats_file.write('# Training_loss\n')
         stats_file.close()
 
     if parameters['device_dict']['run_ddp']:
@@ -328,7 +332,10 @@ def run_pre_training(rank,ml=None):
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
         model = DDP(model, device_ids=[rank],find_unused_parameters=True)
 
-    follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm'] # need to rework this
+    if isinstance(data['training'][0], Atomic_Graph_Data):
+        follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm', 'x_bnd']
+    elif isinstance(data['training'][0], Generic_Graph_Data):
+        follow_batch = ['node_G', 'node_A', 'edge_A'] if hasattr(data['training'][0], 'edge_A') else ['node_G','node_A']
     if parameters['device_dict']['run_ddp']:
         loader_train = DataLoader(data['training'], batch_size=int(
                         parameters['loader_dict']['batch_size'][0] / parameters['device_dict']['world_size']),

@@ -54,7 +54,19 @@ class ML():
                                    train_tolerance=1.0,
                                    max_deltas=4,
                                    accumulate_loss=['sum', 'sum', 'sum'],
+                                   loss_func=torch.nn.MSELoss(),
                                    model = None,
+                                   model_params_group=dict(
+                                        encoder=dict(
+
+                                        ),
+                                        processor=dict(
+
+                                        ),
+                                        decoder=dict(
+
+                                        )
+                                   ),
                                    interpretable=False,
                                    pre_training=False,
                                    restart_training=False,
