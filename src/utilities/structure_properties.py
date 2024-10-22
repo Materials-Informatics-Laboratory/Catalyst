@@ -1,6 +1,25 @@
 import numpy as np
 import torch
 
+def unit_vector(vector):
+    """ Returns the unit vector of the vector.  """
+    return vector / np.linalg.norm(vector)
+
+def angle_between(v1, v2):
+    v1_u = unit_vector(v1)
+    v2_u = unit_vector(v2)
+    return np.arccos(np.clip(np.dot(v1_u, v2_u), -1.0, 1.0))
+def get_3body_angle(data,edge_index_G, edge_index_A):
+    """Return the bond angles (in radians) for the (angular) line graph edges.
+    """
+    indices = edge_index_G.T[edge_index_A.T].reshape(-1, 4)[:,[0,1,2]]
+    angles = []
+    for indice in indices:
+        v1 = data[indice[0]] - data[indice[1]]
+        v2 = data[indice[2]] - data[indice[1]]
+        angles.append(angle_between(v1, v2))
+    return np.radians(angles)
+
 def get_bnd_angs(atoms, edge_index_G, edge_index_A_bnd_ang):
     """Return the bond angles (in radians) for the (angular) line graph edges.
     """

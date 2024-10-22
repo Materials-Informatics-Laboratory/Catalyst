@@ -135,12 +135,12 @@ class Decoder(nn.Module):
                     return [g_node_scalars, a_node_scalars]
 
 class PositiveScalarsDecoder(nn.Module):
-    def __init__(self, dim):
+    def __init__(self, dim,act_func):
         super().__init__()
         self.dim = dim
-        self.transform_g_node = nn.Sequential(MLP([dim, dim, 1], act=nn.SiLU()), nn.Softplus())
-        self.transform_a_node = nn.Sequential(MLP([dim, dim, 1], act=nn.SiLU()), nn.Softplus())
-        self.transform_a_edge = nn.Sequential(MLP([dim, dim, 1], act=nn.SiLU()), nn.Softplus())
+        self.transform_g_node = nn.Sequential(MLP([dim, dim, 1], act=act_func), nn.Softplus())
+        self.transform_a_node = nn.Sequential(MLP([dim, dim, 1], act=act_func), nn.Softplus())
+        self.transform_a_edge = nn.Sequential(MLP([dim, dim, 1], act=act_func), nn.Softplus())
 
     def forward(self, data):
         if isinstance(data,Atomic_Graph_Data):

@@ -30,7 +30,6 @@ class Generic_Graph_Data(Data):
         self.node_G = node_G
         self.node_A = node_A
         self.edge_A = edge_A
-        self.mask_edge_A = mask_edge_A
         self.gid = None
 
     def __inc__(self, key, value, *args, **kwargs):

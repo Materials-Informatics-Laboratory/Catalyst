@@ -6,6 +6,7 @@ import os
 import matplotlib.pyplot as plt
 from sklearn.neighbors import KDTree
 from umap import umap_
+import networkx as nx
 import random
 from torch_geometric.loader import DataLoader
 import torch.multiprocessing as mp
@@ -16,10 +17,48 @@ from catalyst.src.ml.testing import test_intepretable, test_non_intepretable
 from catalyst.src.characterization.graph_order_parameter.gop import GOP
 from catalyst.src.ml.training import run_training, run_pre_training
 from catalyst.src.characterization.sodas.model.sodas import SODAS
+from catalyst.src.characterization.sodas.utils.alignn import line_graph
+from catalyst.src.utilities.structure_properties import get_3body_angle
 from catalyst.src.ml.utils.distributed import cuda_destroy
 from catalyst.src.graph.graph import Generic_Graph_Data
 import catalyst.src.utilities.sampling as sampling
 from catalyst.src.ml.ml import ML
+
+'''
+Function definitions
+'''
+def visualize_graph(data,atomic=False):
+    # Drawing options
+    G_options = {
+        'edgecolors': 'black',
+        'width': 0.4,
+        'font_size': 16,
+        'node_size': 100,
+    }
+
+    edge_index_bnd = data.edge_index_G.numpy()
+    G = nx.Graph(list(edge_index_bnd.T))
+    G_pos = nx.spring_layout(G)
+    color_map = []
+    colors = ['aqua','mediumslateblue','peru','limegreen','darkorange']
+    for node in data.node_G:
+        x = np.where(node == 1.0)[0][0]
+        color_map.append(colors[x])
+
+    fig, ax = plt.subplots(1, 2)
+    nx.draw_networkx(G, G_pos, **G_options, with_labels=False, node_color=color_map, edge_color='dimgrey',
+                         arrows=False, ax=ax[0])
+
+    edge_index_A = data.edge_index_A.numpy()
+    A = nx.Graph(list(edge_index_A.T))
+    A_pos = nx.spring_layout(A)
+    nx.draw_networkx(A, A_pos, **G_options, with_labels=False, edge_color='dimgrey',
+                     arrows=False, ax=ax[1])
+    ax[0].set_title('Graph G (1,2 body graph)')
+    ax[1].set_title('Graph A (2,3 body graph)')
+
+    plt.draw()
+    plt.show()
 
 '''
 ML parameter INITIALIZATION
@@ -55,17 +94,17 @@ ml_parameters = dict(
                             }]
                     ),
                     loader_dict=dict(
-                        shuffle_loader=True,
-                        batch_size=[100,100,100],
+                        shuffle_loader=False,
+                        batch_size=[10,10,10],
                         num_workers=0,
                         shuffle_steps=10
                     ),
                     characterization_dict = dict(
                         run_characterization=True,
                         model = SODAS(mod=ALIGNN(
-                            encoder=Encoder(num_species=1, cutoff=4.0, dim=100, act_func=nn.SiLU()),
+                            encoder=Encoder(num_species=5, cutoff=4.0, dim=100, act_func=nn.ReLU()),
                             processor=Processor(num_convs=5, dim=100),
-                            decoder=Decoder(in_dim=100, out_dim=10, act_func=nn.SiLU())
+                            decoder=Decoder(in_dim=100, out_dim=10, act_func=nn.ReLU())
                         ),
                         ls_mod=umap_.UMAP(n_neighbors=15, min_dist=0.5, n_components=2)
                         ),
@@ -73,14 +112,14 @@ ml_parameters = dict(
                     model_dict = dict(
                         n_models=1,
                         num_epochs=[10,10],
-                        train_tolerance=1.0,
+                        train_tolerance=.05,
                         max_deltas=4,
                         loss_func=torch.nn.MSELoss(),
                         accumulate_loss=['sum', 'exact', 'exact'],
                         model=ALIGNN(
-                            encoder=Encoder(num_species=1, cutoff=4.0, dim=100, act_func=nn.SiLU()),
+                            encoder=Encoder(num_species=5, cutoff=4.0, dim=100, act_func=nn.ReLU()),
                             processor=Processor(num_convs=5, dim=100, conv_type='mesh'),
-                            decoder=PositiveScalarsDecoder(dim=100),
+                            decoder=PositiveScalarsDecoder(dim=100,act_func=nn.ReLU()),
                         ),
                         interpretable=False,
                         pre_training=True,
@@ -101,46 +140,54 @@ ml.set_params(ml_parameters)
 DATA INITIALIZATION AND GRAPH CONSTRUCTION
 '''
 ml.parameters['io_dict']['data_dir'] = os.path.join(ml.parameters['io_dict']['main_path'],'data')
-if os.path.isdir(ml.parameters['io_dict']['data_dir']):
-    shutil.rmtree(ml.parameters['io_dict']['data_dir'])
-os.mkdir(ml.parameters['io_dict']['data_dir'])
-n_data = 1000
-n_nodes = 1000
-n_dim = 10
-k = 5 # number of neighbors per graph nodes
-dataset = []
-for ds in range(n_data):
-    if ds % 500 == 0:
-        print('Generating graph ',ds)
-    data = np.random.random((n_nodes,n_dim))
-    tree = KDTree(data,metric='minkowski',leaf_size=2)
-    dist, ind = tree.query(data,k=k+1) # k+1 due to self-interaction
-    g_nodes = []
-    g_edge_index = [[],[]]
-    a_nodes = []
-    for i, x in enumerate(ind):
-        g_nodes.append([1])
-        for j, xx in enumerate(ind[i]):
-            if j > 0:
-                g_edge_index[0].append(x[0])
-                g_edge_index[1].append(xx)
-                a_nodes.append(dist[i][j])
-    g_edge_index = np.array(g_edge_index)
-    graph = Generic_Graph_Data(
-        node_G=torch.tensor(g_nodes, dtype=torch.float),
-        edge_index_G=torch.tensor(g_edge_index, dtype=torch.long),
-        node_A=torch.tensor(a_nodes, dtype=torch.float)
-    )
-    graph.generate_gid()
-    graph.y = torch.tensor(random.uniform(0,1))
-    torch.save(graph, os.path.join(os.path.join(ml.parameters['io_dict']['main_path'],ml.parameters['io_dict']['data_dir']), graph.gid + '.pt'))
+if ml.parameters['characterization_dict']['run_characterization']:
+    if os.path.isdir(ml.parameters['io_dict']['data_dir']):
+        shutil.rmtree(ml.parameters['io_dict']['data_dir'])
+    os.mkdir(ml.parameters['io_dict']['data_dir'])
+    n_data = 10000 # total number of samples
+    n_nodes = 500 # number of data points per sample
+    n_dim = 3 # number of dimensions in intial raw data
+    n_types = 5 # number of ficticious types to label each node in G
+    k = 20 # number of neighbors per graph nodes
+    dataset = []
+    for ds in range(n_data):
+        if ds % 500 == 0:
+            print('Generating graph ',ds)
+        data = np.random.uniform(0,100,size=(n_nodes,n_dim)) # randomly create raw data
+        tree = KDTree(data,metric='minkowski',leaf_size=2)
+        dist, ind = tree.query(data,k=k+1) # k+1 due to self-interaction, neighbor list
+        g_nodes = np.eye(n_types)[np.random.choice(n_types, n_nodes)] # randomly assign G node labels
+        g_edge_index = [[],[]]
+        a_nodes = []
+        for i, x in enumerate(ind):
+            for j, xx in enumerate(ind[i]):
+                if j > 0:
+                    g_edge_index[0].append(x[0])
+                    g_edge_index[1].append(xx)
+                    a_nodes.append(dist[i][j])
+        g_edge_index = np.array(g_edge_index)
+        a_edge_index = np.hstack([line_graph(g_edge_index)])
+        a_edge = np.concatenate([get_3body_angle(data,g_edge_index,a_edge_index)])
+        graph = Generic_Graph_Data(
+            node_G=torch.tensor(g_nodes, dtype=torch.float),
+            edge_index_G=torch.tensor(g_edge_index, dtype=torch.long),
+            node_A=torch.tensor(a_nodes, dtype=torch.float),
+            edge_index_A=torch.tensor(a_edge_index, dtype=torch.long),
+            edge_A=torch.tensor(a_edge, dtype=torch.float),
+        )
+        graph.generate_gid()
+        graph.y = torch.tensor(random.uniform(0,10))
+        torch.save(graph, os.path.join(os.path.join(ml.parameters['io_dict']['main_path'],ml.parameters['io_dict']['data_dir']), graph.gid + '.pt'))
+    visualize_graph(graph, atomic=False)
 
 '''
 PROJECT DATA
 '''
-fig, ax = plt.subplots(nrows=1, ncols=4,sharex=True,sharey=True)
-graph_data = [torch.load(file_name) for file_name in glob.glob(os.path.join(ml.parameters['io_dict']['data_dir'],'*'))]
+ml.parameters['characterization_dict']['run_characterization'] = True
 if ml.parameters['characterization_dict']['run_characterization']:
+    fig, ax = plt.subplots(nrows=1, ncols=4, sharex=True, sharey=True)
+    graph_data = [torch.load(file_name) for file_name in
+                  glob.glob(os.path.join(ml.parameters['io_dict']['data_dir'], '*'))]
     # read data and perform projections
     print('Performing graph projections...')
     ml.parameters['io_dict']['projection_dir'] = os.path.join(ml.parameters['io_dict']['main_path'],'projections')
@@ -154,7 +201,7 @@ if ml.parameters['characterization_dict']['run_characterization']:
     projected_data = None
     encoded_data = []
     gids = []
-    follow_batch = ['node_G', 'node_A']
+    follow_batch = ['node_G', 'node_A', 'edge_A'] if hasattr(graph_data[0], 'edge_A') else ['node_G', 'node_A']
     for data in graph_data:
         gids.append(data.gid)
         loader = DataLoader([data], batch_size=1, shuffle=False, follow_batch=follow_batch,
@@ -296,6 +343,7 @@ for lines in of:
         loss[1].append(float(line[1]))
 of.close()
 x=np.linspace(1,len(loss[0]),len(loss[0]))
+ax[0].set_yscale('log')
 ax[1].plot(x,loss[0],color='b',marker='o',label='Training loss')
 ax[1].plot(x,loss[1],color='r',marker='o',label='Validation loss')
 ax[1].legend(loc="upper right")
@@ -304,6 +352,7 @@ plt.show()
 '''
 TEST MODEL
 '''
+ml.parameters['loader_dict']['batch_size'][2] = 1
 ml.parameters['io_dict']['write_indv_pred'] = True
 ml.parameters['io_dict']['results_dir'] = os.path.join(ml_parameters['io_dict']['main_path'],'testing')
 if os.path.isdir(ml.parameters['io_dict']['results_dir']):
@@ -316,7 +365,7 @@ ml.model.load_state_dict(model_data['model'])
 ml.model.to(ml.parameters['device_dict']['device'])
 graph_data = [torch.load(file_name) for file_name in glob.glob(os.path.join(ml.parameters['io_dict']['data_dir'],'*'))]
 follow_batch = ['node_G', 'node_A', 'edge_A'] if hasattr(graph_data[0], 'edge_A') else ['node_G', 'node_A']
-loader = DataLoader(graph_data, batch_size=1, shuffle=False, follow_batch=follow_batch)
+loader = DataLoader(graph_data, batch_size=ml.parameters['loader_dict']['batch_size'][2], shuffle=False, follow_batch=follow_batch)
 print(f'Number of test graphs: {len(loader.dataset)}')
 if ml.parameters['model_dict']['interpretable']:
     loss = test_intepretable(loader=loader,model=ml.model,parameters=ml.parameters)

@@ -55,20 +55,13 @@ def read_training_data(params,samples_file,pretrain=False):
     graph_files = glob.glob(os.path.join(params['io_dict']['data_dir'],'*'))
     graph_names = [PurePath(graph).parts[-1].split('.')[0] for graph in graph_files]
     unique_names = np.unique(np.array(graph_names))
-    print('unique: ',len(unique_names))
-    print('lgn: ',len(graph_names))
     samples = np.load(samples_file, allow_pickle=True)
     training_samples = samples.item().get('training')
     unique_samples = np.unique(np.array(training_samples))
-    print('unique s: ', len(unique_samples))
-    print('lgs: ',len(training_samples))
-
     cross_list = set(training_samples).intersection(graph_names)
     idx = [graph_names.index(x) for x in cross_list]
     selected_graphs = [graph_files[i] for i in idx]
     training_graphs = [torch.load(x) for x in selected_graphs]
-
-    print('ltg: ',len(training_graphs))
 
     if pretrain == False:
         validation_samples = samples.item().get('validation')
