@@ -2,6 +2,7 @@ from sklearn.cluster import SpectralClustering
 from sklearn.mixture import GaussianMixture
 from sklearn.cluster import KMeans
 from sklearn.cluster import Birch
+from scipy import stats
 import networkx as nx
 import numpy as np
 import math
@@ -254,6 +255,68 @@ def subgraph_clustering(data,split,leaf_size,neighbors,metric,rng):
     print('Found ', len(sampled_data), ' points out of ', points_per_cluster * len(SG), ' requested points')
     return sampled_data, remaining_data
 
+def grid(data,split,grids,rng):
+    # scales data if negative
+    data = np.array(data)
+    dimensions = len(data[0])
+    for dim in range(dimensions):
+        dim_range = max(data[:,dim]) - min(data[:,dim])
+        if min(data[:,dim]) - dim_range/grids < 0:
+            for i in range(len(data)):
+                data[i][dim] += 2*(dim_range/grids)
+    # get grid centroids
+    mesh = []
+    for dim in range(dimensions):
+        dim_range = max(data[:,dim]) - min(data[:,dim])
+        mesh.append(np.linspace(min(data[:,dim]) - dim_range/grids, max(data[:,dim]) + dim_range/grids, grids+1))
+    grid_centroids = []
+    for i in range(dimensions):
+        grid_centroids.append([])
+        for j in range(grids+1):
+            if j > 0:
+                grid_centroids[-1].append(mesh[i][j-1] + (mesh[i][j] - mesh[i][j-1])/2.0)
+    # create coordinate system and bin data
+    mesh_coords = np.vstack(np.meshgrid(*grid_centroids)).reshape(dimensions,-1).T
+    binned_data = []
+    for gp in mesh_coords:
+        binned_data.append([])
+    for i, d in enumerate(data):
+        min_d = 1E30
+        idx = -1
+        for j,gp in enumerate(mesh_coords):
+            dist = math.dist(d,gp)
+            if dist < min_d:
+                min_d = dist
+                idx = j
+        binned_data[idx].append(i)
+    binned_data = [ele for ele in binned_data if ele != []] # remove empty bins
+    #sample data
+    points_per_cluster = math.ceil(split * float(len(data)) / float(len(binned_data)))
+    sampled_data = None
+    remaining_data = None
+    for bx in binned_data:
+        if len(bx) <= points_per_cluster:
+            if sampled_data is None:
+                sampled_data = bx
+        else:
+            samples = rng.choice(bx, points_per_cluster, replace=False)
+            sort_idx = np.array(bx).argsort()
+            non_samples = np.delete(bx, sort_idx[np.searchsorted(bx, samples, sorter=sort_idx)])
+            if sampled_data is None:
+                sampled_data = samples
+            else:
+                sampled_data = np.append(sampled_data, samples)
+            if remaining_data is None:
+                remaining_data = non_samples
+            else:
+                remaining_data = np.append(remaining_data, non_samples)
+    delta = points_per_cluster*(len(binned_data)) - len(sampled_data)
+    if delta > 0:
+        new_samples, remaining_data = resample(remaining_data, delta, rng)
+        sampled_data = np.append(sampled_data, new_samples)
+    print('Found ',len(sampled_data), ' points out of ',points_per_cluster*(len(binned_data)),' requested points')
+    return sampled_data, remaining_data
+
 def run_sampling(data,sampling_type,split,rng,params_group,y=None):
     print('Performing',sampling_type,'sampling using a training ratio of',str(split*100.0),'%')
     if sampling_type == 'random':
@@ -271,6 +334,8 @@ def run_sampling(data,sampling_type,split,rng,params_group,y=None):
     elif sampling_type == 'subgraph_clustering':
         sampled_data, remaining_data = subgraph_clustering(data=data,split=split,leaf_size=params_group['leaf_size'],
                                             neighbors=params_group['neighbors'],metric=params_group['metric'],rng=rng)
+    elif sampling_type == 'grid':
+        sampled_data, remaining_data = grid(data=data,split=split,grids=params_group['grids'],rng=rng)
     return sampled_data, remaining_data
 
 
