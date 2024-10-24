@@ -62,11 +62,11 @@ def kmeans(data,split,clusters,rng):
                 sampled_data = idx
             else:
                 sampled_data = np.append(sampled_data,idx)
-    delta = points_per_cluster * clusters - len(sampled_data)
+    delta = math.ceil(split * float(len(data))) - len(sampled_data)
     if delta > 0:
         new_samples, remaining_data = resample(remaining_data, delta, rng)
         sampled_data = np.append(sampled_data, new_samples)
-    print('Found ', len(sampled_data), ' points out of ', points_per_cluster * clusters, ' requested points')
+    print('Found ', len(sampled_data), ' points out of ', math.ceil(split * float(len(data))), ' requested points')
     return sampled_data, remaining_data
 
 def property_binning(data,y,split,clusters,rng):
@@ -110,11 +110,11 @@ def property_binning(data,y,split,clusters,rng):
                 remaining_data = non_samples
             else:
                 remaining_data = np.append(remaining_data, non_samples)
-    delta = points_per_cluster*(len(binned_idx)) - len(sampled_data)
+    delta = math.ceil(split * float(len(data))) - len(sampled_data)
     if delta > 0:
         new_samples, remaining_data = resample(remaining_data, delta, rng)
         sampled_data = np.append(sampled_data, new_samples)
-    print('Found ',len(sampled_data), ' points out of ',points_per_cluster*(len(binned_idx)),' requested points')
+    print('Found ',len(sampled_data), ' points out of ',math.ceil(split * float(len(data))),' requested points')
     return sampled_data, remaining_data
 
 def gaussian_mixture(data,split,clusters,rng):
@@ -143,11 +143,11 @@ def gaussian_mixture(data,split,clusters,rng):
                 sampled_data = idx
             else:
                 sampled_data = np.append(sampled_data, idx)
-    delta = points_per_cluster * clusters - len(sampled_data)
+    delta = math.ceil(split * float(len(data))) - len(sampled_data)
     if delta > 0:
         new_samples, remaining_data = resample(remaining_data, delta, rng)
         sampled_data = np.append(sampled_data, new_samples)
-    print('Found ', len(sampled_data), ' points out of ', points_per_cluster * clusters, ' requested points')
+    print('Found ', len(sampled_data), ' points out of ', math.ceil(split * float(len(data))), ' requested points')
     return sampled_data, remaining_data
 
 def spectral(data,split,clusters,rng):
@@ -179,7 +179,7 @@ def spectral(data,split,clusters,rng):
     if delta > 0:
         new_samples, remaining_data = resample(remaining_data, delta, rng)
         sampled_data = np.append(sampled_data, new_samples)
-    print('Found ', len(sampled_data), ' points out of ', points_per_cluster * clusters, ' requested points')
+    print('Found ', len(sampled_data), ' points out of ', math.ceil(split * float(len(data))), ' requested points')
     return sampled_data, remaining_data
 
 def birch(data,split,clusters,rng):
@@ -208,11 +208,11 @@ def birch(data,split,clusters,rng):
             else:
                 sampled_data = np.append(sampled_data, idx)
 
-    delta = points_per_cluster * clusters - len(sampled_data)
+    delta = math.ceil(split * float(len(data))) - len(sampled_data)
     if delta > 0:
         new_samples, remaining_data = resample(remaining_data, delta, rng)
         sampled_data = np.append(sampled_data, new_samples)
-    print('Found ', len(sampled_data), ' points out of ', points_per_cluster * clusters, ' requested points')
+    print('Found ', len(sampled_data), ' points out of ',math.ceil(split * float(len(data))), ' requested points')
     return sampled_data, remaining_data
 
 def subgraph_clustering(data,split,leaf_size,neighbors,metric,rng):
@@ -248,11 +248,11 @@ def subgraph_clustering(data,split,leaf_size,neighbors,metric,rng):
                 sampled_data = idg
             else:
                 sampled_data = np.append(sampled_data, idg)
-    delta = points_per_cluster * len(SG) - len(sampled_data)
+    delta = math.ceil(split * float(len(data))) - len(sampled_data)
     if delta > 0:
         new_samples, remaining_data = resample(remaining_data,delta,rng)
         sampled_data = np.append(sampled_data, new_samples)
-    print('Found ', len(sampled_data), ' points out of ', points_per_cluster * len(SG), ' requested points')
+    print('Found ', len(sampled_data), ' points out of ', math.ceil(split * float(len(data))), ' requested points')
     return sampled_data, remaining_data
 
 def grid(data,split,grids,rng):
@@ -292,6 +292,9 @@ def grid(data,split,grids,rng):
     binned_data = [ele for ele in binned_data if ele != []] # remove empty bins
     #sample data
     points_per_cluster = math.ceil(split * float(len(data)) / float(len(binned_data)))
+    if points_per_cluster*len(binned_data) > math.ceil(split * float(len(data))):
+        print('Warning: this number of grid points will not allow for the requested data split. Considering changing the number of grid points...')
+
     sampled_data = None
     remaining_data = None
     for bx in binned_data:
@@ -310,11 +313,11 @@ def grid(data,split,grids,rng):
                 remaining_data = non_samples
             else:
                 remaining_data = np.append(remaining_data, non_samples)
-    delta = points_per_cluster*(len(binned_data)) - len(sampled_data)
+    delta = math.ceil(split * float(len(data))) - len(sampled_data)
     if delta > 0:
         new_samples, remaining_data = resample(remaining_data, delta, rng)
         sampled_data = np.append(sampled_data, new_samples)
-    print('Found ',len(sampled_data), ' points out of ',points_per_cluster*(len(binned_data)),' requested points')
+    print('Found ',len(sampled_data), ' points out of ',math.ceil(split * float(len(data))),' requested points')
     return sampled_data, remaining_data
 
 def run_sampling(data,sampling_type,split,rng,params_group,y=None):
