@@ -227,6 +227,8 @@ def subgraph_clustering(data,split,leaf_size,neighbors,metric,rng):
                 G.add_edge(i,ind[i][j])
     SG = list(nx.connected_components(G))
     points_per_cluster = math.ceil(split * float(len(data)) / float(len(SG)))
+    if len(SG) > math.ceil(split * float(len(data))):
+        print('Number of subgraphs grater than requested sample size...consider increasing the k value...')
     sampled_data = None
     remaining_data = None
     for i,sg in enumerate(SG):
