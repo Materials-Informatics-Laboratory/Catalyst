@@ -31,13 +31,14 @@ def plot_data(data):
 
     means = [[],[],[]]
     image = 0
-    for at in data["avg_atm_features"][image]:
+    print(data)
+    for at in data["avg_ng_features"][image]:
         atom_data.append(at)
         means[0].append(get_top_nperc_rankings(at))
-    for at in data["avg_bnd_features"][image]:
+    for at in data["avg_na_features"][image]:
         bond_data.append(at)
         means[1].append(get_top_nperc_rankings(at))
-    for at in data["avg_ang_features"][image]:
+    for at in data["avg_ea_features"][image]:
         angle_data.append(at)
         means[2].append(get_top_nperc_rankings(at))
     all_data = [atom_data,bond_data,angle_data]
@@ -49,7 +50,7 @@ def plot_data(data):
 
     fixed_labels = []
     labels = [item.get_text() for item in ax[0].get_xticklabels()]
-    for i,at in enumerate(data["all_atom_types"]):
+    for i,at in enumerate(data["all_ea_types"]):
         labels[i] = at
     fixed_labels.append(labels)
     from ase import Atoms
@@ -59,7 +60,7 @@ def plot_data(data):
 
     ax[0].set_xticklabels(labels)
     labels = [item.get_text() for item in ax[1].get_xticklabels()]
-    for i, at in enumerate(data["all_bond_types"]):
+    for i, at in enumerate(data["all_na_types"]):
         labels[i] = at
     for i in range(len(numbers)):
         for j in range(len(numbers)):
@@ -72,7 +73,7 @@ def plot_data(data):
     ax[1].set_xticklabels(labels)
 
     labels = [item.get_text() for item in ax[2].get_xticklabels()]
-    for i, at in enumerate(data["all_angle_types"]):
+    for i, at in enumerate(data["all_ea_types"]):
         labels[i] = at
     for i in range(len(numbers)):
         for j in range(len(numbers)):
@@ -90,7 +91,7 @@ def plot_data(data):
     fig2, ax2 = plt.subplots(nrows=1, ncols=3)
     fig3, ax3 = plt.subplots(nrows=1, ncols=3)
 
-    lts = ["all_atom_types", "all_bond_types", "all_angle_types"]
+    lts = ["all_ng_types", "all_na_types", "all_ea_types"]
     perc = [1.0, 0.25, 0.25]
     all_labels = []
     all_sub_data = []
@@ -137,201 +138,201 @@ def plot_data(data):
     plt.show()
 
 def get_total_statistics(all_stats_data, all_data):
-    final_data = dict(avg_bnd_features=[],
-                        avg_atm_features=[],
-                        avg_ang_features=[],
-                        std_atm_features=[],
-                        std_bnd_features=[],
-                        std_ang_features=[],
-                        all_atom_types = [],
-                        all_bond_types = [],
-                        all_angle_types = [])
+    final_data = dict(avg_na_features=[],
+                        avg_ng_features=[],
+                        avg_ea_features=[],
+                        std_ng_features=[],
+                        std_na_features=[],
+                        std_ea_features=[],
+                        all_ng_types = [],
+                        all_na_types = [],
+                        all_ea_types = [])
 
-    all_bonds = []
-    all_angles = []
-    all_atoms = []
+    all_na = []
+    all_ea = []
+    all_ng = []
 
     for data in all_data:
-        for bt in data["bnds"]:
+        for bt in data["na"]:
             check = 0
-            for bond in all_bonds:
+            for bond in all_na:
                 if bond == bt:
                     check = 1
                     break
             if check == 0:
-                all_bonds.append(bt)
-        if data["angs"] is not None:
-            for ba in data["angs"]:
+                all_na.append(bt)
+        if data["ea"] is not None:
+            for ba in data["ea"]:
                 check = 0
-                for angle in all_angles:
+                for angle in all_ea:
                     if angle == ba:
                         check = 1
                         break
                 if check == 0:
-                    all_angles.append(ba)
-        for at in data["atms"]:
+                    all_ea.append(ba)
+        for at in data["ng"]:
             check = 0
-            for atom in all_atoms:
+            for atom in all_ng:
                 if atom == at:
                     check = 1
                     break
             if check == 0:
-                all_atoms.append(at)
+                all_ng.append(at)
 
     for data in all_stats_data:
         for feature_types in data.items():
             for i, image_vals in enumerate(feature_types[1]):
                 final_data[feature_types[0]].append([])
-                if 'bnd' in feature_types[0]:
-                    for j in range(len(all_bonds)):
+                if 'na' in feature_types[0]:
+                    for j in range(len(all_na)):
                         final_data[feature_types[0]][-1].append([])
-                elif 'ang' in feature_types[0]:
-                    for j in range(len(all_angles)):
+                elif 'ea' in feature_types[0]:
+                    for j in range(len(all_ea)):
                         final_data[feature_types[0]][-1].append([])
-                elif 'atm' in feature_types[0]:
-                    for j in range(len(all_atoms)):
+                elif 'ng' in feature_types[0]:
+                    for j in range(len(all_ng)):
                         final_data[feature_types[0]][-1].append([])
         break
     for k,data in enumerate(all_stats_data):
         for feature_types in data.items():
             for i, image_vals in enumerate(feature_types[1]):
-                if 'bnd' in feature_types[0]:
+                if 'na' in feature_types[0]:
                     for n, val in enumerate(image_vals):
                         index = -1
-                        for j in range(len(all_bonds)):
-                            if all_data[k]["bnds"][n] == all_bonds[j]:
+                        for j in range(len(all_na)):
+                            if all_data[k]["na"][n] == all_na[j]:
                                 index = j
                                 break
                         if float(val) > -1.0:
                             final_data[feature_types[0]][i][index].append(float(val))
-                if 'ang' in feature_types[0]:
+                if 'ea' in feature_types[0]:
                     for n, val in enumerate(image_vals):
                         index = -1
-                        for j in range(len(all_angles)):
-                            if all_data[k]["angs"][n] == all_angles[j]:
+                        for j in range(len(all_ea)):
+                            if all_data[k]["ea"][n] == all_ea[j]:
                                 index = j
                                 break
                         if float(val) > -1.0:
                             final_data[feature_types[0]][i][index].append(float(val))
-                if 'atm' in feature_types[0]:
+                if 'ng' in feature_types[0]:
                     for n, val in enumerate(image_vals):
                         index = -1
-                        for j in range(len(all_atoms)):
-                            if all_data[k]["atms"][n] == all_atoms[j]:
+                        for j in range(len(all_ng)):
+                            if all_data[k]["ng"][n] == all_ng[j]:
                                 index = j
                                 break
                         if float(val) > -1.0:
                             final_data[feature_types[0]][i][index].append(float(val))
 
-    final_data["all_atom_types"] = all_atoms
-    final_data["all_bond_types"] = all_bonds
-    final_data["all_angle_types"] = all_angles
+    final_data["all_ng_types"] = all_ng
+    final_data["all_na_types"] = all_na
+    final_data["all_ea_types"] = all_ea
 
     return final_data
 
 def get_single_statistics(ind_data,take=0):
-    avg_data = dict(avg_bnd_features=[],
-                    avg_atm_features=[],
-                    avg_ang_features=[],
-                    std_atm_features=[],
-                    std_bnd_features=[],
-                    std_ang_features=[])
+    avg_data = dict(avg_na_features=[],
+                    avg_ng_features=[],
+                    avg_ea_features=[],
+                    std_ng_features=[],
+                    std_na_features=[],
+                    std_ea_features=[])
 
-    avg_data["avg_atm_features"].append([])
-    avg_data["std_atm_features"].append([])
+    avg_data["avg_ng_features"].append([])
+    avg_data["std_ng_features"].append([])
     pdb = Physics_data()
     elems = []
-    for i,e in enumerate(ind_data["atms"]):
+    for i,e in enumerate(ind_data["ng"]):
         for el in pdb.elements:
             if el.symbol == e:
-                ind_data["atms"][i] = el.number
+                ind_data["ng"][i] = el.number
                 break
-    for i in ind_data["atms"]:
-        avg_data["avg_atm_features"][-1].append([])
-        avg_data["std_atm_features"][-1].append([])
-    avg_data["avg_bnd_features"].append([])
-    avg_data["std_bnd_features"].append([])
-    for i in ind_data["bnds"]:
-        avg_data["avg_bnd_features"][-1].append([])
-        avg_data["std_bnd_features"][-1].append([])
-    avg_data["avg_ang_features"].append([])
-    avg_data["std_ang_features"].append([])
-    if ind_data["angs"] is not None:
-        for i in ind_data["angs"]:
-            avg_data["avg_ang_features"][-1].append([])
-            avg_data["std_ang_features"][-1].append([])
+    for i in ind_data["ng"]:
+        avg_data["avg_ng_features"][-1].append([])
+        avg_data["std_ng_features"][-1].append([])
+    avg_data["avg_na_features"].append([])
+    avg_data["std_na_features"].append([])
+    for i in ind_data["na"]:
+        avg_data["avg_na_features"][-1].append([])
+        avg_data["std_na_features"][-1].append([])
+    avg_data["avg_ea_features"].append([])
+    avg_data["std_ea_features"].append([])
+    if ind_data["ea"] is not None:
+        for i in ind_data["ea"]:
+            avg_data["avg_ea_features"][-1].append([])
+            avg_data["std_ea_features"][-1].append([])
 
     counter = 0
-    for j, atm in enumerate(ind_data['i_atm_data']):
+    for j, atm in enumerate(ind_data['i_ng_data']):
         for k in range(len(atm)):
             system_index = -1
             for i, index in enumerate(ind_data["total_indices"][0]):
-                if int(ind_data["i_atm_data"][j][k]) < int(index) + (i + 1):
+                if int(ind_data["i_ng_data"][j][k]) < int(index) + (i + 1):
                     system_index = i
                     break
             if system_index == take:
-                el_counter = np.where(np.array(ind_data["atms"]) == j)
-                avg_data["avg_atm_features"][0][el_counter[0][0]].append(float(ind_data["atm_data"][counter]))
-                avg_data["std_atm_features"][0][el_counter[0][0]].append(float(ind_data["atm_data"][counter]))
+                el_counter = np.where(np.array(ind_data["ng"]) == j)
+                avg_data["avg_ng_features"][0][el_counter[0][0]].append(float(ind_data["ng_data"][counter]))
+                avg_data["std_ng_features"][0][el_counter[0][0]].append(float(ind_data["ng_data"][counter]))
             counter += 1
-    bnd_counts = {v: np.where(ind_data["i_bnd_data"] == v)[0] for v in np.unique(ind_data["i_bnd_data"])}
+    bnd_counts = {v: np.where(ind_data["i_na_data"] == v)[0] for v in np.unique(ind_data["i_na_data"])}
     if ind_data["total_indices"][1].size()[0] == 0:
         ind_data["total_indices"][1] = torch.tensor([10000000000])
-    for j, bond_type in enumerate(ind_data["bond_amounts"]):  # bond type
+    for j, bond_type in enumerate(ind_data["na_amounts"]):  # bond type
         if take == 0:
             indices = np.where(bnd_counts[j] < ind_data["total_indices"][1][take].item())
         else:
             indices = np.where((bnd_counts[j] < ind_data["total_indices"][1][take - 1].item()) & (
                         bnd_counts[j] < ind_data["total_indices"][1][take].item()))
         for index in indices[0]:
-            avg_data["avg_bnd_features"][0][j].append(float(ind_data["bnd_data"][bnd_counts[j][index]]))
-            avg_data["std_bnd_features"][0][j].append(float(ind_data["bnd_data"][bnd_counts[j][index]]))
-    if ind_data["angs"] is not None:
-        ang_counts = {v: np.where(ind_data["i_ang_data"] == v)[0] for v in np.unique(ind_data["i_ang_data"])}
-        for j, ang_type in enumerate(ind_data["angle_amounts"]):  # bond type
+            avg_data["avg_na_features"][0][j].append(float(ind_data["na_data"][bnd_counts[j][index]]))
+            avg_data["std_na_features"][0][j].append(float(ind_data["na_data"][bnd_counts[j][index]]))
+    if ind_data["ea"] is not None:
+        ang_counts = {v: np.where(ind_data["i_ea_data"] == v)[0] for v in np.unique(ind_data["i_ea_data"])}
+        for j, ang_type in enumerate(ind_data["ea_amounts"]):  # bond type
             if take == 0:
                 indices = np.where(ang_counts[j] < ind_data["total_indices"][2][take].item())
             else:
                 indices = np.where((ang_counts[j] < ind_data["total_indices"][2][take - 1].item()) &
                                    (ang_counts[j] < ind_data["total_indices"][2][take].item()))
             for index in indices[0]:
-                avg_data["avg_ang_features"][0][j].append(float(ind_data["ang_data"][ang_counts[j][index]]))
-                avg_data["std_ang_features"][0][j].append(float(ind_data["ang_data"][ang_counts[j][index]]))
-    for i,system in enumerate(avg_data["avg_atm_features"]):
+                avg_data["avg_ea_features"][0][j].append(float(ind_data["ea_data"][ang_counts[j][index]]))
+                avg_data["std_ea_features"][0][j].append(float(ind_data["ea_data"][ang_counts[j][index]]))
+    for i,system in enumerate(avg_data["avg_ng_features"]):
         for j,data in enumerate(system):
             if len(data) > 0:
                 avg = np.average(data)
                 std = np.std(data)
 
-                avg_data["avg_atm_features"][i][j] = avg
-                avg_data["std_atm_features"][i][j] = std
+                avg_data["avg_ng_features"][i][j] = avg
+                avg_data["std_ng_features"][i][j] = std
             else:
-                avg_data["avg_atm_features"][i][j] = -1.0
-                avg_data["std_atm_features"][i][j] = -1.0
+                avg_data["avg_ng_features"][i][j] = -1.0
+                avg_data["std_ng_features"][i][j] = -1.0
 
-    for i,system in enumerate(avg_data["avg_bnd_features"]):
+    for i,system in enumerate(avg_data["avg_na_features"]):
         for j,data in enumerate(system):
             if len(data) > 0:
                 avg = np.average(data)
                 std = np.std(data)
 
-                avg_data["avg_bnd_features"][i][j] = avg
-                avg_data["std_bnd_features"][i][j] = std
+                avg_data["avg_na_features"][i][j] = avg
+                avg_data["std_na_features"][i][j] = std
             else:
-                avg_data["avg_bnd_features"][i][j] = -1.0
-                avg_data["std_bnd_features"][i][j] = -1.0
-    if ind_data["angs"] is not None:
-        for i,system in enumerate(avg_data["avg_ang_features"]):
+                avg_data["avg_na_features"][i][j] = -1.0
+                avg_data["std_na_features"][i][j] = -1.0
+    if ind_data["ea"] is not None:
+        for i,system in enumerate(avg_data["avg_ea_features"]):
             for j,data in enumerate(system):
                 if len(data) > 0:
                     avg = np.average(data)
                     std = np.std(data)
 
-                    avg_data["avg_ang_features"][i][j] = avg
-                    avg_data["std_ang_features"][i][j] = std
+                    avg_data["avg_ea_features"][i][j] = avg
+                    avg_data["std_ea_features"][i][j] = std
                 else:
-                    avg_data["avg_ang_features"][i][j] = -1.0
-                    avg_data["std_ang_features"][i][j] = -1.0
+                    avg_data["avg_ea_features"][i][j] = -1.0
+                    avg_data["std_ea_features"][i][j] = -1.0
 
     return avg_data
 
@@ -352,18 +353,18 @@ else:
             print('Analyzing ',f.split('\\')[-1])
             rankings_dict = np.load(f, allow_pickle=True)
             rankings_dict = rankings_dict.item()
-            amounts_dict = dict(atom_amounts = [],
-                                bond_amounts = [],
-                                angle_amounts = [],
-                                total_indices = [rankings_dict['atm_amounts'],rankings_dict['bnd_amounts'],rankings_dict['ang_amounts']])
-            for vals in rankings_dict['i_atm_data']:
-                amounts_dict['atom_amounts'].append(len(vals))
-            values, counts = np.unique(rankings_dict['i_bnd_data'], return_counts=True)
+            amounts_dict = dict(ng_amounts = [],
+                                na_amounts = [],
+                                ea_amounts = [],
+                                total_indices = [rankings_dict['ng_amounts'],rankings_dict['na_amounts'],rankings_dict['ea_amounts']])
+            for vals in rankings_dict['i_ng_data']:
+                amounts_dict['ng_amounts'].append(len(vals))
+            values, counts = np.unique(rankings_dict['i_na_data'], return_counts=True)
             for count in counts:
-                amounts_dict['bond_amounts'].append(count)
-            values, counts = np.unique(rankings_dict['i_ang_data'], return_counts=True)
+                amounts_dict['na_amounts'].append(count)
+            values, counts = np.unique(rankings_dict['i_ea_data'], return_counts=True)
             for count in counts:
-                amounts_dict['angle_amounts'].append(count)
+                amounts_dict['ea_amounts'].append(count)
             combined_dict = rankings_dict | amounts_dict
 
             total_stats_data.append(get_single_statistics(combined_dict,take=0))

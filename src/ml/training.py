@@ -9,7 +9,7 @@ import torch
 
 from .utils.distributed import ddp_destroy, ddp_setup, reduce_tensor
 from ..graph.graph import Atomic_Graph_Data, Generic_Graph_Data
-from .testing import test_intepretable, test_non_intepretable
+from .testing import test_non_intepretable
 from ..utilities.distributions import get_distribution
 from ..io.io import read_training_data, get_system_info
 from .utils.optimizer import set_optimizer
@@ -147,12 +147,13 @@ def run_training(rank,iteration,ml=None):
         if os.path.isdir(parameters['io_dict']['model_dir']):
             shutil.rmtree(parameters['io_dict']['model_dir'])
         os.makedirs(parameters['io_dict']['model_dir'], exist_ok=True)
-        print('Reading data...')
+        print('Reading data-...')
 
-    if parameters['model_dict']['pre_training']:
-        parameters['io_dict']['loaded_model_name'] = glob.glob(os.path.join(parameters['io_dict']['main_path'],'models','pretraining','pre*'))
-    model_data = torch.load(parameters['io_dict']['loaded_model_name'][0])
-    model.load_state_dict(model_data['model'])
+    if parameters['model_dict']['restart_training']:
+        if parameters['model_dict']['pre_training']:
+            parameters['io_dict']['loaded_model_name'] = glob.glob(os.path.join(parameters['io_dict']['main_path'],'models','pretraining','pre*'))
+        model_data = torch.load(parameters['io_dict']['loaded_model_name'][0])
+        model.load_state_dict(model_data['model'])
     model.to(parameters['device_dict']['device'])
     if parameters['device_dict']['run_ddp']:
         model = DDP(model, device_ids=[rank], find_unused_parameters=True)
@@ -299,7 +300,7 @@ def run_training(rank,iteration,ml=None):
                      torch.save(model_data,
                                 os.path.join(parameters['io_dict']['model_dir'], 'model_' + str(id) + '_' + str(now)))
         if len(running_valid_delta) == parameters['model_dict']['max_deltas']:
-            if sum(running_valid_delta)/len(running_valid_delta)< parameters['model_dict']['train_tolerance']:
+            if sum(running_valid_delta)/len(running_valid_delta)< parameters['model_dict']['train_delta'][1] and (sum(L_valid[-parameters['model_dict']['max_deltas']:])/parameters['model_dict']['max_deltas']) < parameters['model_dict']['train_tolerance'][1]:
                 if rank == 0:
                     print('Validation delta satisfies set tolerance...exiting training loop...')
                 ep = parameters['model_dict']['num_epochs'][1]
@@ -446,7 +447,7 @@ def run_pre_training(rank,ml=None):
                 )
                 torch.save(model_data,os.path.join(parameters['io_dict']['model_dir'],'pre_'+str(id)+'_'+str(now)))
         if len(running_train_delta) == parameters['model_dict']['max_deltas']:
-            if sum(running_train_delta) / len(running_train_delta) < parameters['model_dict']['train_tolerance']:
+            if sum(running_train_delta) / len(running_train_delta) < parameters['model_dict']['train_delta'][0] and (sum(L_train[-parameters['model_dict']['max_deltas']:])/parameters['model_dict']['max_deltas']) < parameters['model_dict']['train_tolerance'][0]:
                 if rank == 0:
                     print('Training delta satisfies set tolerance...exiting training loop...')
                 ep = parameters['model_dict']['num_epochs'][0]

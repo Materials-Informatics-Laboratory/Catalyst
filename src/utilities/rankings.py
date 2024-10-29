@@ -2,7 +2,8 @@ import numpy as np
 import torch as torch
 from .structure_properties import get_unique_bonds, get_unique_bond_angles
 from ..utilities.physics_database import Physics_data
-def organize_rankings(data,atom_data,bond_data,angle_data,atom_mode='atomic_numbers'):
+
+def organize_rankings_atomic(data,atom_data,bond_data,angle_data,atom_mode='atomic_numbers'):
 
     bnd_type = []
     ang_type = []
@@ -57,3 +58,46 @@ def organize_rankings(data,atom_data,bond_data,angle_data,atom_mode='atomic_numb
     x_bnd, i_bnd = get_unique_bonds(bnd_type)
 
     return i_atm,x_bnd, i_bnd, x_ang, i_ang, elements
+
+def organize_rankings_generic(data,g_node_data,a_node_data,a_edge_data):
+
+    ng_type = [ii for ii in range(len(g_node_data[0]))]
+    na_type = []
+    ea_type = []
+
+    for i in range(len(a_node_data[0])):
+        a1 = g_node_data[a_node_data[0][i]].numpy()
+        a2 = g_node_data[a_node_data[1][i]].numpy()
+        a1 = np.where(a1 == 1)[0][0]
+        a2 = np.where(a2 == 1)[0][0]
+
+        na = [ng_type[a1],ng_type[a2]]
+        na_type.append(na)
+    if hasattr(data,'edge_A') or hasattr(data,'x_ang'):
+        ad0_np = a_edge_data[0].numpy()
+        ad1_np = a_edge_data[1].numpy()
+        ea_type = [0]*len(ad0_np)
+        for i, a0 in enumerate(ad0_np):
+            aa1 = [a_node_data[0][a0], a_node_data[1][a0]]
+            aa2 = [a_node_data[0][ad1_np[i]], a_node_data[1][ad1_np[i]]]
+            bx = [aa1[0].numpy(), aa1[1].numpy(), aa2[0].numpy()]
+            for j, b in enumerate(bx):
+                bx[j] = g_node_data[b].numpy()
+            two_body = [np.where(bx[0] == 1)[0][0], np.where(bx[1] == 1)[0][0], np.where(bx[2] == 1)[0][0]]
+            three_body = [ng_type[two_body[0]], ng_type[two_body[1]], ng_type[two_body[2]]]
+            ea_type[i] = torch.tensor(three_body)
+        x_ea, i_ea = get_unique_bond_angles(ea_type)
+    else:
+        x_ea = None
+        i_ea = None
+
+    i_ng = []
+    for i in range(len(ng_type)):
+        i_ng.append([])
+        for j,ad in enumerate(g_node_data):
+            column = np.where(ad.numpy() == 1.0)[0][0]
+            if column == i:
+                i_ng[-1].append(j)
+    x_na, i_na = get_unique_bonds(na_type)
+
+    return i_ng,x_na, i_na, x_ea, i_ea, ng_type

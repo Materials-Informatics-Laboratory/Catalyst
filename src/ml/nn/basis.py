@@ -1,3 +1,4 @@
+from torch import nn
 import torch
 
 
@@ -28,7 +29,6 @@ def scalar2basis(x, start, end, num_basis, basis='gaussian'):
         'bessel': bessel,
     }
     return funcs[basis](x, start, end, num_basis)
-
 
 class GaussianRandomFourierFeatures(torch.nn.Module):
     """Gaussian random Fourier features from the paper titled

@@ -21,7 +21,10 @@ class Generic_Graph_Data(Data):
                  edge_index_A=None,
                  node_A=None,
                  edge_A=None,
-                 mask_edge_A=None
+                 mask_edge_A=None,
+                 node_G_amounts = None,
+                 node_A_amounts = None,
+                 edge_A_amounts = None
                  ):
         super().__init__()
         self.reference = reference
@@ -30,6 +33,9 @@ class Generic_Graph_Data(Data):
         self.node_G = node_G
         self.node_A = node_A
         self.edge_A = edge_A
+        self.node_G_amounts = node_G_amounts
+        self.node_A_amounts = node_A_amounts
+        self.edge_A_amounts = edge_A_amounts
         self.gid = None
 
     def __inc__(self, key, value, *args, **kwargs):

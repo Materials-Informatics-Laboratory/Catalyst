@@ -20,10 +20,10 @@ class Encoder(nn.Module):
             nn.LayerNorm(node_dim),
         )
         self.embed_edge = nn.Sequential(
-            MLP([3+1, edge_dim, edge_dim], act=nn.SiLU()),
+            MLP([3 + 1, edge_dim, edge_dim], act=nn.SiLU()),
             nn.LayerNorm(edge_dim),
         )
-    
+
     def forward(self, data):
         # Embed nodes
         data.h_node = self.embed_node(data.z)
@@ -32,13 +32,14 @@ class Encoder(nn.Module):
         e_ij = data.edge_attr
         h_edge = torch.cat([e_ij, e_ij.norm(dim=-1, keepdim=True)], dim=-1)
         data.h_edge = self.embed_edge(h_edge)
-        
+
         return data
 
 
 class Encoder_dpm(Encoder):
     """MeshGraphNets Encoder for diffusion model, with additional time encoding `data.h_time`.
     """
+
     def __init__(self, num_species, node_dim, edge_dim):
         super().__init__(num_species, node_dim, edge_dim)
         self.embed_time = nn.Sequential(
@@ -57,6 +58,7 @@ class Processor(nn.Module):
     """MeshGraphNets Processor.
     The processor updates both node and edge embeddings `data.h_node`, `data.h_edge`.
     """
+
     def __init__(self, num_convs, node_dim, edge_dim):
         super().__init__()
         self.num_convs = num_convs
@@ -76,12 +78,13 @@ class Decoder(nn.Module):
     """MeshGraphNets Decoder.
     This decoder only operates on the node embedding `data.h_node`.
     """
+
     def __init__(self, node_dim, out_dim):
         super().__init__()
         self.node_dim = node_dim
         self.out_dim = out_dim
         self.decoder = MLP([node_dim, node_dim, out_dim], act=nn.SiLU())
-    
+
     def forward(self, data):
         return self.decoder(data.h_node)
 
@@ -89,14 +92,14 @@ class Decoder(nn.Module):
 class MeshGraphNets(nn.Module):
     """MeshGraphNets.
     """
+
     def __init__(self, encoder, processor, decoder):
         super().__init__()
-        self.encoder   = encoder
+        self.encoder = encoder
         self.processor = processor
-        self.decoder   = decoder
-    
+        self.decoder = decoder
+
     def forward(self, data):
         data = self.encoder(data)
         data = self.processor(data)
         return self.decoder(data)
-

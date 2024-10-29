@@ -45,13 +45,13 @@ class ML():
                                     num_workers=0
                                 ),
                                characterization_dict = dict(
-                                    run_characterization=True,
                                     model = None
                                 ),
                                model_dict = dict(
                                    n_models=1,
                                    num_epochs=[1, 1],
-                                   train_tolerance=1.0,
+                                   train_delta = [1.0,1.0],
+                                   train_tolerance =[1.0,1.0],
                                    max_deltas=4,
                                    accumulate_loss=['sum', 'sum', 'sum'],
                                    loss_func=torch.nn.MSELoss(),
@@ -111,9 +111,6 @@ class ML():
         if 'characterization_dict' in new_params:
             if not 'model' in new_params['characterization_dict']:
                 print('Warning: no model in characterization dictionary...')
-            if not 'run_characterization' in new_params['characterization_dict']:
-                print('WARNING: run_characterization not set in characterization dictionary...setting to True')
-                new_params['characterization_dict']['characterization'] = True
             if 'run_ddp' in new_params['device_dict']:
                 print('run_ddp cannot be used with cahracterization routines...setting to false')
                 new_params['device_dict']['run_ddp'] = False
@@ -158,9 +155,58 @@ class ML():
                 if len(new_params['model_dict']['num_epochs']) != 2:
                     print('Num_epochs tag does not have 2 values...killing job...')
                     exit(0)
+            if not 'pre_training' in new_params['model_dict']:
+                print('WARNING: Pretraining not set...setting to False...')
+                new_params['model_dict']['pre_training'] = False
             if not 'train_tolerance' in new_params['model_dict']:
                 print('WARNGING: training tolerance not set...setting to 1e-3')
-                new_params['model_dict']['train_tolerance'] = 1e-3
+                new_params['model_dict']['train_tolerance'] = [1e-3,1e-3]
+            else:
+                if not isinstance(new_params['model_dict']['train_delta'], list):
+                    print('WARNING: train_delta is not a list...fixing this for you...')
+                    if new_params['model_dict']['pre_training']:
+                        print(
+                            'Pretraining set to True, interpreting your train_delta as pretraining delta...setting value for both training and pretraining')
+                        new_params['model_dict']['train_delta'] = [new_params['model_dict']['train_delta'],
+                                                                    new_params['model_dict']['train_delta']]
+                    else:
+                        print(
+                            'Pretraining set to False, interpreting your train_tolerance as training delta...setting value for training only')
+                        new_params['model_dict']['train_delta'] = [-1.0, new_params['model_dict']['train_delta']]
+                else:
+                    if len(new_params['model_dict']['train_delta']) != 2:
+                        if new_params['model_dict']['pre_training']:
+                            print(
+                                'Pretraining set to True, interpreting your train_tolerance as pretraining tolerance...setting value for both training and pretraining')
+                            new_params['model_dict']['train_delta'] = [new_params['model_dict']['train_delta'],
+                                                                        new_params['model_dict']['train_delta']]
+                        else:
+                            print(
+                                'Pretraining set to False, interpreting your train_tolerance as training tolerance...setting value for training only')
+                            new_params['model_dict']['train_delta'] = [-1.0, new_params['model_dict']['train_delta']]
+            if not 'train_delta' in new_params['model_dict']:
+                print('WARNGING: training delta not set...setting to 1e-3')
+                new_params['model_dict']['train_delta'] = [1e-3,1e-3]
+            else:
+                if not isinstance(new_params['model_dict']['train_tolerance'], list):
+                    print('WARNING: train_tolerance is not a list...fixing this for you...')
+                    if new_params['model_dict']['pre_training']:
+                        print('Pretraining set to True, interpreting your train_tolerance as pretraining tolerance...setting value for both training and pretraining')
+                        new_params['model_dict']['train_tolerance'] = [new_params['model_dict']['train_tolerance'],new_params['model_dict']['train_tolerance']]
+                    else:
+                        print('Pretraining set to False, interpreting your train_tolerance as training tolerance...setting value for training only')
+                        new_params['model_dict']['train_tolerance'] = [-1.0,new_params['model_dict']['train_tolerance']]
+                else:
+                    if len(new_params['model_dict']['train_tolerance']) != 2:
+                        if new_params['model_dict']['pre_training']:
+                            print(
+                                'Pretraining set to True, interpreting your train_tolerance as pretraining tolerance...setting value for both training and pretraining')
+                            new_params['model_dict']['train_tolerance'] = [new_params['model_dict']['train_tolerance'],
+                                                                        new_params['model_dict']['train_tolerance']]
+                        else:
+                            print(
+                                'Pretraining set to False, interpreting your train_tolerance as training tolerance...setting value for training only')
+                            new_params['model_dict']['train_tolerance'] = [-1.0, new_params['model_dict']['train_tolerance']]
             if not 'max_deltas' in new_params['model_dict']:
                 print('WARNGING: max_deltas not set...setting to 3')
                 new_params['model_dict']['max_deltas'] = 3

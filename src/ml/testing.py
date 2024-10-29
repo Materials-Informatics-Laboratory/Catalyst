@@ -1,4 +1,4 @@
-from ..utilities.rankings import organize_rankings
+from ..utilities.rankings import organize_rankings_atomic, organize_rankings_generic
 from .utils.distributed import reduce_tensor
 from torch import nn
 import torch
@@ -80,58 +80,6 @@ def accumulate_predictions(pred,data,loss_tag):
 
     return preds, y
 @torch.no_grad()
-def test_intepretable(loader,model,parameters):
-    model.eval()
-    loss_fn = parameters['model_dict']['loss_func']
-    total_loss = 0.0
-    for i,data in enumerate(loader):
-        print('Testing on data point ',i)
-        data = data.to(parameters['device_dict']['device'], non_blocking=parameters['device_dict']['pin_memory'])
-        pred = model(data)
-
-        atom_contrib = (pred[0].cpu() / all_sum.cpu()).flatten().numpy()
-        bond_contrib = (pred[1].cpu() / all_sum.cpu()).flatten().numpy()
-        if hasattr(data,'x_ang'):
-            angle_contrib = (pred[2].cpu() / all_sum.cpu()).flatten().numpy()
-
-            i_atm, x_bnd, i_bnd, x_ang, i_ang = organize_rankings(data.cpu(),data.x_atm.cpu(), data.edge_index_G.cpu(),
-            data.edge_index_A.cpu(), parameters['elements'])
-        else:
-            i_atm, x_bnd, i_bnd, x_ang, i_ang = organize_rankings(data.cpu(), data.x_atm.cpu(), data.edge_index_G.cpu(),
-                                                                  None, parameters['elements'])
-
-        ranked_data = dict(y=[data.y.item(), pred.item()],
-            atms = parameters['elements'],
-            bnds = x_bnd,
-            angs = x_ang,
-            atm_data = [],
-            bnd_data = [],
-            ang_data = [],
-            i_atm_data = i_atm,
-            i_bnd_data = i_bnd,
-            i_ang_data = i_ang,
-            atm_amounts = data['atm_amounts'],
-            bnd_amounts = data['bnd_amounts'],
-            ang_amounts = data['ang_amounts']
-        )
-        for typ in i_atm:
-            for a in typ:
-                ranked_data['atm_data'].append(atom_contrib[a])
-        for b in i_bnd:
-            ranked_data['bnd_data'].append(bond_contrib[b])
-        if hasattr(data,'x_ang'):
-            for a in i_ang:
-                ranked_data['ang_data'].append(angle_contrib[a])
-        np.save(os.path.join(parameters['io_dict']['results_dir'], str(i) + '_rankings.npy'), ranked_data)
-
-        loss = loss_fn(all_sum, data.y)
-        total_loss += loss
-
-    if parameters['device_dict']['run_ddp']:
-        total_loss = reduce_tensor(torch.tensor(total_loss).to(parameters['device_dict']['device'])).item()
-    return total_loss / (len(loader)*parameters['device_dict']['world_size'])
-
-@torch.no_grad()
 def test_non_intepretable(loader,model,parameters,ind_fn='all'):
     model.eval()
     loss_fn = parameters['model_dict']['loss_func']
@@ -154,7 +102,6 @@ def test_non_intepretable(loader,model,parameters,ind_fn='all'):
     if parameters['device_dict']['run_ddp']:
         total_loss = reduce_tensor(torch.tensor(total_loss).to(parameters['device_dict']['device'])).item()
     return total_loss / (len(loader)*parameters['device_dict']['world_size'])
-
 @torch.no_grad()
 def predict_non_intepretable(loader,model,parameters,ind_fn='all'):
     model.eval()
@@ -175,63 +122,82 @@ def predict_non_intepretable(loader,model,parameters,ind_fn='all'):
     if parameters['io_dict']['write_indv_pred']:
         of.close()
     return preds
-
 @torch.no_grad()
 def predict_intepretable(loader,model,parameters,ind_fn='all'):
     model.eval()
     if parameters['io_dict']['write_indv_pred']:
         of = open(os.path.join(parameters['io_dict']['results_dir'], ind_fn + '_indv_pred.data'), 'w')
         of.write('#Pred_y          \n')
-    preds = []
+    all_preds = []
     for i,data in enumerate(loader):
         print('predicting on structure ',i)
         data = data.to(parameters['device_dict']['device'], non_blocking=parameters['device_dict']['pin_memory'])
         pred = model(data)
-        all_sum = 0.0
+        preds = None
         for p in pred:
-            all_sum += p.sum()
+            if preds is None:
+                preds = p.sum()
+            else:
+                preds += p.sum()
+        all_preds.append(preds)
+        if hasattr(data, 'x_atm_batch'):
+            amounts = [data['atm_amounts'],data['bnd_amounts']]
+            node_G_contrib = (pred[0].cpu() / preds.cpu()).flatten().numpy()
+            node_A_contrib = (pred[1].cpu() / preds.cpu()).flatten().numpy()
+            if hasattr(data, 'x_ang'):
+                amounts.append(data['ang_amounts'])
+                edge_A_contrib = (pred[2].cpu() / preds.cpu()).flatten().numpy()
 
-        atom_contrib = (pred[0].cpu() / all_sum.cpu()).flatten().numpy()
-        bond_contrib = (pred[1].cpu() / all_sum.cpu()).flatten().numpy()
-        if hasattr(data, 'x_ang'):
-            angle_contrib = (pred[2].cpu() / all_sum.cpu()).flatten().numpy()
+                i_ng, x_na, i_na, x_ea, i_ea, x_ng = organize_rankings_atomic(data.cpu(), data.x_atm.cpu(), data.edge_index_G.cpu(),
+                                                                      data.edge_index_A.cpu(),atom_mode='')
+            else:
+                i_ng, x_na, i_na, x_ea, i_ea, x_ng = organize_rankings_atomic(data.cpu(), data.x_atm.cpu(), data.edge_index_G.cpu(),
+                                                                      None)
+                amounts.append([])
+        elif hasattr(data, 'node_G_batch'):
+            amounts = [data['node_G_amounts'], data['node_A_amounts']]
+            node_G_contrib = (pred[0].cpu() / preds.cpu()).flatten().numpy()
+            node_A_contrib = (pred[1].cpu() / preds.cpu()).flatten().numpy()
+            if hasattr(data, 'edge_A'):
+                amounts.append(data['edge_A_amounts'])
+                edge_A_contrib = (pred[2].cpu() / preds.cpu()).flatten().numpy()
 
-            i_atm, x_bnd, i_bnd, x_ang, i_ang, elements = organize_rankings(data.cpu(), data.x_atm.cpu(), data.edge_index_G.cpu(),
-                                                                  data.edge_index_A.cpu(),atom_mode='')
-        else:
-            i_atm, x_bnd, i_bnd, x_ang, i_ang, elements = organize_rankings(data.cpu(), data.x_atm.cpu(), data.edge_index_G.cpu(),
-                                                                  None)
+                i_ng, x_na, i_na, x_ea, i_ea, x_ng = organize_rankings_generic(data.cpu(), data.node_G.cpu(),
+                                                                                data.edge_index_G.cpu(),
+                                                                                data.edge_index_A.cpu())
+            else:
+                i_ng, x_na, i_na, x_ea, i_ea, x_ng = organize_rankings_generic(data.cpu(), data.node_G.cpu(),
+                                                                                data.edge_index_G.cpu())
+                amounts.append([])
 
         ranked_data = dict(
-                           atms=elements,
-                           bnds=x_bnd,
-                           angs=x_ang,
-                           atm_data=[],
-                           bnd_data=[],
-                           ang_data=[],
-                           i_atm_data=i_atm,
-                           i_bnd_data=i_bnd,
-                           i_ang_data=i_ang,
-                           atm_amounts=data['atm_amounts'],
-                           bnd_amounts=data['bnd_amounts'],
-                           ang_amounts=data['ang_amounts']
+                           ng=x_ng,
+                           na=x_na,
+                           ea=x_ea,
+                           ng_data=[],
+                           na_data=[],
+                           ea_data=[],
+                           i_ng_data=i_ng,
+                           i_na_data=i_na,
+                           i_ea_data=i_ea,
+                           ng_amounts=amounts[0],
+                           na_amounts=amounts[1],
+                           ea_amounts=amounts[2]
                            )
-        for typ in i_atm:
+        for typ in i_ng:
             for a in typ:
-                ranked_data['atm_data'].append(atom_contrib[a])
-        for b in i_bnd:
-            ranked_data['bnd_data'].append(bond_contrib[b])
-        if hasattr(data, 'x_ang'):
-            for a in i_ang:
-                ranked_data['ang_data'].append(angle_contrib[a])
+                ranked_data['ng_data'].append(node_G_contrib[a])
+        for b in i_na:
+            ranked_data['na_data'].append(node_A_contrib[b])
+        if hasattr(data, 'x_ang') or hasattr(data, 'edge_A'):
+            for a in i_ea:
+                ranked_data['ea_data'].append(edge_A_contrib[a])
         np.save(os.path.join(parameters['io_dict']['results_dir'], str(i) + '_rankings.npy'), ranked_data)
-
-        preds.append(all_sum)
         if parameters['io_dict']['write_indv_pred']:
             of.write(str(all_sum.item()) + '\n')
     if parameters['io_dict']['write_indv_pred']:
         of.close()
-    return preds
+    return all_preds
 
 
 

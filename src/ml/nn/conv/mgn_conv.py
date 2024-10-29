@@ -27,7 +27,6 @@ class EdgeProcessor(nn.Module):
         out += edge_attr
         return out
 
-
 class NodeProcessor(nn.Module):
     """Node Processor for MeshGraphNets
     Args:
@@ -46,19 +45,20 @@ class NodeProcessor(nn.Module):
         out += x
         return out
 
-
 class MeshGraphNetsConv(MessagePassing):
     def __init__(self, node_dim:int, edge_dim:int):
         super().__init__(aggr='add')
         self.node_dim = node_dim
         self.edge_dim = edge_dim
         self.edge_processor = EdgeProcessor([node_dim*2 + edge_dim] + [edge_dim]*3)
-        self.node_processor = NodeProcessor([node_dim   + edge_dim] + [node_dim]*3)
-    
+        self.node_processor = NodeProcessor([node_dim + edge_dim] + [node_dim] * 3)
+
+
     def forward(self, x:Tensor, edge_index:Adj, edge_attr:Tensor) -> Tuple[Tensor, Tensor]:
         i, j = edge_index
         edge_attr = self.edge_processor(x[i], x[j], edge_attr)
         x = self.node_processor(x, edge_index, edge_attr)
+
         return x, edge_attr
 
     def __repr__(self):
@@ -71,7 +71,6 @@ def mgn_conv(node_dim, edge_dim):
     Reference: https://arxiv.org/pdf/2010.03409v4.pdf
 
     Different from the original formulation, this version does not account for multiple edge sets.
-    TODO: allow for multiple edge sets.
     """
     edge_model = EdgeProcessor(hs=[node_dim*2 + edge_dim] + [edge_dim]*3)
     node_model = NodeProcessor(hs=[node_dim   + edge_dim] + [node_dim]*3)
