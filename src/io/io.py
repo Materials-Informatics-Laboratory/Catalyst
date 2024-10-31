@@ -9,6 +9,21 @@ import platform
 import psutil
 import GPUtil
 
+def write_labelled_extxyz(filename,labels,atoms,cutoff):
+    of = open(filename, 'w')
+    of.write(str(len(labels)) + '\n')
+    of.write('Lattice="')
+    for cd in atoms.get_cell():
+        for c in cd:
+            of.write(str(c) + ' ')
+    of.write(
+        ' Properties=species:S:1:pos:R:3:y:R:1 cutoff ' + str(cutoff) + ' pbc="T T T"\n')
+    for j, atom in enumerate(atoms):
+        of.write(atom.symbol + ' ')
+        for pos in atom.position:
+            of.write(str(pos) + ' ')
+        of.write(str(labels[j].item()) + '\n')
+    of.close()
 
 def get_system_info():
     system_info = platform.uname()
@@ -46,31 +61,44 @@ def get_system_info():
         )
     return info
 
-def read_training_data(params,samples_file,pretrain=False):
+def read_training_data(params,samples_file,pretrain=False,format=0):
     training_graphs = None
     training_samples = None
     validation_graphs = None
     validation_samples = None
 
     graph_files = glob.glob(os.path.join(params['io_dict']['data_dir'],'*'))
-    graph_names = [PurePath(graph).parts[-1].split('.')[0] for graph in graph_files]
-    unique_names = np.unique(np.array(graph_names))
     samples = np.load(samples_file, allow_pickle=True)
     training_samples = samples.item().get('training')
-    unique_samples = np.unique(np.array(training_samples))
-    cross_list = set(training_samples).intersection(graph_names)
-    idx = [graph_names.index(x) for x in cross_list]
-    selected_graphs = [graph_files[i] for i in idx]
-    training_graphs = [torch.load(x) for x in selected_graphs]
-
+    #unique_samples = np.unique(np.array(training_samples))
     if pretrain == False:
         validation_samples = samples.item().get('validation')
-        cross_list = set(validation_samples).intersection(graph_names)
-        idx = [graph_names.index(x) for x in cross_list]
-        selected_graphs = [graph_files[i] for i in idx]
-        validation_graphs = [torch.load(x) for x in selected_graphs]
 
+    if format == 0:
+        gids = [PurePath(graph).parts[-1].split('.')[0] for graph in graph_files]
+        if len(gids) == 0:
+            print('Error: no graph files found...')
+            exit(0)
+    else:
+        gids = [torch.load(gname)['gid'] for gname in graph_files]
+
+    cross_list = set(training_samples).intersection(gids)
+    idx = [gids.index(x) for x in cross_list]
+    selected_graphs = [graph_files[i] for i in idx]
+    if format == 0:
+        training_graphs = [torch.load(x) for x in selected_graphs]
+    else:
+        training_graphs = [x for x in selected_graphs]
+    if pretrain == False:
+        cross_list = set(validation_samples).intersection(gids)
+        idx = [gids.index(x) for x in cross_list]
+        selected_graphs = [graph_files[i] for i in idx]
+        if format == 0:
+            validation_graphs = [torch.load(x) for x in selected_graphs]
+        else:
+            validation_graphs = [x for x in selected_graphs]
     return dict(training=training_graphs, validation=validation_graphs), dict(training_samples=training_samples,validation_samples=validation_samples)
+
 def port_graphdata_to_atomicgraphdata(path):
     graph_files = glob.glob(os.path.join(path, '*'))
     for graph in graph_files:

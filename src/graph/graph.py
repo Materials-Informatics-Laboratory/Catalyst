@@ -1,7 +1,9 @@
 from ase.neighborlist import neighbor_list
 
+from functools import partial
 import pandas as pd
 import numpy as np
+import itertools
 import secrets
 import sys
 
@@ -197,6 +199,21 @@ def atoms2knngraph(atoms, cutoff, k=12, scale_inv=True):
     edge_attr = D.astype(np.float32)
 
     return edge_index, edge_attr
+
+permute_2 = partial(itertools.permutations, r=2)
+def line_graph(edge_index_G):
+    """Return the (angular) line graph of the input graph.
+
+    Args:
+        edge_index_G (ndarray): Input graph in COO format.
+    """
+    src_G, dst_G = edge_index_G
+    edge_index_A = [
+        (u, v)
+        for edge_pairs in np_scatter(np.arange(len(dst_G)), dst_G, permute_2)
+        for u, v in edge_pairs
+    ]
+    return np.array(edge_index_A).T
 
 '''
 DEPRECIATED CLASS: To remove prior to v1.0

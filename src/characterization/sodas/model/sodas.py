@@ -73,19 +73,10 @@ class SODAS():
 
         return data
 
-    def clear_gpu_memory(self):
-        from numba import cuda
-        import torch
-        import gc
-        
+    def clear_model(self):
         self.model.cpu()
         del self.model
-        gc.collect()
-        torch.cuda.empty_cache()
 
-        device = cuda.get_current_device()
-        device.reset()
-        cuda.close()
 
 
 

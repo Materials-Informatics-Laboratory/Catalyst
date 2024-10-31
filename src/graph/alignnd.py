@@ -1,8 +1,8 @@
-from ..utilities.structure_properties import *
 from ..utilities.physics_database import Physics_data
-from ..characterization.sodas.utils.alignn import *
+from ..utilities.structure_properties import *
 from .graph import Atomic_Graph_Data
 from .graph import atoms2graph
+from .graph import line_graph
 import torch
 
 def alignnd(atoms,cutoff,dihedral=False, store_atoms=False, use_pt=False,include_angs=True, atom_labels=''):

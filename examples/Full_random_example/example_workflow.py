@@ -1,29 +1,47 @@
+from catalyst.src.ml.nn.models.alignn import Encoder_generic,Encoder_atomic, Processor, Decoder,PositiveScalarsDecoder, ALIGNN
+from catalyst.src.ml.testing import predict_intepretable, test_non_intepretable
+from catalyst.src.characterization.graph_order_parameter.gop import GOP
+from catalyst.src.characterization.sodas.utils.alignn import line_graph
+from catalyst.src.utilities.structure_properties import get_3body_angle
+from catalyst.src.ml.training import run_training, run_pre_training
+from catalyst.src.characterization.sodas.model.sodas import SODAS
+from catalyst.src.graph.generic_build import generic_pairwise
+from catalyst.src.ml.utils.distributed import cuda_destroy
+from catalyst.src.graph.graph import Generic_Graph_Data
+import catalyst.src.utilities.sampling as sampling
+from catalyst.src.ml.ml import ML
+
+from torch_geometric.loader import DataLoader
+import torch.multiprocessing as mp
+import torch as torch
+from torch import nn
+
 from pathlib import Path, PurePath
+import matplotlib.pyplot as plt
 import numpy as np
 import shutil
 import glob
 import os
-import matplotlib.pyplot as plt
+
 from sklearn.neighbors import KDTree
 from umap import umap_
 import networkx as nx
 import random
 import math
-from torch_geometric.loader import DataLoader
-import torch.multiprocessing as mp
-import torch as torch
-from torch import nn
-from catalyst.src.ml.nn.models.alignn import Encoder_generic,Encoder_atomic, Processor, Decoder,PositiveScalarsDecoder, ALIGNN
-from catalyst.src.ml.testing import predict_intepretable, test_non_intepretable
-from catalyst.src.characterization.graph_order_parameter.gop import GOP
-from catalyst.src.ml.training import run_training, run_pre_training
-from catalyst.src.characterization.sodas.model.sodas import SODAS
-from catalyst.src.characterization.sodas.utils.alignn import line_graph
-from catalyst.src.utilities.structure_properties import get_3body_angle
-from catalyst.src.ml.utils.distributed import cuda_destroy
-from catalyst.src.graph.graph import Generic_Graph_Data
-import catalyst.src.utilities.sampling as sampling
-from catalyst.src.ml.ml import ML
+
+'''
+Global parameter initialization
+'''
+global n_types
+global projection_indim
+global projection_outdim
+global cutoff
+global regression_indim
+global regression_outdim
+global n_convs
+global n_data
+global n_nodes
+global n_dim
 
 '''
 Function definitions
@@ -41,7 +59,7 @@ def visualize_graph(data,atomic=False):
     G = nx.Graph(list(edge_index_bnd.T))
     G_pos = nx.spring_layout(G)
     color_map = []
-    colors = ['aqua','mediumslateblue','peru','limegreen','darkorange']
+    colors = ['aqua','mediumslateblue','peru','limegreen','darkorange','salmon','brown','gold']
     for node in data.node_G:
         x = np.where(node == 1.0)[0][0]
         color_map.append(colors[x])
@@ -60,101 +78,15 @@ def visualize_graph(data,atomic=False):
     plt.draw()
     plt.show()
 
-'''
-ML parameter INITIALIZATION
-'''
-ml_parameters = dict(
-                    device_dict = dict(
-                        world_size=1,
-                        device='cuda',
-                        run_ddp=False,
-                        pin_memory=False,
-                    ),
-                    io_dict = dict(
-                        main_path=str(Path(__file__).parent),
-                        loaded_model_name=None,
-                        data_dir=None,
-                        model_dir=None,
-                        results_dir=None,
-                        samples_dir=None,
-                        projection_dir=None,
-                        remove_old_model=True,
-                        write_indv_pred=False,
-                    ),
-                    sampling_dict = dict(
-                            sampling_types=['kmeans','kmeans','kmeans'],
-                            split=[0.1,0.01,0.9],
-                            sampling_seed=112358,
-                            params_groups = [{
-                                'clusters':5,
-                            },{
-                                'clusters':5,
-                            },{
-                                'clusters':5,
-                            }]
-                    ),
-                    loader_dict=dict(
-                        shuffle_loader=False,
-                        batch_size=[10,10,10],
-                        num_workers=0,
-                        shuffle_steps=10
-                    ),
-                    characterization_dict = dict(
-                        model = SODAS(mod=ALIGNN(
-                            encoder=Encoder_atomic(num_species=3,cutoff=4.0,dim=100, act_func=nn.SiLU()),
-                            processor=Processor(num_convs=5, dim=100, conv_type='mesh'),
-                            decoder=Decoder(in_dim=100, out_dim=10, act_func=nn.SiLU())
-                        ),
-                        ls_mod=umap_.UMAP(n_neighbors=10, min_dist=0.1, n_components=2)
-                        ),
-                    ),
-                    model_dict = dict(
-                        n_models=1,
-                        num_epochs=[5,5],
-                        train_delta = [0.01,0.01],
-                        train_tolerance=[1.0,0.0001],
-                        max_deltas=4,
-                        loss_func=torch.nn.MSELoss(),
-                        accumulate_loss=['sum', 'exact', 'exact'],
-                        model=ALIGNN(
-                            encoder=Encoder_atomic(num_species=3,cutoff=4.0,dim=100, act_func=nn.SiLU()),
-                            processor=Processor(num_convs=5, dim=100, conv_type='mesh'),
-                            decoder=PositiveScalarsDecoder(dim=100,act_func=nn.SiLU()),
-                        ),
-                        interpretable=False,
-                        pre_training=True,
-                        restart_training=False,
-                        optimizer_params=dict(
-                            dynamic_lr=False,
-                            optimizer='AdamW',
-                            params_group={
-                                'lr': 0.001
-                            }
-                        )
-                    )
-                )
-ml = ML()
-ml.set_params(ml_parameters)
-
-gen_graphs = False
-project_graphs = False
-gen_samples = False
-train_model = False
-test_model = False
-rank_features = True
-
-'''
-DATA INITIALIZATION AND GRAPH CONSTRUCTION
-'''
-ml.parameters['io_dict']['data_dir'] = os.path.join(ml.parameters['io_dict']['main_path'],'data')
-if gen_graphs:
+def generate_data(ml,visualize_final=False):
+    '''
+    DATA INITIALIZATION AND GRAPH CONSTRUCTION
+    '''
+    ml.parameters['io_dict']['data_dir'] = os.path.join(ml.parameters['io_dict']['main_path'],'data')
     if os.path.isdir(ml.parameters['io_dict']['data_dir']):
         shutil.rmtree(ml.parameters['io_dict']['data_dir'])
     os.mkdir(ml.parameters['io_dict']['data_dir'])
-    n_data = 10000 # total number of samples
-    n_nodes = np.linspace(10,250,n_data) # number of data points per sample
-    n_dim = 5 # number of dimensions in intial raw data
-    n_types = 3 # number of ficticious types to label each node in G
+
     k = np.linspace(2,15,n_data) # number of neighbors per graph node
     dataset = []
     y = np.linspace(0,1,n_data)
@@ -164,41 +96,23 @@ if gen_graphs:
         data = np.random.uniform(-1,1, size=(math.ceil(n_nodes[ds]), n_dim))  # randomly create raw data
         tree = KDTree(data,metric='euclidean',leaf_size=2)
         dist, ind = tree.query(data,k=math.ceil(k[ds])+1) # k+1 due to self-interaction, neighbor list
-        g_nodes = np.eye(n_types)[np.random.choice(n_types, len(data))] # randomly assign G node labels
-        g_edge_index = [[],[]]
-        a_nodes = []
-        for i, x in enumerate(ind):
-            for j, xx in enumerate(ind[i]):
-                if j > 0:
-                    g_edge_index[0].append(x[0])
-                    g_edge_index[1].append(xx)
-                    a_nodes.append(dist[i][j])
-        g_edge_index = np.array(g_edge_index)
-        a_edge_index = np.hstack([line_graph(g_edge_index)])
-        a_edges = np.concatenate([get_3body_angle(data,g_edge_index,a_edge_index)])
-        graph = Generic_Graph_Data(
-            node_G=torch.tensor(g_nodes, dtype=torch.float),
-            edge_index_G=torch.tensor(g_edge_index, dtype=torch.long),
-            node_A=torch.tensor(a_nodes, dtype=torch.float),
-            edge_index_A=torch.tensor(a_edge_index, dtype=torch.long),
-            edge_A=torch.tensor(a_edges, dtype=torch.float),
-            node_G_amounts=torch.tensor(len(g_nodes)-1, dtype=torch.long),
-            node_A_amounts=torch.tensor(len(a_nodes) - 1, dtype=torch.long),
-            edge_A_amounts=torch.tensor(len(a_edges) - 1, dtype=torch.long)
-        )
-        graph.generate_gid()
+        neighbor_data = {
+            'dist':dist,
+            'ind':ind
+        }
+        graph = generic_pairwise(neighbor_data)
         graph.y = torch.tensor(y[ds],dtype=torch.float)
         torch.save(graph, os.path.join(os.path.join(ml.parameters['io_dict']['main_path'],ml.parameters['io_dict']['data_dir']), graph.gid + '.pt'))
-    visualize_graph(graph, atomic=False)
+    if visualize_final:
+        visualize_graph(graph, atomic=False)
 
-'''
-PROJECT DATA
-'''
-ml.parameters['characterization_dict']['run_characterization'] = True
-if project_graphs:
-    fig, ax = plt.subplots(nrows=1, ncols=4, sharex=True, sharey=True)
+def project_data(ml):
+    '''
+    PROJECT DATA
+    '''
+    ml.parameters['io_dict']['data_dir'] = os.path.join(ml.parameters['io_dict']['main_path'], 'data')
     graph_data = [torch.load(file_name) for file_name in
-                  glob.glob(os.path.join(ml.parameters['io_dict']['data_dir'], '*'))]
+                      glob.glob(os.path.join(ml.parameters['io_dict']['data_dir'], '*'))]
     # read data and perform projections
     print('Performing graph projections...')
     ml.parameters['io_dict']['projection_dir'] = os.path.join(ml.parameters['io_dict']['main_path'],'projections')
@@ -218,25 +132,27 @@ if project_graphs:
         gids.append(data.gid)
         y.append(data.y)
         loader = DataLoader([data], batch_size=1, shuffle=False, follow_batch=follow_batch,
-                            num_workers=ml.parameters['loader_dict']['num_workers'])
+                                num_workers=ml.parameters['loader_dict']['num_workers'])
         encoded_data.append(ml.parameters['characterization_dict']['model'].generate_gnn_latent_space(loader=loader,
-                device=ml.parameters['device_dict']['device'])[0])
+                    device=ml.parameters['device_dict']['device'])[0])
     encoded_data = np.array(encoded_data)
     ml.parameters['characterization_dict']['model'].fit_preprocess(data=encoded_data)
     ml.parameters['characterization_dict']['model'].fit_dim_red(data=encoded_data)
     projected_data = ml.parameters['characterization_dict']['model'].project_data(data=encoded_data)
     stored_projections = dict(
-        projections=projected_data,
-        gids=gids
+            projections=projected_data,
+            gids=gids
     )
     np.save(os.path.join(ml.parameters['io_dict']['projection_dir'], 'projection_data.npy'), stored_projections)
+    return graph_data, projected_data
+
+def sample_data(ml,graph_data,projected_data):
+    '''
+    SAMPLE DATA
+    '''
+    fig, ax = plt.subplots(nrows=1, ncols=4, sharex=True, sharey=True)
     ax[0].plot(projected_data[:, 0], projected_data[:, 1], linestyle='', marker='o', color='w', markeredgecolor='k')
     ax[0].set_title('All data')
-
-'''
-SAMPLE DATA
-'''
-if gen_samples:
     #start sampling
     rng = np.random.default_rng(seed=ml.parameters['sampling_dict']['sampling_seed'])
     # REMOVE TEST DATA
@@ -311,10 +227,11 @@ if gen_samples:
     del graph_data
     plt.show()
 
-'''
-PERFORM MODEL TRAINING
-'''
-if train_model:
+def train_model(ml):
+    '''
+    PERFORM MODEL TRAINING
+    '''
+    ml.parameters['io_dict']['data_dir'] = os.path.join(ml.parameters['io_dict']['main_path'], 'data')
     # create model directories
     ml.parameters['io_dict']['model_dir'] = None
     ml.parameters['io_dict']['samples_dir'] = None
@@ -331,10 +248,33 @@ if train_model:
     os.mkdir(ml.parameters['io_dict']['model_dir'])
     if ml.parameters['model_dict']['pre_training']:
         print('Performing pretraining...')
-        run_pre_training(rank=0, ml=ml)
+        if ml.parameters['device_dict']['run_ddp']:
+            processes = []
+            for rank in range(ml.parameters['device_dict']['world_size']):
+                p = mp.Process(target=run_pre_training, args=(rank, ml,))
+                p.start()
+                processes.append(p)
+            for p in processes:
+                p.join()
+            cuda_destroy()
+        else:
+            run_pre_training(rank=0, ml=ml)
     for iteration in range(ml.parameters['model_dict']['n_models']):
-        print('Performing training on model ', iteration)
-        run_training(rank=0, iteration=iteration, ml=ml)
+        if ml.parameters['device_dict']['run_ddp']:
+            print('Performing training on model ', iteration)
+            processes = []
+            for rank in range(ml.parameters['device_dict']['world_size']):
+                p = mp.Process(target=run_training, args=(rank, iteration, ml,))
+                p.start()
+                processes.append(p)
+            for p in processes:
+                p.join()
+            cuda_destroy()
+        else:
+            run_training(rank=0, iteration=iteration, ml=ml)
+    return
+
+def plot_training_results(ml):
     fig, ax = plt.subplots(nrows=1, ncols=2,sharex=True,sharey=False)
     ax[0].set_title('Pretraining loss')
     ax[1].set_title('Training loss')
@@ -366,10 +306,11 @@ if train_model:
     ax[1].legend(loc="upper right")
     plt.show()
 
-'''
-TEST MODEL
-'''
-if test_model:
+def test_model(ml):
+    '''
+    TEST MODEL
+    '''
+    ml.parameters['device_dict']['run_ddp'] = False
     ml.parameters['loader_dict']['batch_size'][1] = 1
     ml.parameters['loader_dict']['batch_size'][2] = 1
     ml.parameters['io_dict']['write_indv_pred'] = True
@@ -438,10 +379,10 @@ if test_model:
     ax[1].set_ylabel('ML values')
     plt.show()
 
-'''
-FEATURE RANKING
-'''
-if rank_features:
+def rank_features(ml):
+    '''
+    FEATURE RANKING
+    '''
     ml.parameters['io_dict']['results_dir'] = None
     del ml.parameters['io_dict']['results_dir']
     ml.parameters['io_dict']['results_dir'] = os.path.join(ml.parameters['io_dict']['main_path'], 'testing', 'training')
@@ -463,11 +404,113 @@ if rank_features:
                         follow_batch=follow_batch)
     print(f'Number of test graphs: {len(loader.dataset)}')
     predictions = predict_intepretable(loader=loader, model=ml.model, parameters=ml.parameters)
-    print(predictions)
 
+if __name__ == '__main__':
+    n_types = 6  # number of ficticious types to label each node in G
+    projection_indim = 100
+    projection_outdim = 10
+    regression_indim = 100
+    cutoff = 4.0
+    n_convs = 5
+    n_data = 1000  # total number of samples
+    n_nodes = np.linspace(10, 250, n_data)  # number of data points per sample
+    n_dim = 5  # number of dimensions in intial raw data
+    ml_parameters = dict(
+        device_dict=dict(
+            world_size=torch.cuda.device_count(),
+            device='cuda',
+            ddp_backend='gloo',
+            run_ddp=True,
+            pin_memory=False,
+            find_unused_parameters=False
+        ),
+        io_dict=dict(
+            main_path=str(Path(__file__).parent),
+            loaded_model_name=None,
+            data_dir=None,
+            model_dir=None,
+            results_dir=None,
+            samples_dir=None,
+            projection_dir=None,
+            remove_old_model=True,
+            write_indv_pred=False,
+            graph_read_format=0
+        ),
+        sampling_dict=dict(
+            sampling_types=['kmeans', 'kmeans', 'kmeans'],
+            split=[0.1, 0.01, 0.9],
+            sampling_seed=112358,
+            params_groups=[{
+                'clusters': 5,
+            }, {
+                'clusters': 5,
+            }, {
+                'clusters': 5,
+            }]
+        ),
+        loader_dict=dict(
+            shuffle_loader=False,
+            batch_size=[10, 10, 10],
+            num_workers=0,
+            shuffle_steps=10
+        ),
+        characterization_dict=dict(
+            model=SODAS(mod=ALIGNN(
+                encoder=Encoder_atomic(num_species=n_types, cutoff=cutoff, dim=projection_indim, act_func=nn.SiLU()),
+                processor=Processor(num_convs=n_convs, dim=projection_indim, conv_type='mesh'),
+                decoder=Decoder(in_dim=projection_indim, out_dim=projection_outdim, act_func=nn.SiLU())
+            ),
+                ls_mod=umap_.UMAP(n_neighbors=10, min_dist=0.1, n_components=2)
+            ),
+        ),
+        model_dict=dict(
+            n_models=1,
+            num_epochs=[5, 5],
+            train_delta=[0.01, 0.01],
+            train_tolerance=[1.0, 0.0001],
+            max_deltas=4,
+            loss_func=torch.nn.MSELoss(),
+            accumulate_loss=['sum', 'exact', 'exact'],
+            model=ALIGNN(
+                encoder=Encoder_atomic(num_species=n_types, cutoff=cutoff, dim=regression_indim, act_func=nn.SiLU()),
+                processor=Processor(num_convs=n_convs, dim=regression_indim, conv_type='mesh'),
+                decoder=PositiveScalarsDecoder(dim=regression_indim, act_func=nn.SiLU()),
+            ),
+            interpretable=False,
+            pre_training=True,
+            restart_training=False,
+            optimizer_params=dict(
+                dynamic_lr=False,
+                optimizer='AdamW',
+                params_group={
+                    'lr': 0.001
+                }
+            )
+        )
+    )
+    ml = ML()
+    ml.set_params(ml_parameters)
 
+    gen_graphs = False
+    project_graphs = False
+    gen_samples = False
+    perform_train = True
+    perform_test = True
+    perform_ranking = True
 
-
+    if gen_graphs:
+        generate_data(ml,visualize_final=True)
+    if project_graphs:
+        raw_data, projections = project_data(ml)
+    if gen_samples:
+        sample_data(ml,graph_data=raw_data,projected_data=projections)
+    if perform_train:
+        train_model(ml)
+        plot_training_results(ml)
+    if perform_test:
+        test_model(ml)
+    if perform_ranking:
+        rank_features(ml)
 
 
 

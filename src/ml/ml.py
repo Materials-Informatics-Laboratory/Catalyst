@@ -1,3 +1,4 @@
+import torch.multiprocessing as mp
 from torch import nn
 import numpy as np
 import torch
@@ -15,6 +16,7 @@ class ML():
                                    ddp_backend='',
                                    run_ddp=False,
                                    pin_memory=False,
+                                   find_unused_parameters=False
                                ),
                                io_dict = dict(
                                    main_path='',
@@ -26,6 +28,7 @@ class ML():
                                    projection_dir='',
                                    remove_old_model=False,
                                    write_indv_pred=False,
+                                   graph_read_format=0
                                ),
                                sampling_dict = dict(sampling_types=['random','random','random'],
                                                     split=[0.5,0.5,0.5],
@@ -111,9 +114,6 @@ class ML():
         if 'characterization_dict' in new_params:
             if not 'model' in new_params['characterization_dict']:
                 print('Warning: no model in characterization dictionary...')
-            if 'run_ddp' in new_params['device_dict']:
-                print('run_ddp cannot be used with cahracterization routines...setting to false')
-                new_params['device_dict']['run_ddp'] = False
         else:
             if not 'model_dict' in new_params:
                 print('No model dictionary set...killing run...')
@@ -284,6 +284,10 @@ class ML():
         if not 'loader_dict' in new_params:
             print('No loader dictionary set...killing run...')
             exit(0)
+
+        if 'ddp_backend' in new_params:
+            if 'ddp_backend' == 'nccl':
+                mp.set_start_method('spawn')
 
         self.parameters = new_params
 

@@ -1,15 +1,8 @@
 from scipy.spatial.distance import squareform, pdist
+from scipy.spatial import distance
 from scipy import stats
 import networkx as nx
-
-from ..utils.structure_properties import *
-from ..utils.alignn import *
-from ..utils.graph import atoms2graph
-from ..utils.graph import AngularGraphPairData
-import torch
-
 import numpy as np
-import pandas as pd
 
 __all__ = [
     'nearest_path_node',
@@ -94,6 +87,31 @@ def nearest_path_node(x,nodes,distances):
                 nn[-1] = node
                 nd[-1] = distances[nodes.index(node)]
     return nn, nd
+
+def find_nearest_node(x,nodes):
+    nearest_id = -1
+    min_dist = sys.float_info.max
+    for i,node in enumerate(nodes):
+        d = distance.euclidean(x,node)
+        if d < min_dist:
+            min_dist = d
+            nearest_id = i
+    return nearest_id
+
+def assign_gammas(ref_data,new_data,path_data):
+    gammas = path_data['d']
+    assigned_gammas = []
+    nodes = []
+    for edge in path_data['path_edges']:
+        for node in edge:
+            nodes.append(node)
+    unique_nodes = np.unique(np.array(nodes))
+    for projection in new_data:
+        assigned_gammas.append([])
+        for i, point in enumerate(projection):
+            id = find_nearest_node(point,ref_data[unique_nodes])
+            assigned_gammas[-1].append(gammas[id])
+    return assigned_gammas
 
 
 

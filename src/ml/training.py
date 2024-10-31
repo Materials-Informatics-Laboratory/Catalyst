@@ -149,6 +149,9 @@ def run_training(rank,iteration,ml=None):
         os.makedirs(parameters['io_dict']['model_dir'], exist_ok=True)
         print('Reading data-...')
 
+    data, samples = read_training_data(parameters,
+                              os.path.join(parameters['io_dict']['samples_dir'][1], str(iteration), 'train_valid_split.npy'),format=parameters['io_dict']['graph_read_format'])
+
     if parameters['model_dict']['restart_training']:
         if parameters['model_dict']['pre_training']:
             parameters['io_dict']['loaded_model_name'] = glob.glob(os.path.join(parameters['io_dict']['main_path'],'models','pretraining','pre*'))
@@ -156,11 +159,9 @@ def run_training(rank,iteration,ml=None):
         model.load_state_dict(model_data['model'])
     model.to(parameters['device_dict']['device'])
     if parameters['device_dict']['run_ddp']:
-        model = DDP(model, device_ids=[rank], find_unused_parameters=True)
+        model = DDP(model, device_ids=[rank], find_unused_parameters=parameters['device_dict']['find_unused_parameters'])
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
 
-    data, samples = read_training_data(parameters,
-                              os.path.join(parameters['io_dict']['samples_dir'][1], str(iteration), 'train_valid_split.npy'))
     if rank == 0:
         print('Training model ', iteration)
         print('Training using ',len(data['training']), ' training points and ',len(data['validation']),' validation points...')
@@ -318,20 +319,24 @@ def run_pre_training(rank,ml=None):
     if rank == 0:
         if os.path.isdir(parameters['io_dict']['model_dir']):
             shutil.rmtree(parameters['io_dict']['model_dir'])
-        os.mkdir(parameters['io_dict']['model_dir'])
+        os.makedirs(parameters['io_dict']['model_dir'], exist_ok=True)
         print('Reading graphs...')
-    data, samples = read_training_data(parameters,os.path.join(parameters['io_dict']['samples_dir'][0], 'train_valid_split.npy'),pretrain=True)
-    if rank == 0:
-        print('Training using ', len(data['training']), ' training points')
-        stats_file = open(os.path.join(parameters['io_dict']['model_dir'], 'loss.data'), 'w')
-        stats_file.write('# Training_loss\n')
-        stats_file.close()
+
+    data, samples = read_training_data(parameters,
+                                       os.path.join(parameters['io_dict']['samples_dir'][0], 'train_valid_split.npy'),
+                                       pretrain=True,format=parameters['io_dict']['graph_read_format'])
 
     if parameters['device_dict']['run_ddp']:
         ddp_setup(rank, parameters['device_dict']['world_size'],parameters['device_dict']['ddp_backend'])
         model.to(parameters['device_dict']['device'])
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-        model = DDP(model, device_ids=[rank],find_unused_parameters=True)
+        model = DDP(model, device_ids=[rank],find_unused_parameters=parameters['device_dict']['find_unused_parameters'])
+
+    if rank == 0:
+        print('Training using ', len(data['training']), ' training points')
+        stats_file = open(os.path.join(parameters['io_dict']['model_dir'], 'loss.data'), 'w')
+        stats_file.write('# Training_loss\n')
+        stats_file.close()
 
     if isinstance(data['training'][0], Atomic_Graph_Data):
         follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm', 'x_bnd']

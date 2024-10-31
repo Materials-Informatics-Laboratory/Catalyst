@@ -79,6 +79,7 @@ def accumulate_predictions(pred,data,loss_tag):
         y = data.y.flatten().sum()
 
     return preds, y
+
 @torch.no_grad()
 def test_non_intepretable(loader,model,parameters,ind_fn='all'):
     model.eval()
@@ -102,26 +103,30 @@ def test_non_intepretable(loader,model,parameters,ind_fn='all'):
     if parameters['device_dict']['run_ddp']:
         total_loss = reduce_tensor(torch.tensor(total_loss).to(parameters['device_dict']['device'])).item()
     return total_loss / (len(loader)*parameters['device_dict']['world_size'])
+
 @torch.no_grad()
 def predict_non_intepretable(loader,model,parameters,ind_fn='all'):
     model.eval()
     if parameters['io_dict']['write_indv_pred']:
         of = open(os.path.join(parameters['io_dict']['results_dir'], ind_fn + '_indv_pred.data'), 'w')
         of.write('#Pred_y          \n')
-    preds = []
+    all_preds = []
     for i,data in enumerate(loader):
         print('predicting on structure ', i)
         data = data.to(parameters['device_dict']['device'], non_blocking=parameters['device_dict']['pin_memory'])
         pred = model(data)
-        all_sum = 0.0
         for p in pred:
-            all_sum += p.sum()
-        preds.append(all_sum)
+            if preds is None:
+                preds = p.sum()
+            else:
+                preds += p.sum()
+        all_preds.append(preds)
         if parameters['io_dict']['write_indv_pred']:
-            of.write(str(all_sum.item()) + '\n')
+            of.write(str(preds.item()) + '\n')
     if parameters['io_dict']['write_indv_pred']:
         of.close()
-    return preds
+    return all_preds
+
 @torch.no_grad()
 def predict_intepretable(loader,model,parameters,ind_fn='all'):
     model.eval()
@@ -194,7 +199,7 @@ def predict_intepretable(loader,model,parameters,ind_fn='all'):
                 ranked_data['ea_data'].append(edge_A_contrib[a])
         np.save(os.path.join(parameters['io_dict']['results_dir'], str(i) + '_rankings.npy'), ranked_data)
         if parameters['io_dict']['write_indv_pred']:
-            of.write(str(all_sum.item()) + '\n')
+            of.write(str(preds.item()) + '\n')
     if parameters['io_dict']['write_indv_pred']:
         of.close()
     return all_preds
