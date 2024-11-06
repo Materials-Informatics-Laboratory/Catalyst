@@ -1,13 +1,9 @@
 from catalyst.src.ml.nn.models.alignn import Encoder_generic,Encoder_atomic, Processor, Decoder,PositiveScalarsDecoder, ALIGNN
 from catalyst.src.ml.testing import predict_intepretable, test_non_intepretable
-from catalyst.src.characterization.graph_order_parameter.gop import GOP
-from catalyst.src.characterization.sodas.utils.alignn import line_graph
-from catalyst.src.utilities.structure_properties import get_3body_angle
 from catalyst.src.ml.training import run_training, run_pre_training
 from catalyst.src.characterization.sodas.model.sodas import SODAS
 from catalyst.src.graph.generic_build import generic_pairwise
 from catalyst.src.ml.utils.distributed import cuda_destroy
-from catalyst.src.graph.graph import Generic_Graph_Data
 import catalyst.src.utilities.sampling as sampling
 from catalyst.src.ml.ml import ML
 
@@ -87,20 +83,22 @@ def generate_data(ml,visualize_final=False):
         shutil.rmtree(ml.parameters['io_dict']['data_dir'])
     os.mkdir(ml.parameters['io_dict']['data_dir'])
 
-    k = np.linspace(2,15,n_data) # number of neighbors per graph node
+    k = np.linspace(3,15,n_data) # number of neighbors per graph node
     dataset = []
     y = np.linspace(0,1,n_data)
     for ds in range(n_data):
         if ds % 500 == 0:
             print('Generating graph ',ds)
         data = np.random.uniform(-1,1, size=(math.ceil(n_nodes[ds]), n_dim))  # randomly create raw data
+        g_node_labels = np.eye(n_types)[np.random.choice(n_types, len(data))]  # randomly assign G node labels
         tree = KDTree(data,metric='euclidean',leaf_size=2)
         dist, ind = tree.query(data,k=math.ceil(k[ds])+1) # k+1 due to self-interaction, neighbor list
         neighbor_data = {
             'dist':dist,
-            'ind':ind
+            'ind':ind,
+            'g_nodes':g_node_labels
         }
-        graph = generic_pairwise(neighbor_data)
+        graph = generic_pairwise(data,data_params=neighbor_data)
         graph.y = torch.tensor(y[ds],dtype=torch.float)
         torch.save(graph, os.path.join(os.path.join(ml.parameters['io_dict']['main_path'],ml.parameters['io_dict']['data_dir']), graph.gid + '.pt'))
     if visualize_final:

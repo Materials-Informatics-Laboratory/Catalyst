@@ -1,13 +1,15 @@
+from ..utilities.structure_properties import get_3body_angle
 from .graph import Generic_Graph_Data
 from .graph import line_graph
 
 import numpy as np
+import torch
 
-def generic_pairwise(data,line_graph=True):
-    ind = data['ind']
-    dist = data['dist']
+def generic_pairwise(data,data_params,gen_line_graph=True):
+    ind = data_params['ind']
+    dist = data_params['dist']
+    g_nodes = data_params['g_nodes']
 
-    g_nodes = np.eye(n_types)[np.random.choice(n_types, len(data))]  # randomly assign G node labels
     g_edge_index = [[], []]
     a_nodes = []
     for i, x in enumerate(ind):
@@ -17,7 +19,7 @@ def generic_pairwise(data,line_graph=True):
                 g_edge_index[1].append(xx)
                 a_nodes.append(dist[i][j])
     g_edge_index = np.array(g_edge_index)
-    if line_graph:
+    if gen_line_graph:
         a_edge_index = np.hstack([line_graph(g_edge_index)])
         a_edges = np.concatenate([get_3body_angle(data, g_edge_index, a_edge_index)])
         graph = Generic_Graph_Data(
