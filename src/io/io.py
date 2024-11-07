@@ -1,6 +1,14 @@
-from ..graph.graph import Atomic_Graph_Data, Graph_Data
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
+from torch_geometric.loader import DataLoader
+
+from ..graph.graph import Atomic_Graph_Data, Generic_Graph_Data, Graph_Data
+
+from datetime import datetime
 from pathlib import PurePath
 import numpy as np
+import secrets
+import pickle
 import torch
 import glob
 import os
@@ -8,6 +16,161 @@ import os
 import platform
 import psutil
 import GPUtil
+
+def setup_dataloader(data,ml,epoch=-1,reshuffle=False,pretrain=False):
+    parameters = ml.parameters
+    if isinstance(data['training'][0], Atomic_Graph_Data):
+        follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm', 'x_bnd']
+    elif isinstance(data['training'][0], Generic_Graph_Data):
+        follow_batch = ['node_G', 'node_A', 'edge_A'] if hasattr(data['training'][0], 'edge_A') else ['node_G','node_A']
+    if pretrain:
+        if reshuffle:
+            if parameters['device_dict']['run_ddp']:
+                loader_train.sampler.set_epoch(epoch)
+                loader_train = DataLoader(data['training'], batch_size=int(
+                    parameters['loader_dict']['batch_size'][0] / parameters['device_dict']['world_size']),
+                                          pin_memory=parameters['device_dict']['pin_memory'], follow_batch=follow_batch,
+                                          sampler=DistributedSampler(data['training'],
+                                                                     shuffle=parameters['loader_dict']['shuffle_loader'],
+                                                                     seed=random.randint(-sys.maxsize - 1, sys.maxsize)),
+                                          num_workers=parameters['loader_dict']['num_workers'])
+            else:
+                loader_train = DataLoader(data['training'], pin_memory=parameters['device_dict']['pin_memory'],
+                                          batch_size=parameters['loader_dict']['batch_size'][0],
+                                          shuffle=parameters['loader_dict']['shuffle_loader'],
+                                          follow_batch=follow_batch)
+        else:
+            if parameters['device_dict']['run_ddp']:
+                loader_train = DataLoader(data['training'], batch_size=int(
+                    parameters['loader_dict']['batch_size'][0] / parameters['device_dict']['world_size']),
+                                          pin_memory=parameters['device_dict']['pin_memory'],
+                                          shuffle=False, follow_batch=follow_batch,
+                                          sampler=DistributedSampler(data['training']))
+            else:
+                loader_train = DataLoader(data['training'], pin_memory=parameters['device_dict']['pin_memory'],
+                                          batch_size=parameters['loader_dict']['batch_size'][0], shuffle=True,
+                                          follow_batch=follow_batch)
+        return loader_train
+    else:
+        if reshuffle:
+            if parameters['device_dict']['run_ddp']:
+                loader_train.sampler.set_epoch(epoch)
+                loader_valid.sampler.set_epoch(epoch)
+                loader_train = DataLoader(data['training'], batch_size=int(
+                    parameters['loader_dict']['batch_size'][1] / parameters['device_dict']['world_size']),
+                                          pin_memory=parameters['device_dict']['pin_memory'],
+                                          follow_batch=follow_batch,
+                                          sampler=DistributedSampler(data['training'],
+                                                                     shuffle=parameters['loader_dict'][
+                                                                         'shuffle_loader'],
+                                                                     seed=random.randint(-sys.maxsize - 1,
+                                                                                         sys.maxsize)),
+                                          num_workers=parameters['loader_dict']['num_workers'])
+            else:
+                loader_train = DataLoader(data['training'], pin_memory=parameters['device_dict']['pin_memory'],
+                                          batch_size=parameters['loader_dict']['batch_size'][1],
+                                          shuffle=parameters['loader_dict']['shuffle_loader'],
+                                          follow_batch=follow_batch,
+                                          num_workers=parameters['loader_dict']['num_workers'])
+        else:
+            if parameters['device_dict']['run_ddp']:
+                loader_train = DataLoader(data['training'], batch_size=int(
+                    parameters['loader_dict']['batch_size'][1] / parameters['device_dict']['world_size']),
+                                          pin_memory=parameters['device_dict']['pin_memory'],
+                                          follow_batch=follow_batch,
+                                          sampler=DistributedSampler(data['training'],
+                                                                     shuffle=False),
+                                          num_workers=parameters['loader_dict']['num_workers'])
+                loader_valid = DataLoader(data['validation'], follow_batch=follow_batch, batch_size=int(
+                    parameters['loader_dict']['batch_size'][2] / parameters['device_dict']['world_size']),
+                                          pin_memory=parameters['device_dict']['pin_memory'],
+                                          shuffle=False, sampler=DistributedSampler(data['validation']),
+                                          num_workers=parameters['loader_dict']['num_workers'])
+            else:
+                loader_train = DataLoader(data['training'], pin_memory=parameters['device_dict']['pin_memory'],
+                                          batch_size=parameters['loader_dict']['batch_size'][1],
+                                          shuffle=parameters['loader_dict']['shuffle_loader'],
+                                          follow_batch=follow_batch,
+                                          num_workers=parameters['loader_dict']['num_workers'])
+
+                loader_valid = DataLoader(data['validation'], follow_batch=follow_batch,
+                                          pin_memory=parameters['device_dict']['pin_memory'],
+                                          batch_size=parameters['loader_dict']['batch_size'][2], shuffle=False,
+                                          num_workers=parameters['loader_dict']['num_workers'])
+        return loader_train,loader_valid
+
+def setup_model(ml,rank=0,pretrain=False,data_only=False):
+    if data_only:
+        return torch.load(ml.parameters['io_dict']['loaded_model_name'])
+    else:
+        ml.set_model()
+        ml.model.to(ml.parameters['device_dict']['device'])
+        model = ml.model
+        if ml.parameters['model_dict']['restart_training']:
+            model_data = torch.load(ml.parameters['io_dict']['loaded_model_name'])
+            model.load_state_dict(model_data['model'])
+        if ml.parameters['device_dict']['run_ddp']:
+            model = DDP(model, device_ids=[rank],
+                            find_unused_parameters=ml.parameters['device_dict']['find_unused_parameters'])
+            model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+        return model
+
+def save_model(model,ml,model_params_group,remove_old_models=True,pretrain=False):
+    print('Saving model...')
+    id = secrets.token_hex(32)
+    now = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    if ml.parameters['device_dict']['run_ddp']:
+        model_state = model.module.state_dict()
+    else:
+        model_state = model.state_dict()
+    if remove_old_models:
+        if pretrain:
+            model_names = glob.glob(os.path.join(ml.parameters['io_dict']['model_dir'], 'pre*'))
+        else:
+            model_names = glob.glob(os.path.join(ml.parameters['io_dict']['model_dir'], 'model_*'))
+        if len(model_names) > 0:
+            for model_name in model_names:
+                os.remove(model_name)
+    if pretrain:
+        model_data = dict(
+            model_type='pretrain',
+            model=model_state,
+            samples=model_params_group['samples'],
+            loss_info=dict(
+                training=model_params_group['L_train'],
+                validation=None
+            ),
+            id=id,
+            time=str(now),
+            parameters=ml.parameters,
+            system_info=get_system_info()
+        )
+        torch.save(model_data, os.path.join(ml.parameters['io_dict']['model_dir'], 'pre_' + str(id) + '_' + str(now)))
+    else:
+        model_data = dict(
+            model_type='train',
+            model=model_state,
+            samples=model_params_group['samples'],
+            loss_info=dict(
+                training=model_params_group['L_train'],
+                validation=model_params_group['L_valid']
+            ),
+            id=id,
+            time=str(now),
+            parameters=ml.parameters,
+            system_info=get_system_info()
+        )
+        torch.save(model_data,
+                   os.path.join(ml.parameters['io_dict']['model_dir'], 'model_' + str(id) + '_' + str(now)))
+
+def save_dictionary(fname,data):
+    with open(fname, 'wb') as handle:
+        pickle.dump(data, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+def load_dictionary(fname):
+    with open(fname, 'rb') as handle:
+        dictionary = pickle.load(handle)
+    return dictionary
 
 def write_labelled_extxyz(filename,labels,atoms,cutoff):
     of = open(filename, 'w')
@@ -68,11 +231,10 @@ def read_training_data(params,samples_file,pretrain=False,format=0):
     validation_samples = None
 
     graph_files = glob.glob(os.path.join(params['io_dict']['data_dir'],'*'))
-    samples = np.load(samples_file, allow_pickle=True)
-    training_samples = samples.item().get('training')
-    #unique_samples = np.unique(np.array(training_samples))
+    samples = load_dictionary(samples_file)
+    training_samples = samples['training']
     if pretrain == False:
-        validation_samples = samples.item().get('validation')
+        validation_samples = samples['validation']
 
     if format == 0:
         gids = [PurePath(graph).parts[-1].split('.')[0] for graph in graph_files]
@@ -144,54 +306,3 @@ def port_graphdata_to_atomicgraphdata(path):
             os.remove(graph)
             torch.save(new_data, os.path.join(path, new_data.gid + '.pt'))
 
-def port_graphs_without_gids(params):
-    graph_files = glob.glob(os.path.join(params['data_dir'], '*'))
-
-    check = 1
-    for graph in graph_files:
-        data = torch.load(graph)
-        if not hasattr(data, 'gid'):
-            if check:
-                from ..graph.graph import Atomic_Graph_Data
-                check = 0
-
-            if not hasattr(data, 'atoms'):
-                atoms = None
-            else:
-                atoms = data.atoms
-            if not hasattr(data, 'y'):
-                y = None
-            else:
-                y = data.y
-            if not hasattr(data, 'x_ang'):
-                x_ang = None
-            else:
-                x_ang = data.x_ang
-            if not hasattr(data, 'mask_dih_ang'):
-                mask_dih_ang = None
-            else:
-                mask_dih_ang = data.mask_dih_ang
-            if not hasattr(data, 'ang_amounts'):
-                ang_amounts = None
-            else:
-                ang_amounts = data.ang_amounts
-
-            new_data = Atomic_Graph_Data(
-                atoms=atoms,
-                edge_index_G=data.edge_index_G,
-                edge_index_A=data.edge_index_A,
-                x_atm=data.x_atm,
-                x_bnd=data.x_bnd,
-                x_ang=x_ang,
-                mask_dih_ang=mask_dih_ang,
-                atm_amounts=data.atm_amounts,
-                bnd_amounts=data.bnd_amounts,
-                ang_amounts=ang_amounts,
-            )
-            new_data.y = y
-            data = new_data
-            data.generate_gid()
-        elif data.gid is None:
-            data.generate_gid()
-        os.remove(graph)
-        torch.save(data, os.path.join(params['data_dir'], data.gid + '.pt'))

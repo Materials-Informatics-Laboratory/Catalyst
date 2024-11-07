@@ -1,84 +1,12 @@
 from ..utilities.rankings import organize_rankings_atomic, organize_rankings_generic
+from .utils.predict import accumulate_predictions
 from .utils.distributed import reduce_tensor
+from ..io.io import save_dictionary
 from torch import nn
 import torch
 
 import numpy as np
 import os
-
-def accumulate_predictions(pred,data,loss_tag):
-    if loss_tag == 'exact':
-        if hasattr(data, 'x_atm_batch'): #atomic graph
-            d = pred[0].flatten()
-            x = torch.unique(data['x_atm_batch'])
-            sorted_atms = [None] * len(x)
-            dd = data['x_atm_batch']
-            for i, xx in enumerate(x):
-                xw = torch.where(dd == xx)
-                sorted_atms[i] = d[xw]
-            d = pred[1].flatten()
-            x = torch.unique(data['x_bnd_batch'])
-            sorted_bnds = [None] * len(x)
-            dd = data['x_bnd_batch']
-            for i, xx in enumerate(x):
-                xw = torch.where(dd == xx)
-                sorted_bnds[i] = d[xw]
-            if hasattr(data, 'x_ang_batch'):
-                d = pred[2].flatten()
-                x = torch.unique(data['x_ang_batch'])
-                sorted_angs = [None] * len(x)
-                dd = data['x_ang_batch']
-                for i, xx in enumerate(x):
-                    xw = torch.where(dd == xx)
-                    sorted_angs[i] = d[xw]
-            preds = []
-            for i in range(len(sorted_atms)):
-                if hasattr(data, 'x_ang_batch'):
-                    preds.append(sorted_atms[i].sum() + sorted_angs[i].sum() + sorted_bnds[i].sum())
-                else:
-                    preds.append(sorted_atms[i].sum() + sorted_bnds[i].sum())
-            preds = torch.stack(preds)
-        if hasattr(data, 'node_G_batch'): # generic graph
-            d = pred[0].flatten()
-            x = torch.unique(data['node_G_batch'])
-            sorted_nodes_G = [None] * len(x)
-            dd = data['node_G_batch']
-            for i, xx in enumerate(x):
-                xw = torch.where(dd == xx)
-                sorted_nodes_G[i] = d[xw]
-            d = pred[1].flatten()
-            x = torch.unique(data['node_A_batch'])
-            sorted_nodes_A = [None] * len(x)
-            dd = data['node_A_batch']
-            for i, xx in enumerate(x):
-                xw = torch.where(dd == xx)
-                sorted_nodes_A[i] = d[xw]
-            if hasattr(data, 'edge_A_batch'):
-                d = pred[2].flatten()
-                x = torch.unique(data['edge_A_batch'])
-                sorted_edges_A = [None] * len(x)
-                dd = data['edge_A_batch']
-                for i, xx in enumerate(x):
-                    xw = torch.where(dd == xx)
-                    sorted_edges_A[i] = d[xw]
-            preds = []
-            for i in range(len(sorted_nodes_G)):
-                if hasattr(data, 'edge_A_batch'):
-                    preds.append(sorted_nodes_G[i].sum() + sorted_nodes_A[i].sum() + sorted_edges_A[i].sum())
-                else:
-                    preds.append(sorted_nodes_G[i].sum() + sorted_nodes_A[i].sum())
-            preds = torch.stack(preds)
-        y = data.y.flatten()
-    elif loss_tag == 'sum':
-        preds = None
-        for p in pred:
-            if preds is None:
-                preds = p.sum()
-            else:
-                preds += p.sum()
-        y = data.y.flatten().sum()
-
-    return preds, y
 
 @torch.no_grad()
 def test_non_intepretable(loader,model,parameters,ind_fn='all'):
@@ -87,29 +15,32 @@ def test_non_intepretable(loader,model,parameters,ind_fn='all'):
     total_loss = 0.0
     loss_accum = parameters['model_dict']['accumulate_loss'][2]
     if parameters['io_dict']['write_indv_pred']:
-        of = open(os.path.join(parameters['io_dict']['results_dir'],ind_fn + '_indv_pred.data'),'w')
-        of.write('# True_y          Pred_y          \n')
+        values = [[],[],[]]
     for data in loader:
         data = data.to(parameters['device_dict']['device'], non_blocking=parameters['device_dict']['pin_memory'])
         pred = model(data)
         preds, y = accumulate_predictions(pred,data,loss_accum)
-        loss = loss_fn(preds,y)
-        total_loss += loss.item()
+        loss = loss_fn(preds,y).item()
+        total_loss += loss
 
         if parameters['io_dict']['write_indv_pred']:
-            of.write(str(data.y.item()) + '          ' + str(preds.item()) + '\n')
+            values[0].append(preds.item())
+            values[1].append(y.item())
+            values[2].append(loss)
     if parameters['io_dict']['write_indv_pred']:
-        of.close()
-    if parameters['device_dict']['run_ddp']:
-        total_loss = reduce_tensor(torch.tensor(total_loss).to(parameters['device_dict']['device'])).item()
-    return total_loss / (len(loader)*parameters['device_dict']['world_size'])
+        test_info = {
+            'pred':values[0],
+            'y':values[1],
+            'loss':values[2],
+            'loss_fn':parameters['model_dict']['accumulate_loss'][2]
+        }
+        save_dictionary(fname=os.path.join(parameters['io_dict']['results_dir'],ind_fn + '_indv_pred.data'),
+                        data=test_info)
+    return total_loss / len(loader)
 
 @torch.no_grad()
 def predict_non_intepretable(loader,model,parameters,ind_fn='all'):
     model.eval()
-    if parameters['io_dict']['write_indv_pred']:
-        of = open(os.path.join(parameters['io_dict']['results_dir'], ind_fn + '_indv_pred.data'), 'w')
-        of.write('#Pred_y          \n')
     all_preds = []
     for i,data in enumerate(loader):
         print('predicting on structure ', i)
@@ -121,18 +52,17 @@ def predict_non_intepretable(loader,model,parameters,ind_fn='all'):
             else:
                 preds += p.sum()
         all_preds.append(preds)
-        if parameters['io_dict']['write_indv_pred']:
-            of.write(str(preds.item()) + '\n')
     if parameters['io_dict']['write_indv_pred']:
-        of.close()
+        test_info = {
+            'pred': all_preds,
+        }
+        save_dictionary(fname=os.path.join(parameters['io_dict']['results_dir'], ind_fn + '_indv_pred.data'),
+                        data=test_info)
     return all_preds
 
 @torch.no_grad()
 def predict_intepretable(loader,model,parameters,ind_fn='all'):
     model.eval()
-    if parameters['io_dict']['write_indv_pred']:
-        of = open(os.path.join(parameters['io_dict']['results_dir'], ind_fn + '_indv_pred.data'), 'w')
-        of.write('#Pred_y          \n')
     all_preds = []
     for i,data in enumerate(loader):
         print('predicting on structure ',i)
@@ -197,11 +127,14 @@ def predict_intepretable(loader,model,parameters,ind_fn='all'):
         if hasattr(data, 'x_ang') or hasattr(data, 'edge_A'):
             for a in i_ea:
                 ranked_data['ea_data'].append(edge_A_contrib[a])
-        np.save(os.path.join(parameters['io_dict']['results_dir'], str(i) + '_rankings.npy'), ranked_data)
-        if parameters['io_dict']['write_indv_pred']:
-            of.write(str(preds.item()) + '\n')
+        save_dictionary(fname=os.path.join(parameters['io_dict']['results_dir'], str(i) + '_rankings.data'),
+                        data=ranked_data)
     if parameters['io_dict']['write_indv_pred']:
-        of.close()
+        test_info = {
+            'pred': all_preds,
+        }
+        save_dictionary(fname=os.path.join(parameters['io_dict']['results_dir'], ind_fn + '_indv_pred.data'),
+                        data=test_info)
     return all_preds
 
 

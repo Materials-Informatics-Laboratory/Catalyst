@@ -1,15 +1,20 @@
 from torch.distributed import init_process_group,destroy_process_group
+import torch.multiprocessing as mp
 import torch.distributed as dist
 from numba import cuda
 import torch
 import gc
 import os
 
+def set_spawn_method(parameters):
+    if 'ddp_backend' in parameters:
+        if 'ddp_backend' == 'nccl':
+            mp.set_start_method('spawn')
+
 def ddp_setup(rank: int ,world_size ,backend):
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "12355"
     torch.cuda.set_device(rank)
-
     init_process_group(backend=backend, rank=rank, world_size=world_size,init_method="env://?use_libuv=False")
 
 def cuda_destroy():

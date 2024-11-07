@@ -1,4 +1,5 @@
-import torch.multiprocessing as mp
+from ..ml.utils.distributed import set_spawn_method
+from ..io.io import save_dictionary
 from torch import nn
 import numpy as np
 import torch
@@ -284,15 +285,11 @@ class ML():
         if not 'loader_dict' in new_params:
             print('No loader dictionary set...killing run...')
             exit(0)
-
-        if 'ddp_backend' in new_params:
-            if 'ddp_backend' == 'nccl':
-                mp.set_start_method('spawn')
-
+        set_spawn_method(new_params)
         self.parameters = new_params
 
         if save_params:
-            np.save(os.path.join(self.parameters['io_dict']['main_path'], 'parameter_log.npy'), self.parameters)
+            save_dictionary(fname=os.path.join(self.parameters['io_dict']['main_path'], 'parameters.data'),data=self.parameters)
 
 
 

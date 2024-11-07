@@ -5,6 +5,7 @@ from catalyst.src.characterization.sodas.model.sodas import SODAS
 from catalyst.src.graph.generic_build import generic_pairwise
 from catalyst.src.ml.utils.distributed import cuda_destroy
 import catalyst.src.utilities.sampling as sampling
+from catalyst.src.io.io import load_dictionary, save_dictionary
 from catalyst.src.ml.ml import ML
 
 from torch_geometric.loader import DataLoader
@@ -78,7 +79,6 @@ def generate_data(ml,visualize_final=False):
     '''
     DATA INITIALIZATION AND GRAPH CONSTRUCTION
     '''
-    ml.parameters['io_dict']['data_dir'] = os.path.join(ml.parameters['io_dict']['main_path'],'data')
     if os.path.isdir(ml.parameters['io_dict']['data_dir']):
         shutil.rmtree(ml.parameters['io_dict']['data_dir'])
     os.mkdir(ml.parameters['io_dict']['data_dir'])
@@ -108,7 +108,6 @@ def project_data(ml):
     '''
     PROJECT DATA
     '''
-    ml.parameters['io_dict']['data_dir'] = os.path.join(ml.parameters['io_dict']['main_path'], 'data')
     graph_data = [torch.load(file_name) for file_name in
                       glob.glob(os.path.join(ml.parameters['io_dict']['data_dir'], '*'))]
     # read data and perform projections
@@ -141,7 +140,7 @@ def project_data(ml):
             projections=projected_data,
             gids=gids
     )
-    np.save(os.path.join(ml.parameters['io_dict']['projection_dir'], 'projection_data.npy'), stored_projections)
+    save_dictionary(os.path.join(ml.parameters['io_dict']['projection_dir'], 'projection_data.npy'), stored_projections)
     return graph_data, projected_data
 
 def sample_data(ml,graph_data,projected_data):
@@ -164,7 +163,7 @@ def sample_data(ml,graph_data,projected_data):
     )
     projected_data = [projected_data[index] for index in nontest_idx]
     graph_data = [graph_data[index] for index in nontest_idx]
-    np.save(os.path.join(ml.parameters['io_dict']['samples_dir'], 'test_data.npy'), stored_test_data)
+    save_dictionary(os.path.join(ml.parameters['io_dict']['samples_dir'], 'test_data.npy'), stored_test_data)
     ax[1].plot(np.array(stored_test_data['projections'])[:, 0], np.array(stored_test_data['projections'])[:, 1], linestyle='', marker='o', color='r', markeredgecolor='k')
     ax[1].set_title('Test data')
     # REMOVE PRETRAIN DATA
@@ -187,8 +186,7 @@ def sample_data(ml,graph_data,projected_data):
         )
         projected_data = [projected_data[index] for index in nonpretrain_idx]
         graph_data = [graph_data[index] for index in nonpretrain_idx]
-        np.save(os.path.join(ml.parameters['io_dict']['pretrain_dir'], 'train_valid_split.npy'), stored_pretrain_data,
-                    fix_imports=False)
+        save_dictionary(os.path.join(ml.parameters['io_dict']['pretrain_dir'], 'train_valid_split.npy'), stored_pretrain_data)
         ax[2].plot(np.array(stored_pretrain_data['training_projections'])[:, 0], np.array(stored_pretrain_data['training_projections'])[:, 1], linestyle='',
                        marker='o', color='c', markeredgecolor='k')
         ax[2].set_title('Pretrain data')
@@ -218,7 +216,7 @@ def sample_data(ml,graph_data,projected_data):
                 training=train_data,
                 validation=valid_data
         )
-        np.save(os.path.join(ml.parameters['io_dict']['model_dir'], 'train_valid_split.npy'), partitioned_data)
+        save_dictionary(os.path.join(ml.parameters['io_dict']['model_dir'], 'train_valid_split.npy'), partitioned_data)
         ax[3].plot(np.array(partitioned_data ['training_projections'])[:, 0], np.array(partitioned_data['training_projections'])[:, 1],
                        linestyle='',marker='o', color='y', markeredgecolor='k')
         ax[3].set_title('Training data')
@@ -229,22 +227,11 @@ def train_model(ml):
     '''
     PERFORM MODEL TRAINING
     '''
-    ml.parameters['io_dict']['data_dir'] = os.path.join(ml.parameters['io_dict']['main_path'], 'data')
-    # create model directories
-    ml.parameters['io_dict']['model_dir'] = None
-    ml.parameters['io_dict']['samples_dir'] = None
-    del ml.parameters['io_dict']['model_dir']
-    del ml.parameters['io_dict']['samples_dir']
-    ml.parameters['io_dict']['samples_dir'] = [os.path.join(ml.parameters['io_dict']['main_path'], 'samples','pretrain'),
-                                               os.path.join(ml.parameters['io_dict']['main_path'], 'samples','model_samples')]
-    if ml.parameters['model_dict']['restart_training']:
-        ml.parameters['io_dict']['model_dir'] = os.path.join(ml.parameters['io_dict']['main_path'], 'models_restart')
-    else:
-        ml.parameters['io_dict']['model_dir'] = os.path.join(ml.parameters['io_dict']['main_path'], 'models')
-    if os.path.isdir(ml.parameters['io_dict']['model_dir']):
-        shutil.rmtree(ml.parameters['io_dict']['model_dir'])
-    os.mkdir(ml.parameters['io_dict']['model_dir'])
     if ml.parameters['model_dict']['pre_training']:
+        ml.parameters['io_dict']['samples_dir'] = None
+        del ml.parameters['io_dict']['samples_dir']
+        ml.parameters['io_dict']['samples_dir'] = os.path.join(ml.parameters['io_dict']['main_path'], 'samples',
+                                                               'pretrain')
         print('Performing pretraining...')
         if ml.parameters['device_dict']['run_ddp']:
             processes = []
@@ -257,6 +244,15 @@ def train_model(ml):
             cuda_destroy()
         else:
             run_pre_training(rank=0, ml=ml)
+        ml.parameters['model_dict']['restart_training'] = True
+        ml.parameters['io_dict']['loaded_model_name'] = None
+        del ml.parameters['io_dict']['loaded_model_name']
+        ml.parameters['io_dict']['loaded_model_name'] = glob.glob(os.path.join(ml.parameters['io_dict']['main_path'], 'models',
+                               'pretraining', 'pre*'))[0]
+
+    ml.parameters['io_dict']['samples_dir'] = None
+    del ml.parameters['io_dict']['samples_dir']
+    ml.parameters['io_dict']['samples_dir'] = os.path.join(ml.parameters['io_dict']['main_path'], 'samples','model_samples')
     for iteration in range(ml.parameters['model_dict']['n_models']):
         if ml.parameters['device_dict']['run_ddp']:
             print('Performing training on model ', iteration)
@@ -272,36 +268,70 @@ def train_model(ml):
             run_training(rank=0, iteration=iteration, ml=ml)
     return
 
-def plot_training_results(ml):
-    fig, ax = plt.subplots(nrows=1, ncols=2,sharex=True,sharey=False)
+def retrain_model(ml):
+    ml.parameters['io_dict']['samples_dir'] = None
+    del ml.parameters['io_dict']['samples_dir']
+    ml.parameters['io_dict']['samples_dir'] = os.path.join(ml.parameters['io_dict']['main_path'], 'samples',
+                                                           'model_samples')
+    if ml.parameters['device_dict']['run_ddp']:
+        print('Performing model retraining on ',ml.parameters['io_dict']['loaded_model_name'])
+        processes = []
+        for rank in range(ml.parameters['device_dict']['world_size']):
+            p = mp.Process(target=run_training, args=(rank, 'restart', ml,))
+            p.start()
+            processes.append(p)
+        for p in processes:
+            p.join()
+        cuda_destroy()
+    else:
+        run_training(rank=0, iteration='restart', ml=ml)
+    return
+
+def plot_training_results(ml,retrain=False):
+    if retrain:
+        fig, ax = plt.subplots(nrows=1, ncols=3, sharex=True, sharey=True)
+        ax[2].set_title('Retraining loss')
+    else:
+        fig, ax = plt.subplots(nrows=1, ncols=2,sharex=True,sharey=True)
     ax[0].set_title('Pretraining loss')
     ax[1].set_title('Training loss')
 
     if ml.parameters['model_dict']['pre_training']:
-        fname = os.path.join(ml.parameters['io_dict']['main_path'],'models','pretraining','loss.data')
-        loss = []
-        of = open(fname,'r')
-        for lines in of:
-            line = lines.split()
-            if len(line) == 1:
-                loss.append(float(line[0]))
-        of.close()
+        ml.parameters['io_dict']['model_dir'] = None
+        del ml.parameters['io_dict']['model_dir']
+        ml.parameters['io_dict']['model_dir'] = os.path.join(ml.parameters['io_dict']['main_path'], 'models',
+                                                             'pretraining')
+        run_data = load_dictionary(os.path.join(ml.parameters['io_dict']['model_dir'], 'run_information.npy'))
+        loss = run_data['training_loss']
         x=np.linspace(1,len(loss),len(loss))
         ax[0].plot(x,loss,color='b',marker='o')
-    fname = os.path.join(ml.parameters['io_dict']['main_path'],'models','training','0','loss.data')
     loss = [[],[]]
-    of = open(fname,'r')
-    for lines in of:
-        line = lines.split()
-        if len(line) == 2:
-            loss[0].append(float(line[0]))
-            loss[1].append(float(line[1]))
-    of.close()
+    ml.parameters['io_dict']['model_dir'] = None
+    del ml.parameters['io_dict']['model_dir']
+    ml.parameters['io_dict']['model_dir'] = os.path.join(ml.parameters['io_dict']['main_path'], 'models', 'training','0')
+    run_data = load_dictionary(os.path.join(ml.parameters['io_dict']['model_dir'], 'run_information.npy'))
+    loss[0] = run_data['training_loss']
+    loss[1] = run_data['validation_loss']
     x=np.linspace(1,len(loss[0]),len(loss[0]))
-    ax[0].set_yscale('log')
+    ax[1].set_yscale('log')
     ax[1].plot(x,loss[0],color='b',marker='o',label='Training loss')
     ax[1].plot(x,loss[1],color='r',marker='o',label='Validation loss')
     ax[1].legend(loc="upper right")
+
+    if retrain:
+        loss = [[], []]
+        ml.parameters['io_dict']['model_dir'] = None
+        del ml.parameters['io_dict']['model_dir']
+        ml.parameters['io_dict']['model_dir'] = os.path.join(ml.parameters['io_dict']['main_path'], 'models',
+                                                             'training', 'restart')
+        run_data = load_dictionary(os.path.join(ml.parameters['io_dict']['model_dir'], 'run_information.npy'))
+        loss[0] = run_data['training_loss']
+        loss[1] = run_data['validation_loss']
+        x = np.linspace(1, len(loss[0]), len(loss[0]))
+        ax[2].set_yscale('log')
+        ax[2].plot(x, loss[0], color='b', marker='o', label='Training loss')
+        ax[2].plot(x, loss[1], color='r', marker='o', label='Validation loss')
+        ax[2].legend(loc="upper right")
     plt.show()
 
 def test_model(ml):
@@ -332,13 +362,9 @@ def test_model(ml):
     fig, ax = plt.subplots(nrows=1, ncols=2,sharex=True,sharey=False)
     fname = os.path.join(ml.parameters['io_dict']['results_dir'],'all_indv_pred.data')
     pred = [[],[]]
-    of = open(fname,'r')
-    for lines in of:
-        line = lines.split()
-        if len(line) == 2:
-            pred[0].append(float(line[0]))
-            pred[1].append(float(line[1]))
-    of.close()
+    run_data = load_dictionary(fname)
+    pred[0] = run_data['y']
+    pred[1] = run_data['pred']
     ax[0].plot(pred[0],pred[1],linestyle='',color='dodgerblue',marker='o',markeredgecolor='k')
     ax[0].plot(pred[0],pred[0],linestyle='-',color='r')
     ax[0].set_xlabel('True values')
@@ -364,13 +390,9 @@ def test_model(ml):
     loss = test_non_intepretable(loader=loader, model=ml.model, parameters=ml.parameters)
     fname = os.path.join(ml.parameters['io_dict']['results_dir'],'all_indv_pred.data')
     pred = [[],[]]
-    of = open(fname,'r')
-    for lines in of:
-        line = lines.split()
-        if len(line) == 2:
-            pred[0].append(float(line[0]))
-            pred[1].append(float(line[1]))
-    of.close()
+    run_data = load_dictionary(fname)
+    pred[0] = run_data['y']
+    pred[1] = run_data['pred']
     ax[1].plot(pred[0],pred[1],linestyle='',color='dodgerblue',marker='o',markeredgecolor='k')
     ax[1].plot(pred[0],pred[0],linestyle='-',color='r')
     ax[1].set_xlabel('True values')
@@ -425,7 +447,7 @@ if __name__ == '__main__':
         io_dict=dict(
             main_path=str(Path(__file__).parent),
             loaded_model_name=None,
-            data_dir=None,
+            data_dir=os.path.join(str(Path(__file__).parent), 'data'),
             model_dir=None,
             results_dir=None,
             samples_dir=None,
@@ -448,7 +470,7 @@ if __name__ == '__main__':
         ),
         loader_dict=dict(
             shuffle_loader=False,
-            batch_size=[10, 10, 10],
+            batch_size=[2,2,2],
             num_workers=0,
             shuffle_steps=10
         ),
@@ -492,9 +514,10 @@ if __name__ == '__main__':
     gen_graphs = False
     project_graphs = False
     gen_samples = False
-    perform_train = True
-    perform_test = True
-    perform_ranking = True
+    perform_train = False
+    perform_retrain = True
+    perform_test = False
+    perform_ranking = False
 
     if gen_graphs:
         generate_data(ml,visualize_final=True)
@@ -504,7 +527,24 @@ if __name__ == '__main__':
         sample_data(ml,graph_data=raw_data,projected_data=projections)
     if perform_train:
         train_model(ml)
-        plot_training_results(ml)
+        if perform_retrain:
+            ml.parameters['model_dict']['restart_training'] = True
+            ml.parameters['io_dict']['loaded_model_name'] = None
+            del ml.parameters['io_dict']['loaded_model_name']
+            ml.parameters['io_dict']['loaded_model_name'] = \
+            glob.glob(os.path.join(ml.parameters['io_dict']['main_path'], 'models',
+                                   'training', '0', 'model*'))[0]
+            retrain_model(ml)
+        plot_training_results(ml,retrain=perform_retrain)
+    else:
+        if perform_retrain:
+            ml.parameters['model_dict']['restart_training'] = True
+            ml.parameters['io_dict']['loaded_model_name'] = None
+            del ml.parameters['io_dict']['loaded_model_name']
+            ml.parameters['io_dict']['loaded_model_name'] = \
+            glob.glob(os.path.join(ml.parameters['io_dict']['main_path'], 'models',
+                                   'training', '0', 'model*'))[0]
+            retrain_model(ml)
     if perform_test:
         test_model(ml)
     if perform_ranking:

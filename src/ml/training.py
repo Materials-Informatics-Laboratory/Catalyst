@@ -1,23 +1,17 @@
-from torch.distributed import init_process_group,destroy_process_group
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data.distributed import DistributedSampler
-from torch_geometric.loader import DataLoader
 import torch.distributed as dist
 from numba import cuda
 from torch import nn
 import torch
 
+from ..io.io import read_training_data, setup_model, setup_dataloader, save_model, save_dictionary
 from .utils.distributed import ddp_destroy, ddp_setup, reduce_tensor
-from ..graph.graph import Atomic_Graph_Data, Generic_Graph_Data
-from .testing import test_non_intepretable
 from ..utilities.distributions import get_distribution
-from ..io.io import read_training_data, get_system_info
+from .utils.predict import accumulate_predictions
+from .testing import test_non_intepretable
 from .utils.optimizer import set_optimizer
 from .utils.memory import optimizer_to
 
-from datetime import datetime
 import numpy as np
-import secrets
 import random
 import shutil
 import glob
@@ -25,80 +19,6 @@ import time
 import sys
 import os
 import gc
-
-def accumulate_predictions(pred,data,loss_tag):
-    if loss_tag == 'exact':
-        if hasattr(data, 'x_atm_batch'): #atomic graph
-            d = pred[0].flatten()
-            x = torch.unique(data['x_atm_batch'])
-            sorted_atms = [None] * len(x)
-            dd = data['x_atm_batch']
-            for i, xx in enumerate(x):
-                xw = torch.where(dd == xx)
-                sorted_atms[i] = d[xw]
-            d = pred[1].flatten()
-            x = torch.unique(data['x_bnd_batch'])
-            sorted_bnds = [None] * len(x)
-            dd = data['x_bnd_batch']
-            for i, xx in enumerate(x):
-                xw = torch.where(dd == xx)
-                sorted_bnds[i] = d[xw]
-            if hasattr(data, 'x_ang_batch'):
-                d = pred[2].flatten()
-                x = torch.unique(data['x_ang_batch'])
-                sorted_angs = [None] * len(x)
-                dd = data['x_ang_batch']
-                for i, xx in enumerate(x):
-                    xw = torch.where(dd == xx)
-                    sorted_angs[i] = d[xw]
-            preds = []
-            for i in range(len(sorted_atms)):
-                if hasattr(data, 'x_ang_batch'):
-                    preds.append(sorted_atms[i].sum() + sorted_angs[i].sum() + sorted_bnds[i].sum())
-                else:
-                    preds.append(sorted_atms[i].sum() + sorted_bnds[i].sum())
-            preds = torch.stack(preds)
-        if hasattr(data, 'node_G_batch'): # generic graph
-            d = pred[0].flatten()
-            x = torch.unique(data['node_G_batch'])
-            sorted_nodes_G = [None] * len(x)
-            dd = data['node_G_batch']
-            for i, xx in enumerate(x):
-                xw = torch.where(dd == xx)
-                sorted_nodes_G[i] = d[xw]
-            d = pred[1].flatten()
-            x = torch.unique(data['node_A_batch'])
-            sorted_nodes_A = [None] * len(x)
-            dd = data['node_A_batch']
-            for i, xx in enumerate(x):
-                xw = torch.where(dd == xx)
-                sorted_nodes_A[i] = d[xw]
-            if hasattr(data, 'edge_A_batch'):
-                d = pred[2].flatten()
-                x = torch.unique(data['edge_A_batch'])
-                sorted_edges_A = [None] * len(x)
-                dd = data['edge_A_batch']
-                for i, xx in enumerate(x):
-                    xw = torch.where(dd == xx)
-                    sorted_edges_A[i] = d[xw]
-            preds = []
-            for i in range(len(sorted_nodes_G)):
-                if hasattr(data, 'edge_A_batch'):
-                    preds.append(sorted_nodes_G[i].sum() + sorted_nodes_A[i].sum() + sorted_edges_A[i].sum())
-                else:
-                    preds.append(sorted_nodes_G[i].sum() + sorted_nodes_A[i].sum())
-            preds = torch.stack(preds)
-        y = data.y.flatten()
-    elif loss_tag == 'sum':
-        preds = None
-        for p in pred:
-            if preds is None:
-                preds = p.sum()
-            else:
-                preds += p.sum()
-        y = data.y.flatten().sum()
-
-    return preds, y
 
 def train(loader,model,parameters,optimizer,pretrain=False):
     model.train()
@@ -130,14 +50,17 @@ def train(loader,model,parameters,optimizer,pretrain=False):
     return total_loss / (len(loader)*parameters['device_dict']['world_size'])
 
 def run_training(rank,iteration,ml=None):
-    system_info = get_system_info()
-
+    epoch_times = []
+    running_valid_delta = []
+    L_train, L_valid = [], []
+    shuffle_counter = 0
+    met_tolerance = 0
+    min_loss_train = 1.0E30
+    min_loss_valid = 1.0E30
+    ep = 0
     parameters = ml.parameters
     if parameters['device_dict']['run_ddp']:
         ddp_setup(rank, parameters['device_dict']['world_size'], parameters['device_dict']['ddp_backend'])
-    ml.set_model()
-    ml.model.to(parameters['device_dict']['device'])
-    model = ml.model
 
     parameters['io_dict']['model_dir'] = None
     del parameters['io_dict']['model_dir']
@@ -147,51 +70,12 @@ def run_training(rank,iteration,ml=None):
         if os.path.isdir(parameters['io_dict']['model_dir']):
             shutil.rmtree(parameters['io_dict']['model_dir'])
         os.makedirs(parameters['io_dict']['model_dir'], exist_ok=True)
-        print('Reading data-...')
+        print('Reading data...')
 
     data, samples = read_training_data(parameters,
-                              os.path.join(parameters['io_dict']['samples_dir'][1], str(iteration), 'train_valid_split.npy'),format=parameters['io_dict']['graph_read_format'])
-
-    if parameters['model_dict']['restart_training']:
-        if parameters['model_dict']['pre_training']:
-            parameters['io_dict']['loaded_model_name'] = glob.glob(os.path.join(parameters['io_dict']['main_path'],'models','pretraining','pre*'))
-        model_data = torch.load(parameters['io_dict']['loaded_model_name'][0])
-        model.load_state_dict(model_data['model'])
-    model.to(parameters['device_dict']['device'])
-    if parameters['device_dict']['run_ddp']:
-        model = DDP(model, device_ids=[rank], find_unused_parameters=parameters['device_dict']['find_unused_parameters'])
-        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-
-    if rank == 0:
-        print('Training model ', iteration)
-        print('Training using ',len(data['training']), ' training points and ',len(data['validation']),' validation points...')
-        stats_file = open(os.path.join(parameters['io_dict']['model_dir'], 'loss.data'), 'w')
-        stats_file.write('# Training_loss     Validation loss\n')
-        stats_file.close()
-
-    if isinstance(data['training'][0],Atomic_Graph_Data):
-        follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm','x_bnd']
-    elif isinstance(data['training'][0],Generic_Graph_Data):
-        follow_batch = ['node_G', 'node_A', 'edge_A'] if hasattr(data['training'][0], 'edge_A') else ['node_G', 'node_A']
-    if parameters['device_dict']['run_ddp']:
-        loader_train = DataLoader(data['training'], batch_size=int(
-                parameters['loader_dict']['batch_size'][1] / parameters['device_dict']['world_size']),
-                                      pin_memory=parameters['device_dict']['pin_memory'],
-                                      follow_batch=follow_batch,
-                                      sampler=DistributedSampler(data['training'],
-                                                                 shuffle=False),num_workers=parameters['loader_dict']['num_workers'])
-        loader_valid = DataLoader(data['validation'], follow_batch=follow_batch,batch_size=int(
-                        parameters['loader_dict']['batch_size'][2] / parameters['device_dict']['world_size']),pin_memory=parameters['device_dict']['pin_memory'],
-                                      shuffle=False, sampler=DistributedSampler(data['validation']),num_workers=parameters['loader_dict']['num_workers'])
-    else:
-        loader_train = DataLoader(data['training'], pin_memory=parameters['device_dict']['pin_memory'],
-                                      batch_size=parameters['loader_dict']['batch_size'][1],
-                                      shuffle=parameters['loader_dict']['shuffle_loader'],
-                                      follow_batch=follow_batch,
-                                      num_workers=parameters['loader_dict']['num_workers'])
-
-        loader_valid = DataLoader(data['validation'],follow_batch=follow_batch,pin_memory=parameters['device_dict']['pin_memory'],
-                                      batch_size=parameters['loader_dict']['batch_size'][2], shuffle=False,num_workers=parameters['loader_dict']['num_workers'])
+                              os.path.join(parameters['io_dict']['samples_dir'], str(iteration), 'train_valid_split.npy'),format=parameters['io_dict']['graph_read_format'])
+    model = setup_model(ml,rank=rank)
+    loader_train, loader_valid = setup_dataloader(data=data,ml=ml)
 
     if parameters['model_dict']['optimizer_params']['dynamic_lr']:
         dist_params = dict(
@@ -204,13 +88,8 @@ def run_training(rank,iteration,ml=None):
     else:
         lr_data = np.linspace(parameters['model_dict']['optimizer_params']['params_group']['lr'],
                                   parameters['model_dict']['optimizer_params']['params_group']['lr'],parameters['model_dict']['num_epochs'][1])
-
-    epoch_times = []
-    running_valid_delta = []
-    L_train, L_valid = [], []
-    min_loss_train = 1.0E30
-    min_loss_valid = 1.0E30
-    ep = 0
+    if rank == 0:
+        print('Training model ',iteration,' using ',len(data['training']), ' training points and ',len(data['validation']),' validation points...')
     while ep < parameters['model_dict']['num_epochs'][1]:
         if rank == 0:
             start_time = time.time()
@@ -221,22 +100,8 @@ def run_training(rank,iteration,ml=None):
             if ep % parameters['loader_dict']['shuffle_steps'] == 0 and ep > 0:
                 if rank == 0:
                     print('Shuffling training data...')
-                if parameters['device_dict']['run_ddp']:
-                    loader_train.sampler.set_epoch(ep)
-                    loader_valid.sampler.set_epoch(ep)
-                    loader_train = DataLoader(data['training'], batch_size=int(
-                            parameters['loader_dict']['batch_size'][1] / parameters['device_dict']['world_size']),
-                                                  pin_memory=parameters['device_dict']['pin_memory'],
-                                                  follow_batch=follow_batch,
-                                                  sampler=DistributedSampler(data['training'],shuffle=parameters['loader_dict']['shuffle_loader'],
-                                                                             seed=random.randint(-sys.maxsize - 1, sys.maxsize)),
-                                                  num_workers=parameters['loader_dict']['num_workers'])
-                else:
-                    loader_train = DataLoader(data['training'], pin_memory=parameters['device_dict']['pin_memory'],
-                                              batch_size=parameters['loader_dict']['batch_size'][1],
-                                              shuffle=parameters['loader_dict']['shuffle_loader'],
-                                              follow_batch=follow_batch,
-                                              num_workers=parameters['loader_dict']['num_workers'])
+                loader_train, loader_valid = setup_dataloader(data=data,ml=ml,epoch=ep,reshuffle=True)
+                shuffle_counter += 1
 
         parameters['model_dict']['optimizer_params']['params_group']['lr'] = lr_data[ep]
         if parameters['device_dict']['run_ddp']:
@@ -255,9 +120,20 @@ def run_training(rank,iteration,ml=None):
             epoch_times.append(time.time() - start_time)
             print('epoch_time = ', time.time() - start_time, ' seconds Average epoch time = ', sum(epoch_times) / float(len(epoch_times)), ' seconds')
             print('Train loss = ',loss_train,' Validation loss = ',loss_valid)
-            stats_file = open(os.path.join(parameters['io_dict']['model_dir'], 'loss.data'), 'a')
-            stats_file.write(str(loss_train) + '     ' + str(loss_valid) + '\n')
-            stats_file.close()
+
+        L_train.append(loss_train)
+        L_valid.append(loss_valid)
+        if loss_train < min_loss_train:
+            min_loss_train = loss_train
+            if loss_valid < min_loss_valid:
+                min_loss_valid = loss_valid
+                if rank == 0:
+                    model_params_group = {
+                        'samples':samples,
+                        'L_train':L_train[-1],
+                        'L_valid':L_valid[-1]
+                    }
+                    save_model(model=model, ml=ml, model_params_group=model_params_group,remove_old_models=parameters['io_dict']['remove_old_model'])
         if ep > 0:
             delta_val = loss_valid - L_valid[-1]
             running_valid_delta.append(abs(delta_val))
@@ -265,56 +141,40 @@ def run_training(rank,iteration,ml=None):
                 running_valid_delta.pop(0)
                 if rank == 0:
                     print('Running validation delta = ',sum(running_valid_delta)/len(running_valid_delta))
-
-        L_train.append(loss_train)
-        L_valid.append(loss_valid)
-
-        if loss_train < min_loss_train:
-            min_loss_train = loss_train
-            if loss_valid < min_loss_valid:
-                min_loss_valid = loss_valid
-                if rank == 0:
-                     if parameters['io_dict']['remove_old_model']:
-                        model_name = glob.glob(os.path.join(parameters['io_dict']['model_dir'], 'model_*'))
-                        if len(model_name) > 0 and rank == 0:
-                            os.remove(model_name[0])
-                     print('Saving model...')
-                     now = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-                     if parameters['device_dict']['run_ddp']:
-                         model_state = model.module.state_dict()
-                     else:
-                         model_state = model.state_dict()
-                     id = secrets.token_hex(32)
-                     model_data = dict(
-                         model_type='train',
-                         model=model_state,
-                         samples=samples,
-                         loss_info=dict(
-                             training=L_train[-1],
-                             validation=None
-                         ),
-                         id=id,
-                         time=str(now),
-                         parameters=parameters,
-                         system_info=system_info
-                     )
-                     torch.save(model_data,
-                                os.path.join(parameters['io_dict']['model_dir'], 'model_' + str(id) + '_' + str(now)))
-        if len(running_valid_delta) == parameters['model_dict']['max_deltas']:
-            if sum(running_valid_delta)/len(running_valid_delta)< parameters['model_dict']['train_delta'][1] and (sum(L_valid[-parameters['model_dict']['max_deltas']:])/parameters['model_dict']['max_deltas']) < parameters['model_dict']['train_tolerance'][1]:
-                if rank == 0:
-                    print('Validation delta satisfies set tolerance...exiting training loop...')
-                ep = parameters['model_dict']['num_epochs'][1]
+            if len(running_valid_delta) == parameters['model_dict']['max_deltas']:
+                if sum(running_valid_delta)/len(running_valid_delta)< parameters['model_dict']['train_delta'][1] and (sum(L_valid[-parameters['model_dict']['max_deltas']:])/parameters['model_dict']['max_deltas']) < parameters['model_dict']['train_tolerance'][1]:
+                    if rank == 0:
+                        print('Validation delta satisfies set tolerance...exiting training loop...')
+                    ep = parameters['model_dict']['num_epochs'][1]
+                    met_tolerance = 1
         ep += 1
+    if rank == 0:
+        run_data = {
+            'epoch_timings':epoch_times,
+            'times_loader_shuffled':shuffle_counter,
+            'met_tolerance':met_tolerance,
+            'training_loss':L_train,
+            'validation_loss': L_valid,
+        }
+        save_dictionary(fname=os.path.join(ml.parameters['io_dict']['model_dir'],'run_information.npy'),data=run_data)
     if parameters['device_dict']['run_ddp']:
         ddp_destroy()
 
 def run_pre_training(rank,ml=None):
-    system_info = get_system_info()
-
+    epoch_times = []
+    running_train_delta = []
+    L_train = []
+    shuffle_counter = 0
+    met_tolerance = 0
+    min_loss_train = 1.0E30
+    ep = 0
     parameters = ml.parameters
-    ml.set_model()
-    model = ml.model
+
+    if parameters['device_dict']['run_ddp']:
+        ddp_setup(rank, parameters['device_dict']['world_size'],parameters['device_dict']['ddp_backend'])
+
+    parameters['io_dict']['model_dir'] = None
+    del parameters['io_dict']['model_dir']
     parameters['io_dict']['model_dir'] = os.path.join(parameters['io_dict']['main_path'],'models','pretraining')
     if rank == 0:
         if os.path.isdir(parameters['io_dict']['model_dir']):
@@ -323,34 +183,10 @@ def run_pre_training(rank,ml=None):
         print('Reading graphs...')
 
     data, samples = read_training_data(parameters,
-                                       os.path.join(parameters['io_dict']['samples_dir'][0], 'train_valid_split.npy'),
+                                       os.path.join(parameters['io_dict']['samples_dir'], 'train_valid_split.npy'),
                                        pretrain=True,format=parameters['io_dict']['graph_read_format'])
-
-    if parameters['device_dict']['run_ddp']:
-        ddp_setup(rank, parameters['device_dict']['world_size'],parameters['device_dict']['ddp_backend'])
-        model.to(parameters['device_dict']['device'])
-        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-        model = DDP(model, device_ids=[rank],find_unused_parameters=parameters['device_dict']['find_unused_parameters'])
-
-    if rank == 0:
-        print('Training using ', len(data['training']), ' training points')
-        stats_file = open(os.path.join(parameters['io_dict']['model_dir'], 'loss.data'), 'w')
-        stats_file.write('# Training_loss\n')
-        stats_file.close()
-
-    if isinstance(data['training'][0], Atomic_Graph_Data):
-        follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm', 'x_bnd']
-    elif isinstance(data['training'][0], Generic_Graph_Data):
-        follow_batch = ['node_G', 'node_A', 'edge_A'] if hasattr(data['training'][0], 'edge_A') else ['node_G','node_A']
-    if parameters['device_dict']['run_ddp']:
-        loader_train = DataLoader(data['training'], batch_size=int(
-                        parameters['loader_dict']['batch_size'][0] / parameters['device_dict']['world_size']),
-                                  pin_memory=parameters['device_dict']['pin_memory'],
-                                  shuffle=False, follow_batch=follow_batch,
-                                  sampler=DistributedSampler(data['training']))
-    else:
-        loader_train = DataLoader(data['training'], pin_memory=parameters['device_dict']['pin_memory'],
-                                  batch_size=parameters['loader_dict']['batch_size'][0], shuffle=True, follow_batch=follow_batch)
+    model = setup_model(ml,rank=rank,pretrain=True)
+    loader_train = setup_dataloader(data=data, ml=ml,pretrain=True)
 
     if parameters['model_dict']['optimizer_params']['dynamic_lr']:
         dist_params = dict(
@@ -364,12 +200,8 @@ def run_pre_training(rank,ml=None):
         lr_data = np.linspace(parameters['model_dict']['optimizer_params']['params_group']['lr'],
                               parameters['model_dict']['optimizer_params']['params_group']['lr'],
                               parameters['model_dict']['num_epochs'][1])
-
-    epoch_times = []
-    running_train_delta = []
-    L_train = []
-    min_loss_train = 1.0E30
-    ep = 0
+    if rank == 0:
+        print('Training using ', len(data['training']), ' training points')
     while ep < parameters['model_dict']['num_epochs'][0]:
         if rank == 0:
             start_time = time.time()
@@ -380,19 +212,8 @@ def run_pre_training(rank,ml=None):
             if ep % parameters['loader_dict']['shuffle_steps'] == 0:
                 if rank == 0:
                     print('Shuffling training data...')
-                if parameters['device_dict']['run_ddp']:
-                    loader_train.sampler.set_epoch(ep)
-                    loader_train = DataLoader(data['training'], batch_size=int(
-                        parameters['loader_dict']['batch_size'][0] / parameters['device_dict']['world_size']),
-                                              pin_memory=parameters['device_dict']['pin_memory'],follow_batch=follow_batch,
-                                              sampler=DistributedSampler(data['training'],shuffle=parameters['loader_dict']['shuffle_loader'],
-                                              seed=random.randint(-sys.maxsize - 1,sys.maxsize)),
-                                              num_workers=parameters['loader_dict']['num_workers'])
-                else:
-                    loader_train = DataLoader(data['training'], pin_memory=parameters['device_dict']['pin_memory'],
-                                              batch_size=parameters['loader_dict']['batch_size'][0], shuffle=parameters['loader_dict']['shuffle_loader'],
-                                              follow_batch=follow_batch)
-
+                loader_train = setup_dataloader(data=data, ml=ml,epoch=ep,pretrain=True,reshuffle=True)
+                shuffle_counter += 1
 
         parameters['model_dict']['optimizer_params']['params_group']['lr'] = lr_data[ep]
         if parameters['device_dict']['run_ddp']:
@@ -410,10 +231,16 @@ def run_pre_training(rank,ml=None):
             print('epoch_time = ', time.time() - start_time, ' seconds Average epoch time = ',
                   sum(epoch_times) / float(len(epoch_times)), ' seconds')
             print('Train loss = ', loss_train)
-            stats_file = open(os.path.join(parameters['io_dict']['model_dir'], 'loss.data'), 'a')
-            stats_file.write(str(loss_train) + '\n')
-            stats_file.close()
 
+        L_train.append(loss_train)
+        if loss_train < min_loss_train:
+            min_loss_train = loss_train
+            if rank == 0:
+                model_params_group = {
+                    'samples': samples,
+                    'L_train': L_train[-1],
+                }
+                save_model(model=model, ml=ml, model_params_group=model_params_group,pretrain=True)
         if ep > 0:
             delta_train = loss_train - L_train[-1]
             running_train_delta.append(abs(delta_train))
@@ -421,44 +248,23 @@ def run_pre_training(rank,ml=None):
                 running_train_delta.pop(0)
                 if rank == 0:
                     print('Running training delta = ', sum(running_train_delta) / len(running_train_delta))
-
-        L_train.append(loss_train)
-        if loss_train < min_loss_train:
-            min_loss_train = loss_train
-
-            if rank == 0:
-                model_name = glob.glob(os.path.join(parameters['io_dict']['model_dir'], 'model_*'))
-                if len(model_name) > 0:
-                    os.remove(model_name[0])
-                print('Saving model...')
-                now = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-                if parameters['device_dict']['run_ddp']:
-                    model_state = model.module.state_dict()
-                else:
-                    model_state = model.state_dict()
-                id = secrets.token_hex(32)
-                model_data = dict(
-                    model_type='pretrain',
-                    model = model_state,
-                    samples = samples,
-                    loss_info = dict(
-                        training = L_train[-1],
-                        validation = None
-                    ),
-                    id = id,
-                    time = str(now),
-                    parameters = parameters,
-                    system_info= system_info
-                )
-                torch.save(model_data,os.path.join(parameters['io_dict']['model_dir'],'pre_'+str(id)+'_'+str(now)))
-        if len(running_train_delta) == parameters['model_dict']['max_deltas']:
-            if sum(running_train_delta) / len(running_train_delta) < parameters['model_dict']['train_delta'][0] and (sum(L_train[-parameters['model_dict']['max_deltas']:])/parameters['model_dict']['max_deltas']) < parameters['model_dict']['train_tolerance'][0]:
-                if rank == 0:
-                    print('Training delta satisfies set tolerance...exiting training loop...')
-                ep = parameters['model_dict']['num_epochs'][0]
+            if len(running_train_delta) == parameters['model_dict']['max_deltas']:
+                if sum(running_train_delta) / len(running_train_delta) < parameters['model_dict']['train_delta'][0] and (sum(L_train[-parameters['model_dict']['max_deltas']:])/parameters['model_dict']['max_deltas']) < parameters['model_dict']['train_tolerance'][0]:
+                    if rank == 0:
+                        print('Training delta satisfies set tolerance...exiting training loop...')
+                    ep = parameters['model_dict']['num_epochs'][0]
+                    met_tolerance = 1
         ep += 1
+    if rank == 0:
+        run_data = {
+            'epoch_timings':epoch_times,
+            'times_loader_shuffled':shuffle_counter,
+            'met_tolerance':met_tolerance,
+            'training_loss': L_train
+        }
+        save_dictionary(fname=os.path.join(ml.parameters['io_dict']['model_dir'],'run_information.npy'),data=run_data)
     if parameters['device_dict']['run_ddp']:
-        destroy_process_group()
+        ddp_destroy()
 
 
 
