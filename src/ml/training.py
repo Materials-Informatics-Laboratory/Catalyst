@@ -92,7 +92,8 @@ def run_training(rank,iteration,ml=None):
         print('Training model ',iteration,' using ',len(data['training']), ' training points and ',len(data['validation']),' validation points...')
     while ep < parameters['model_dict']['num_epochs'][1]:
         if rank == 0:
-            start_time = time.time()
+            if ep > 0:
+                start_time = time.time()
             print('Epoch ',ep+1,' of ',parameters['model_dict']['num_epochs'][1],  ' lr_rate: ',lr_data[ep], 'loss_accum: ',parameters['model_dict']['accumulate_loss'][1])
             sys.stdout.flush()
 
@@ -117,8 +118,9 @@ def run_training(rank,iteration,ml=None):
         loss_valid = test_non_intepretable(loader_valid, model, parameters)
 
         if rank == 0:
-            epoch_times.append(time.time() - start_time)
-            print('epoch_time = ', time.time() - start_time, ' seconds Average epoch time = ', sum(epoch_times) / float(len(epoch_times)), ' seconds')
+            if ep > 0:
+                epoch_times.append(time.time() - start_time)
+                print('epoch_time = ', time.time() - start_time, ' seconds Average epoch time = ', sum(epoch_times) / float(len(epoch_times)), ' seconds')
             print('Train loss = ',loss_train,' Validation loss = ',loss_valid)
 
         L_train.append(loss_train)
@@ -204,7 +206,8 @@ def run_pre_training(rank,ml=None):
         print('Training using ', len(data['training']), ' training points')
     while ep < parameters['model_dict']['num_epochs'][0]:
         if rank == 0:
-            start_time = time.time()
+            if ep > 0:
+                start_time = time.time()
             print('Epoch ', ep+1, ' of ', parameters['model_dict']['num_epochs'][0], ' lr_rate: ',lr_data[ep])
             sys.stdout.flush()
 
@@ -227,8 +230,9 @@ def run_pre_training(rank,ml=None):
 
         loss_train = train(loader_train, model, parameters,optimizer,pretrain=True);
         if rank == 0:
-            epoch_times.append(time.time() - start_time)
-            print('epoch_time = ', time.time() - start_time, ' seconds Average epoch time = ',
+            if ep > 0:
+                epoch_times.append(time.time() - start_time)
+                print('epoch_time = ', time.time() - start_time, ' seconds Average epoch time = ',
                   sum(epoch_times) / float(len(epoch_times)), ' seconds')
             print('Train loss = ', loss_train)
 
