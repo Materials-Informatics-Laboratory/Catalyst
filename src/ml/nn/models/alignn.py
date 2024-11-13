@@ -55,7 +55,6 @@ class Encoder_atomic(nn.Module):
             data.h_a_node = self.embed_a_node(data.node_A)
             if hasattr(data,'edge_A'):
                 data.h_a_edge = self.embed_a_edge((data.edge_A))
-
         return data
 
 class Encoder_generic(nn.Module):
@@ -99,23 +98,22 @@ class Encoder_generic(nn.Module):
         return data
 
 class Processor(nn.Module):
-    """
-    The processor updates atom, bond, and angle embeddings.
-    """
-    def __init__(self, num_convs, dim,conv_type='mesh',edge_type=0,encode_a=True):
+    def __init__(self, num_convs, dim,conv_type='mesh',encode_a=1,act=None,aggr=None):
         super().__init__()
         self.num_convs = num_convs
         self.dim = dim
-        self.edge_type = edge_type
+        self.aggr = aggr
+        self.act = act
+        self.conv = conv_type
 
-        if conv_type == 'mesh':
-            self.g_convs = nn.ModuleList([copy.deepcopy(MeshGraphNetsConv(dim, dim)) for _ in range(num_convs)])
+        if self.conv == 'mesh':
+            self.g_convs = nn.ModuleList([copy.deepcopy(MeshGraphNetsConv(self.dim, self.dim,aggr_scheme=self.aggr)) for _ in range(self.num_convs)])
             if encode_a:
-                self.a_convs = nn.ModuleList([copy.deepcopy(MeshGraphNetsConv(dim, dim)) for _ in range(num_convs)])
-        elif conv_type == 'gcn':
-            self.g_convs = nn.ModuleList([copy.deepcopy(GatedGCN(dim, dim)) for _ in range(num_convs)])
+                self.a_convs = nn.ModuleList([copy.deepcopy(MeshGraphNetsConv(self.dim, self.dim,aggr_scheme=self.aggr)) for _ in range(self.num_convs)])
+        elif self.conv == 'gcn':
+            self.g_convs = nn.ModuleList([copy.deepcopy(GatedGCN(self.dim, self.dim,aggr_scheme=self.aggr,act=self.act)) for _ in range(self.num_convs)])
             if encode_a:
-                self.a_convs = nn.ModuleList([copy.deepcopy(GatedGCN(dim, dim)) for _ in range(num_convs)])
+                self.a_convs = nn.ModuleList([copy.deepcopy(GatedGCN(self.dim, self.dim,aggr_scheme=self.aggr,act=self.act)) for _ in range(self.num_convs)])
 
     def forward(self, data):
         if isinstance(data,Atomic_Graph_Data):
@@ -131,13 +129,9 @@ class Processor(nn.Module):
             if hasattr(data, 'edge_A'):
                 edge_index_A = data.edge_index_A
             for i in range(self.num_convs):
-                #print('ng: ',len(data.h_g_node), ' ',data.h_g_node)
                 if hasattr(data, 'edge_A'):
-                    #print('cvl: ',len(data.h_a_node), ' ', len(edge_index_A), ' ', len(data.h_a_edge))
                     data.h_a_node, data.h_a_edge = self.a_convs[i](data.h_a_node, edge_index_A, data.h_a_edge)
                 data.h_g_node, data.h_a_node = self.g_convs[i](data.h_g_node, edge_index_G, data.h_a_node)
-
-    
         return data
 
 class Decoder(nn.Module):

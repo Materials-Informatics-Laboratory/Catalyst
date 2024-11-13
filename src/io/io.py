@@ -11,23 +11,31 @@ import secrets
 import pickle
 import torch
 import glob
+import math
 import os
 
 import platform
 import psutil
 import GPUtil
 
-def setup_dataloader(data,ml,epoch=-1,reshuffle=False,pretrain=False):
+def setup_dataloader(data,ml,epoch=-1,reshuffle=False,mode=0):
     parameters = ml.parameters
-    if isinstance(data['training'][0], Atomic_Graph_Data):
-        follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm', 'x_bnd']
-    elif isinstance(data['training'][0], Generic_Graph_Data):
-        follow_batch = ['node_G', 'node_A', 'edge_A'] if hasattr(data['training'][0], 'edge_A') else ['node_G','node_A']
-    if pretrain:
+    if mode == 1 or mode == 0:
+        if isinstance(data['training'][0], Atomic_Graph_Data):
+            follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm', 'x_bnd']
+        elif isinstance(data['training'][0], Generic_Graph_Data):
+            follow_batch = ['node_G', 'node_A', 'edge_A'] if hasattr(data['training'][0], 'edge_A') else ['node_G','node_A']
+    elif mode == 2:
+        if isinstance(data['validation'][0], Atomic_Graph_Data):
+            follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['validation'][0], 'x_ang') else ['x_atm', 'x_bnd']
+        elif isinstance(data['validation'][0], Generic_Graph_Data):
+            follow_batch = ['node_G', 'node_A', 'edge_A'] if hasattr(data['validation'][0], 'edge_A') else ['node_G','node_A']
+
+    if mode == 0:
         if reshuffle:
             if parameters['device_dict']['run_ddp']:
                 loader_train.sampler.set_epoch(epoch)
-                loader_train = DataLoader(data['training'], batch_size=int(
+                loader_train = DataLoader(data['training'], batch_size=math.ceil(
                     parameters['loader_dict']['batch_size'][0] / parameters['device_dict']['world_size']),
                                           pin_memory=parameters['device_dict']['pin_memory'], follow_batch=follow_batch,
                                           sampler=DistributedSampler(data['training'],
@@ -41,7 +49,7 @@ def setup_dataloader(data,ml,epoch=-1,reshuffle=False,pretrain=False):
                                           follow_batch=follow_batch)
         else:
             if parameters['device_dict']['run_ddp']:
-                loader_train = DataLoader(data['training'], batch_size=int(
+                loader_train = DataLoader(data['training'], batch_size=math.ceil(
                     parameters['loader_dict']['batch_size'][0] / parameters['device_dict']['world_size']),
                                           pin_memory=parameters['device_dict']['pin_memory'],
                                           shuffle=False, follow_batch=follow_batch,
@@ -51,7 +59,7 @@ def setup_dataloader(data,ml,epoch=-1,reshuffle=False,pretrain=False):
                                           batch_size=parameters['loader_dict']['batch_size'][0], shuffle=True,
                                           follow_batch=follow_batch)
         return loader_train
-    else:
+    elif mode == 1:
         if reshuffle:
             if parameters['device_dict']['run_ddp']:
                 loader_train.sampler.set_epoch(epoch)
@@ -97,16 +105,29 @@ def setup_dataloader(data,ml,epoch=-1,reshuffle=False,pretrain=False):
                                           pin_memory=parameters['device_dict']['pin_memory'],
                                           batch_size=parameters['loader_dict']['batch_size'][2], shuffle=False,
                                           num_workers=parameters['loader_dict']['num_workers'])
-        return loader_train,loader_valid
+        return loader_train, loader_valid
+    elif mode == 2:
+        if parameters['device_dict']['run_ddp']:
+            loader_valid = DataLoader(data['validation'], follow_batch=follow_batch, batch_size=int(
+                    parameters['loader_dict']['batch_size'][2] / parameters['device_dict']['world_size']),
+                                          pin_memory=parameters['device_dict']['pin_memory'],
+                                          shuffle=False, sampler=DistributedSampler(data['validation']),
+                                          num_workers=parameters['loader_dict']['num_workers'])
+        else:
+            loader_valid = DataLoader(data['validation'], follow_batch=follow_batch,
+                                          pin_memory=parameters['device_dict']['pin_memory'],
+                                          batch_size=parameters['loader_dict']['batch_size'][2], shuffle=False,
+                                          num_workers=parameters['loader_dict']['num_workers'])
+        return loader_valid
 
-def setup_model(ml,rank=0,pretrain=False,data_only=False):
+def setup_model(ml,rank=0,data_only=False,load=False):
     if data_only:
         return torch.load(ml.parameters['io_dict']['loaded_model_name'])
     else:
         ml.set_model()
         ml.model.to(ml.parameters['device_dict']['device'])
         model = ml.model
-        if ml.parameters['model_dict']['restart_training']:
+        if load:
             model_data = torch.load(ml.parameters['io_dict']['loaded_model_name'])
             model.load_state_dict(model_data['model'])
         if ml.parameters['device_dict']['run_ddp']:
@@ -143,7 +164,7 @@ def save_model(model,ml,model_params_group,remove_old_models=True,pretrain=False
             id=id,
             time=str(now),
             parameters=ml.parameters,
-            system_info=get_system_info()
+            system_info=ml.parameters['device_dict']['system_info']
         )
         torch.save(model_data, os.path.join(ml.parameters['io_dict']['model_dir'], 'pre_' + str(id) + '_' + str(now)))
     else:
@@ -158,7 +179,7 @@ def save_model(model,ml,model_params_group,remove_old_models=True,pretrain=False
             id=id,
             time=str(now),
             parameters=ml.parameters,
-            system_info=get_system_info()
+            system_info=ml.parameters['device_dict']['system_info']
         )
         torch.save(model_data,
                    os.path.join(ml.parameters['io_dict']['model_dir'], 'model_' + str(id) + '_' + str(now)))

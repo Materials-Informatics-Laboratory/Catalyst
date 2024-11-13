@@ -40,4 +40,11 @@ def reduce_tensor(tensor):
     )
     return rt
 
+def combine_dicts_across_gpus(local_dict):
+    world_size = dist.get_world_size()
+    all_dicts = [None] * world_size
+    dist.all_gather_object(all_dicts, local_dict)
+    return all_dicts
+
+
 

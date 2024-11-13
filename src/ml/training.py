@@ -7,7 +7,7 @@ from ..io.io import read_training_data, setup_model, setup_dataloader, save_mode
 from .utils.distributed import ddp_destroy, ddp_setup, reduce_tensor
 from ..utilities.distributions import get_distribution
 from .utils.predict import accumulate_predictions
-from .testing import test_non_intepretable
+from .testing import test_non_intepretable_internal
 from .utils.optimizer import set_optimizer
 from .utils.memory import optimizer_to
 
@@ -26,7 +26,7 @@ def train(loader,model,parameters,optimizer,pretrain=False):
         loss_accum = parameters['model_dict']['accumulate_loss'][0]
     else:
         loss_accum = parameters['model_dict']['accumulate_loss'][1]
-    total_loss = 0.0
+    epoch_loss = 0.0
     if parameters['device_dict']['run_ddp'] == False:
         model.to(parameters['device_dict']['device'])
     loss_fn = parameters['model_dict']['loss_func']
@@ -34,20 +34,22 @@ def train(loader,model,parameters,optimizer,pretrain=False):
         def closure():
             data.to(parameters['device_dict']['device'], non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
-
             pred = model(data)
             preds, y = accumulate_predictions(pred,data,loss_accum)
-            loss = loss_fn(preds,y)
-            nonlocal total_loss
-            total_loss += loss.item()
-
-            loss.backward()
+            preds = preds.to(y.device)
+            loss_list = [0.0]*len(preds)
+            for i in range(len(preds)):
+                loss_list[i] = loss_fn(preds[i],y[i])
+            batch_loss = torch.sum(torch.stack(loss_list))
+            nonlocal epoch_loss
+            epoch_loss += batch_loss.item()
+            batch_loss.backward()
             optimizer.step()
-            return loss
+            return batch_loss
         optimizer.step(closure)
     if parameters['device_dict']['run_ddp']:
-        total_loss = reduce_tensor(torch.tensor(total_loss).to(parameters['device_dict']['device'])).item()
-    return total_loss / (len(loader)*parameters['device_dict']['world_size'])
+        epoch_loss = reduce_tensor(torch.tensor(epoch_loss).to(parameters['device_dict']['device'])).item()
+    return epoch_loss / (len(loader)*parameters['device_dict']['world_size'])
 
 def run_training(rank,iteration,ml=None):
     epoch_times = []
@@ -73,9 +75,12 @@ def run_training(rank,iteration,ml=None):
         print('Reading data...')
 
     data, samples = read_training_data(parameters,
-                              os.path.join(parameters['io_dict']['samples_dir'], str(iteration), 'train_valid_split.npy'),format=parameters['io_dict']['graph_read_format'])
-    model = setup_model(ml,rank=rank)
-    loader_train, loader_valid = setup_dataloader(data=data,ml=ml)
+                              os.path.join(parameters['io_dict']['samples_dir'], str(iteration), 'train_valid_split.npy'),format=parameters['io_dict']['graph_read_format'],)
+    load_model = False
+    if parameters['model_dict']['pre_training'] or parameters['model_dict']['restart_training']:
+        load_model=True
+    model = setup_model(ml,rank=rank,load=load_model)
+    loader_train, loader_valid = setup_dataloader(data=data,ml=ml,mode=1)
 
     if parameters['model_dict']['optimizer_params']['dynamic_lr']:
         dist_params = dict(
@@ -101,7 +106,7 @@ def run_training(rank,iteration,ml=None):
             if ep % parameters['loader_dict']['shuffle_steps'] == 0 and ep > 0:
                 if rank == 0:
                     print('Shuffling training data...')
-                loader_train, loader_valid = setup_dataloader(data=data,ml=ml,epoch=ep,reshuffle=True)
+                loader_train, loader_valid = setup_dataloader(data=data,ml=ml,epoch=ep,reshuffle=True,mode=1)
                 shuffle_counter += 1
 
         parameters['model_dict']['optimizer_params']['params_group']['lr'] = lr_data[ep]
@@ -115,7 +120,7 @@ def run_training(rank,iteration,ml=None):
         optimizer_to(optimizer,parameters['device_dict']['device'])
 
         loss_train = train(loader_train, model, parameters, optimizer);
-        loss_valid = test_non_intepretable(loader_valid, model, parameters)
+        loss_valid = test_non_intepretable_internal(loader_valid, model, parameters,rank=rank)
 
         if rank == 0:
             if ep > 0:
@@ -136,8 +141,8 @@ def run_training(rank,iteration,ml=None):
                         'L_valid':L_valid[-1]
                     }
                     save_model(model=model, ml=ml, model_params_group=model_params_group,remove_old_models=parameters['io_dict']['remove_old_model'])
-        if ep > 0:
-            delta_val = loss_valid - L_valid[-1]
+        if ep > 1:
+            delta_val = loss_valid - L_valid[-2]
             running_valid_delta.append(abs(delta_val))
             if len(running_valid_delta) > parameters['model_dict']['max_deltas']:
                 running_valid_delta.pop(0)
@@ -187,21 +192,21 @@ def run_pre_training(rank,ml=None):
     data, samples = read_training_data(parameters,
                                        os.path.join(parameters['io_dict']['samples_dir'], 'train_valid_split.npy'),
                                        pretrain=True,format=parameters['io_dict']['graph_read_format'])
-    model = setup_model(ml,rank=rank,pretrain=True)
-    loader_train = setup_dataloader(data=data, ml=ml,pretrain=True)
+    model = setup_model(ml,rank=rank)
+    loader_train = setup_dataloader(data=data, ml=ml,mode=0)
 
     if parameters['model_dict']['optimizer_params']['dynamic_lr']:
         dist_params = dict(
             dist_type=parameters['model_dict']['optimizer_params']['dist_type'],
             vars=parameters['model_dict']['optimizer_params']['lr_scale'],
-            size=parameters['model_dict']['num_epochs'][1],
+            size=parameters['model_dict']['num_epochs'][0],
             floor=parameters['model_dict']['optimizer_params']['params_group']['lr']
         )
         lr_data = get_distribution(dist_params)
     else:
         lr_data = np.linspace(parameters['model_dict']['optimizer_params']['params_group']['lr'],
                               parameters['model_dict']['optimizer_params']['params_group']['lr'],
-                              parameters['model_dict']['num_epochs'][1])
+                              parameters['model_dict']['num_epochs'][0])
     if rank == 0:
         print('Training using ', len(data['training']), ' training points')
     while ep < parameters['model_dict']['num_epochs'][0]:
@@ -215,7 +220,7 @@ def run_pre_training(rank,ml=None):
             if ep % parameters['loader_dict']['shuffle_steps'] == 0:
                 if rank == 0:
                     print('Shuffling training data...')
-                loader_train = setup_dataloader(data=data, ml=ml,epoch=ep,pretrain=True,reshuffle=True)
+                loader_train = setup_dataloader(data=data, ml=ml,epoch=ep,reshuffle=True,mode=0)
                 shuffle_counter += 1
 
         parameters['model_dict']['optimizer_params']['params_group']['lr'] = lr_data[ep]
@@ -245,8 +250,8 @@ def run_pre_training(rank,ml=None):
                     'L_train': L_train[-1],
                 }
                 save_model(model=model, ml=ml, model_params_group=model_params_group,pretrain=True)
-        if ep > 0:
-            delta_train = loss_train - L_train[-1]
+        if ep > 1:
+            delta_train = loss_train - L_train[-2]
             running_train_delta.append(abs(delta_train))
             if len(running_train_delta) > parameters['model_dict']['max_deltas']:
                 running_train_delta.pop(0)

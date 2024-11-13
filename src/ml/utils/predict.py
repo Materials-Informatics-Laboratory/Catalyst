@@ -33,38 +33,48 @@ def accumulate_predictions(pred,data,loss_tag):
                     preds.append(sorted_atms[i].sum() + sorted_angs[i].sum() + sorted_bnds[i].sum())
                 else:
                     preds.append(sorted_atms[i].sum() + sorted_bnds[i].sum())
-            preds = torch.stack(preds)
         if hasattr(data, 'node_G_batch'): # generic graph
-            d = pred[0].flatten()
             x = torch.unique(data['node_G_batch'])
-            sorted_nodes_G = [None] * len(x)
+            sorted_nodes_G = [[None for j in range(len(pred[0][0]))] for i in range(len(x))]
             dd = data['node_G_batch']
             for i, xx in enumerate(x):
-                xw = torch.where(dd == xx)
-                sorted_nodes_G[i] = d[xw]
-            d = pred[1].flatten()
+                mask = torch.where(dd == xx,torch.tensor(1), torch.tensor(0))
+                indices = torch.nonzero(mask).squeeze()
+                for j in range(len(pred[0][0])):
+                    sorted_nodes_G[i][j] = pred[0][indices,j]
             x = torch.unique(data['node_A_batch'])
-            sorted_nodes_A = [None] * len(x)
+            sorted_nodes_A = [[None for j in range(len(pred[1][0]))] for i in range(len(x))]
             dd = data['node_A_batch']
             for i, xx in enumerate(x):
-                xw = torch.where(dd == xx)
-                sorted_nodes_A[i] = d[xw]
+                mask = torch.where(dd == xx, torch.tensor(1), torch.tensor(0))
+                indices = torch.nonzero(mask).squeeze()
+                for j in range(len(pred[1][0])):
+                    sorted_nodes_A[i][j] = pred[1][indices, j]
             if hasattr(data, 'edge_A_batch'):
-                d = pred[2].flatten()
                 x = torch.unique(data['edge_A_batch'])
-                sorted_edges_A = [None] * len(x)
+                sorted_edges_A = [[None for j in range(len(pred[2][0]))] for i in range(len(x))]
                 dd = data['edge_A_batch']
                 for i, xx in enumerate(x):
-                    xw = torch.where(dd == xx)
-                    sorted_edges_A[i] = d[xw]
+                    mask = torch.where(dd == xx, torch.tensor(1), torch.tensor(0))
+                    indices = torch.nonzero(mask).squeeze()
+                    for j in range(len(pred[2][0])):
+                        sorted_edges_A[i][j] = pred[2][indices, j]
             preds = []
             for i in range(len(sorted_nodes_G)):
+                py = torch.zeros(len(sorted_nodes_G[i]))
                 if hasattr(data, 'edge_A_batch'):
-                    preds.append(sorted_nodes_G[i].sum() + sorted_nodes_A[i].sum() + sorted_edges_A[i].sum())
+                    for j in range(len(sorted_nodes_G[i])):
+                        py[j] = sorted_nodes_G[i][j].sum() + sorted_nodes_A[i][j].sum() + sorted_edges_A[i][j].sum()
                 else:
-                    preds.append(sorted_nodes_G[i].sum() + sorted_nodes_A[i].sum())
+                    for j in range(len(sorted_nodes_G[i])):
+                        py[j] = sorted_nodes_G[i][j].sum() + sorted_nodes_A[i][j].sum()
+                preds.append(py)
+        if len(pred[0][0]) > 1:
+            preds = torch.stack(preds, dim=1)
+            y = torch.stack(data.y)
+        else:
             preds = torch.stack(preds)
-        y = data.y.flatten()
+            y = torch.flatten(data.y)
     elif loss_tag == 'sum':
         preds = None
         for p in pred:
@@ -73,8 +83,10 @@ def accumulate_predictions(pred,data,loss_tag):
             else:
                 preds += p.sum()
         y = data.y.flatten().sum()
-
-    return preds, y
+    if len(pred[0][0]) > 1:
+        return torch.stack(tuple(preds)), torch.stack(tuple(y))
+    else:
+        return preds, y
 
 
 

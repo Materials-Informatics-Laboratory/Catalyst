@@ -1,42 +1,74 @@
 from ..utilities.rankings import organize_rankings_atomic, organize_rankings_generic
 from .utils.predict import accumulate_predictions
-from .utils.distributed import reduce_tensor
-from ..io.io import save_dictionary
+from .utils.distributed import reduce_tensor, combine_dicts_across_gpus, ddp_destroy, ddp_setup
+from ..io.io import read_training_data, setup_model, setup_dataloader, save_model, save_dictionary
 from torch import nn
 import torch
 
 import numpy as np
+import glob as glob
 import os
 
 @torch.no_grad()
-def test_non_intepretable(loader,model,parameters,ind_fn='all'):
+def test_non_intepretable_external(ml,ind_fn='all',rank=0):
+    parameters = ml.parameters
+    if parameters['device_dict']['run_ddp']:
+        ddp_setup(rank, parameters['device_dict']['world_size'], parameters['device_dict']['ddp_backend'])
+
+    if rank == 0:
+        print('Reading data...')
+    data = dict(validation = [torch.load(file_name) for file_name in
+                  glob.glob(os.path.join(parameters['io_dict']['data_dir'], '*'))]
+    )
+    model = setup_model(ml, rank=rank,load=True)
+    loader_valid = setup_dataloader(data=data,ml=ml,mode=2)
+    if rank == 0:
+        print('Testing...')
+    loss = test_non_intepretable_internal(loader=loader_valid,
+                                          model=model,
+                                          parameters=parameters,
+                                          ind_fn='all',rank=rank)
+@torch.no_grad()
+def test_non_intepretable_internal(loader,model,parameters,ind_fn='all',rank=0):
     model.eval()
     loss_fn = parameters['model_dict']['loss_func']
-    total_loss = 0.0
+    epoch_loss = 0.0
     loss_accum = parameters['model_dict']['accumulate_loss'][2]
     if parameters['io_dict']['write_indv_pred']:
         values = [[],[],[]]
+        gids = []
     for data in loader:
         data = data.to(parameters['device_dict']['device'], non_blocking=parameters['device_dict']['pin_memory'])
         pred = model(data)
         preds, y = accumulate_predictions(pred,data,loss_accum)
-        loss = loss_fn(preds,y).item()
-        total_loss += loss
+        preds = preds.to(y.device)
+        loss_list = [0.0] * len(preds)
+        for i in range(len(preds)):
+            loss_list[i] = loss_fn(preds[i], y[i])
+        epoch_loss += torch.sum(torch.stack(loss_list)).item()
 
         if parameters['io_dict']['write_indv_pred']:
-            values[0].append(preds.item())
-            values[1].append(y.item())
-            values[2].append(loss)
+            values[0].append(preds)
+            values[1].append(y)
+            values[2].append(loss_list)
+            gids.append(data.gid)
+
     if parameters['io_dict']['write_indv_pred']:
         test_info = {
-            'pred':values[0],
-            'y':values[1],
-            'loss':values[2],
-            'loss_fn':parameters['model_dict']['accumulate_loss'][2]
+            'gids': gids,
+            'pred': values[0],
+            'y': values[1],
+            'loss': values[2],
+            'loss_fn': parameters['model_dict']['accumulate_loss'][2]
         }
-        save_dictionary(fname=os.path.join(parameters['io_dict']['results_dir'],ind_fn + '_indv_pred.data'),
-                        data=test_info)
-    return total_loss / len(loader)
+        if parameters['device_dict']['run_ddp']:
+            test_info = combine_dicts_across_gpus(test_info)
+        if rank == 0:
+            save_dictionary(fname=os.path.join(parameters['io_dict']['results_dir'],ind_fn + '_indv_pred.data'),
+                            data=test_info)
+    if parameters['device_dict']['run_ddp']:
+        epoch_loss = reduce_tensor(torch.tensor(epoch_loss).to(parameters['device_dict']['device'])).item()
+    return epoch_loss / (len(loader) * parameters['device_dict']['world_size'])
 
 @torch.no_grad()
 def predict_non_intepretable(loader,model,parameters,ind_fn='all'):

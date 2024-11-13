@@ -1,5 +1,5 @@
 from catalyst.src.ml.nn.models.alignn import Encoder_generic,Encoder_atomic, Processor, Decoder,PositiveScalarsDecoder, ALIGNN
-from catalyst.src.ml.testing import predict_intepretable, test_non_intepretable
+from catalyst.src.ml.testing import predict_intepretable, test_non_intepretable_external
 from catalyst.src.ml.training import run_training, run_pre_training
 from catalyst.src.characterization.sodas.model.sodas import SODAS
 from catalyst.src.graph.generic_build import generic_pairwise
@@ -83,9 +83,11 @@ def generate_data(ml,visualize_final=False):
         shutil.rmtree(ml.parameters['io_dict']['data_dir'])
     os.mkdir(ml.parameters['io_dict']['data_dir'])
 
-    k = np.linspace(3,15,n_data) # number of neighbors per graph node
+    k = np.linspace(3,9,n_data) # number of neighbors per graph node
     dataset = []
-    y = np.linspace(0,1,n_data)
+    y = []
+    for i in range(regression_outdim):
+        y.append(np.linspace(0,1,n_data))
     for ds in range(n_data):
         if ds % 500 == 0:
             print('Generating graph ',ds)
@@ -99,7 +101,9 @@ def generate_data(ml,visualize_final=False):
             'g_nodes':g_node_labels
         }
         graph = generic_pairwise(data,data_params=neighbor_data)
-        graph.y = torch.tensor(y[ds],dtype=torch.float)
+        graph.y = []
+        for i in range(regression_outdim):
+            graph.y.append(torch.tensor(y[i][ds],dtype=torch.float))
         torch.save(graph, os.path.join(os.path.join(ml.parameters['io_dict']['main_path'],ml.parameters['io_dict']['data_dir']), graph.gid + '.pt'))
     if visualize_final:
         visualize_graph(graph, atomic=False)
@@ -334,13 +338,11 @@ def plot_training_results(ml,retrain=False):
         ax[2].legend(loc="upper right")
     plt.show()
 
+
 def test_model(ml):
     '''
     TEST MODEL
     '''
-    ml.parameters['device_dict']['run_ddp'] = False
-    ml.parameters['loader_dict']['batch_size'][1] = 1
-    ml.parameters['loader_dict']['batch_size'][2] = 1
     ml.parameters['io_dict']['write_indv_pred'] = True
     ml.parameters['io_dict']['results_dir'] = os.path.join(ml.parameters['io_dict']['main_path'],'testing','pretraining')
     if os.path.isdir(ml.parameters['io_dict']['results_dir']):
@@ -349,54 +351,100 @@ def test_model(ml):
     ml.parameters['io_dict']['model_dir'] = None
     del ml.parameters['io_dict']['model_dir']
     ml.parameters['io_dict']['model_dir'] = os.path.join(ml.parameters['io_dict']['main_path'],'models','pretraining')
-    model_data = torch.load(glob.glob(os.path.join(ml.parameters['io_dict']['model_dir'],'pre*'))[0])
-    print('Testing model ' + PurePath(glob.glob(os.path.join(ml.parameters['io_dict']['model_dir'],'pre*'))[0]).parts[-1])
-    ml.set_model()
-    ml.model.load_state_dict(model_data['model'])
-    ml.model.to(ml.parameters['device_dict']['device'])
-    graph_data = [torch.load(file_name) for file_name in glob.glob(os.path.join(ml.parameters['io_dict']['data_dir'],'*'))]
-    follow_batch = ['node_G', 'node_A', 'edge_A'] if hasattr(graph_data[0], 'edge_A') else ['node_G', 'node_A']
-    loader = DataLoader(graph_data, batch_size=ml.parameters['loader_dict']['batch_size'][2], shuffle=False, follow_batch=follow_batch)
-    print(f'Number of test graphs: {len(loader.dataset)}')
-    loss = test_non_intepretable(loader=loader, model=ml.model, parameters=ml.parameters)
-    fig, ax = plt.subplots(nrows=1, ncols=2,sharex=True,sharey=False)
-    fname = os.path.join(ml.parameters['io_dict']['results_dir'],'all_indv_pred.data')
-    pred = [[],[]]
-    run_data = load_dictionary(fname)
-    pred[0] = run_data['y']
-    pred[1] = run_data['pred']
-    ax[0].plot(pred[0],pred[1],linestyle='',color='dodgerblue',marker='o',markeredgecolor='k')
-    ax[0].plot(pred[0],pred[0],linestyle='-',color='r')
-    ax[0].set_xlabel('True values')
-    ax[0].set_ylabel('ML values')
+    ml.parameters['io_dict']['loaded_model_name'] = None
+    del ml.parameters['io_dict']['loaded_model_name']
+    ml.parameters['io_dict']['loaded_model_name'] = glob.glob(os.path.join(ml.parameters['io_dict']['model_dir'], 'pre*'))[0]
+
+    if ml.parameters['device_dict']['run_ddp']:
+        processes = []
+        for rank in range(ml.parameters['device_dict']['world_size']):
+            p = mp.Process(target=test_non_intepretable_external, args=(ml,'all',rank,))
+            p.start()
+            processes.append(p)
+        for p in processes:
+            p.join()
+        cuda_destroy()
+    else:
+        test_non_intepretable_external(ml,'all', rank=0)
+
     ml.parameters['io_dict']['results_dir'] = None
     del ml.parameters['io_dict']['results_dir']
-    ml.parameters['io_dict']['results_dir'] = os.path.join(ml.parameters['io_dict']['main_path'],'testing','training')
+    ml.parameters['io_dict']['results_dir'] = os.path.join(ml.parameters['io_dict']['main_path'], 'testing', 'training')
     if os.path.isdir(ml.parameters['io_dict']['results_dir']):
         shutil.rmtree(ml.parameters['io_dict']['results_dir'])
-    os.makedirs(ml.parameters['io_dict']['results_dir'],exist_ok=True)
+    os.makedirs(ml.parameters['io_dict']['results_dir'], exist_ok=True)
     ml.parameters['io_dict']['model_dir'] = None
     del ml.parameters['io_dict']['model_dir']
-    ml.parameters['io_dict']['model_dir'] = os.path.join(ml.parameters['io_dict']['main_path'],'models','training','0')
-    model_data = torch.load(glob.glob(os.path.join(ml.parameters['io_dict']['model_dir'],'model*'))[0])
-    print('Testing model ' + PurePath(glob.glob(os.path.join(ml.parameters['io_dict']['model_dir'],'model*'))[0]).parts[-1])
-    ml.set_model()
-    ml.model.load_state_dict(model_data['model'])
-    ml.model.to(ml.parameters['device_dict']['device'])
-    graph_data = [torch.load(file_name) for file_name in glob.glob(os.path.join(ml.parameters['io_dict']['data_dir'],'*'))]
-    follow_batch = ['node_G', 'node_A', 'edge_A'] if hasattr(graph_data[0], 'edge_A') else ['node_G', 'node_A']
-    loader = DataLoader(graph_data, batch_size=ml.parameters['loader_dict']['batch_size'][2], shuffle=False, follow_batch=follow_batch)
-    print(f'Number of test graphs: {len(loader.dataset)}')
-    loss = test_non_intepretable(loader=loader, model=ml.model, parameters=ml.parameters)
+    ml.parameters['io_dict']['model_dir'] = os.path.join(ml.parameters['io_dict']['main_path'], 'models', 'training',
+                                                         '0')
+    ml.parameters['io_dict']['loaded_model_name'] = None
+    del ml.parameters['io_dict']['loaded_model_name']
+    ml.parameters['io_dict']['loaded_model_name'] = glob.glob(os.path.join(ml.parameters['io_dict']['model_dir'], 'model*'))[0]
+    if ml.parameters['device_dict']['run_ddp']:
+        processes = []
+        for rank in range(ml.parameters['device_dict']['world_size']):
+            p = mp.Process(target=test_non_intepretable_external, args=(ml,'all',rank,))
+            p.start()
+            processes.append(p)
+        for p in processes:
+            p.join()
+        cuda_destroy()
+    else:
+        test_non_intepretable_external(ml,'all', rank=0)
+
+    return
+
+def plot_test_data(ml):
+    ml.parameters['io_dict']['results_dir'] = None
+    del ml.parameters['io_dict']['results_dir']
+    ml.parameters['io_dict']['results_dir'] = os.path.join(ml.parameters['io_dict']['main_path'],'testing','pretraining')
     fname = os.path.join(ml.parameters['io_dict']['results_dir'],'all_indv_pred.data')
     pred = [[],[]]
     run_data = load_dictionary(fname)
-    pred[0] = run_data['y']
-    pred[1] = run_data['pred']
-    ax[1].plot(pred[0],pred[1],linestyle='',color='dodgerblue',marker='o',markeredgecolor='k')
-    ax[1].plot(pred[0],pred[0],linestyle='-',color='r')
-    ax[1].set_xlabel('True values')
-    ax[1].set_ylabel('ML values')
+    for i in range(len(pred)):
+        for ny in range(regression_outdim):
+            pred[i].append([])
+    for data in run_data:
+        for data_y in data['y']:
+            for i,ty in enumerate(data_y):
+                for elem in ty:
+                    pred[0][i].append(elem.item())
+        for data_y in data['pred']:
+            for i,ty in enumerate(data_y):
+                for elem in ty:
+                    pred[1][i].append(elem.item())
+
+    fig, ax = plt.subplots(nrows=2, ncols=len(pred[0]), sharex=True, sharey=False)
+    for i in range(len(pred[0])):
+        ax[0][i].plot(pred[0][i],pred[1][i],linestyle='',color='dodgerblue',marker='o',markeredgecolor='k')
+        ax[0][i].plot(pred[0][i],pred[0][i],linestyle='-',color='r')
+        ax[0][i].set_xlabel('True values')
+        ax[0][i].set_ylabel('ML values')
+
+    ml.parameters['io_dict']['results_dir'] = None
+    del ml.parameters['io_dict']['results_dir']
+    ml.parameters['io_dict']['results_dir'] = os.path.join(ml.parameters['io_dict']['main_path'], 'testing',                                                     'training')
+    fname = os.path.join(ml.parameters['io_dict']['results_dir'],'all_indv_pred.data')
+    pred = [[],[]]
+    run_data = load_dictionary(fname)
+    for i in range(len(pred)):
+        for ny in range(regression_outdim):
+            pred[i].append([])
+    for data in run_data:
+        for data_y in data['y']:
+            for i, ty in enumerate(data_y):
+                for elem in ty:
+                    pred[0][i].append(elem.item())
+        for data_y in data['pred']:
+            for i, ty in enumerate(data_y):
+                for elem in ty:
+                    pred[1][i].append(elem.item())
+
+    for i in range(len(pred[0])):
+        ax[1][i].plot(pred[0][i], pred[1][i], linestyle='', color='dodgerblue', marker='o', markeredgecolor='k')
+        ax[1][i].plot(pred[0][i], pred[0][i], linestyle='-', color='r')
+        ax[1][i].set_xlabel('True values')
+        ax[1][i].set_ylabel('ML values')
     plt.show()
 
 def rank_features(ml):
@@ -426,18 +474,19 @@ def rank_features(ml):
     predictions = predict_intepretable(loader=loader, model=ml.model, parameters=ml.parameters)
 
 if __name__ == '__main__':
-    n_types = 6  # number of ficticious types to label each node in G
-    projection_indim = 100
+    n_types = 3  # number of ficticious types to label each node in G
+    projection_indim = 10
     projection_outdim = 10
-    regression_indim = 100
+    regression_indim = 10
+    regression_outdim = 3
     cutoff = 4.0
-    n_convs = 5
-    n_data = 1000  # total number of samples
-    n_nodes = np.linspace(10, 250, n_data)  # number of data points per sample
+    n_convs = 3
+    n_data = 20000 # total number of samples
+    n_nodes = np.linspace(10, 100, n_data)  # number of data points per sample
     n_dim = 5  # number of dimensions in intial raw data
     ml_parameters = dict(
         device_dict=dict(
-            world_size=torch.cuda.device_count(),
+            world_size=2,
             device='cuda',
             ddp_backend='gloo',
             run_ddp=True,
@@ -458,7 +507,7 @@ if __name__ == '__main__':
         ),
         sampling_dict=dict(
             sampling_types=['kmeans', 'kmeans', 'kmeans'],
-            split=[0.1, 0.01, 0.9],
+            split=[0.01, 0.01, 0.75],
             sampling_seed=112358,
             params_groups=[{
                 'clusters': 5,
@@ -470,7 +519,7 @@ if __name__ == '__main__':
         ),
         loader_dict=dict(
             shuffle_loader=False,
-            batch_size=[2,2,2],
+            batch_size=[10,10,10],
             num_workers=0,
             shuffle_steps=10
         ),
@@ -485,16 +534,17 @@ if __name__ == '__main__':
         ),
         model_dict=dict(
             n_models=1,
-            num_epochs=[5, 5],
+            num_epochs=[5,5],
             train_delta=[0.01, 0.01],
             train_tolerance=[1.0, 0.0001],
             max_deltas=4,
             loss_func=torch.nn.MSELoss(),
-            accumulate_loss=['sum', 'exact', 'exact'],
+            accumulate_loss=['exact', 'exact', 'exact'],
             model=ALIGNN(
                 encoder=Encoder_atomic(num_species=n_types, cutoff=cutoff, dim=regression_indim, act_func=nn.SiLU()),
                 processor=Processor(num_convs=n_convs, dim=regression_indim, conv_type='mesh'),
-                decoder=PositiveScalarsDecoder(dim=regression_indim, act_func=nn.SiLU()),
+                #decoder=PositiveScalarsDecoder(dim=regression_indim, act_func=nn.SiLU()),
+                decoder=Decoder(in_dim=regression_indim, out_dim=regression_outdim, act_func=nn.SiLU(),combine=False)
             ),
             interpretable=False,
             pre_training=True,
@@ -514,9 +564,11 @@ if __name__ == '__main__':
     gen_graphs = False
     project_graphs = False
     gen_samples = False
-    perform_train = False
-    perform_retrain = True
-    perform_test = False
+    perform_train = True
+    perform_retrain = False
+    perform_test = True
+    plot_test = True
+    plot_training = False
     perform_ranking = False
 
     if gen_graphs:
@@ -535,18 +587,20 @@ if __name__ == '__main__':
             glob.glob(os.path.join(ml.parameters['io_dict']['main_path'], 'models',
                                    'training', '0', 'model*'))[0]
             retrain_model(ml)
-        plot_training_results(ml,retrain=perform_retrain)
-    else:
-        if perform_retrain:
-            ml.parameters['model_dict']['restart_training'] = True
-            ml.parameters['io_dict']['loaded_model_name'] = None
-            del ml.parameters['io_dict']['loaded_model_name']
-            ml.parameters['io_dict']['loaded_model_name'] = \
-            glob.glob(os.path.join(ml.parameters['io_dict']['main_path'], 'models',
+        if plot_training:
+            plot_training_results(ml,retrain=perform_retrain)
+    elif perform_retrain:
+        ml.parameters['model_dict']['restart_training'] = True
+        ml.parameters['io_dict']['loaded_model_name'] = None
+        del ml.parameters['io_dict']['loaded_model_name']
+        ml.parameters['io_dict']['loaded_model_name'] = \
+        glob.glob(os.path.join(ml.parameters['io_dict']['main_path'], 'models',
                                    'training', '0', 'model*'))[0]
-            retrain_model(ml)
+        retrain_model(ml)
     if perform_test:
         test_model(ml)
+    if plot_test:
+        plot_test_data(ml)
     if perform_ranking:
         rank_features(ml)
 

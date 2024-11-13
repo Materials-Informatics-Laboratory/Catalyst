@@ -5,16 +5,8 @@ from torch_geometric.utils import scatter
 
 
 class GatedGCN(MessagePassing):
-    """Gated GCN, also known as edge-gated convolution.
-    Reference: https://arxiv.org/abs/2003.00982
-    
-    Different from the original version, in this version, the activation function is SiLU,
-    and the normalization is LayerNorm.
-
-    This implementation concatenates the `x_i`, `x_j`, and `e_ij` feature vectors during the edge update.
-    """
-    def __init__(self, node_dim, edge_dim, epsilon=1e-5):
-        super().__init__(aggr='add')
+    def __init__(self, node_dim, edge_dim, epsilon=1e-5, aggr_scheme='add'):
+        super().__init__(aggr=aggr_scheme)
         self.W_src  = nn.Linear(node_dim, node_dim)
         self.W_dst  = nn.Linear(node_dim, node_dim)
         self.W_e    = nn.Linear(node_dim*2 + edge_dim, edge_dim)
@@ -55,16 +47,8 @@ class GatedGCN(MessagePassing):
 
 
 class GatedGCN_v2(MessagePassing):
-    """Gated GCN, also known as edge-gated convolution.
-    Reference: https://arxiv.org/abs/2003.00982
-
-    Different from the original version, in this version, the activation function is SiLU,
-    and the normalization is LayerNorm.
-
-    This implementation is closer to the original formulation (without the concatenation).
-    """
-    def __init__(self, node_dim, edge_dim, epsilon=1e-5):
-        super().__init__(aggr='add')
+    def __init__(self, node_dim, edge_dim, epsilon=1e-5, aggr_scheme='add',act=nn.SiLU()):
+        super().__init__(aggr=aggr_scheme)
         self.W_src  = nn.Linear(node_dim, node_dim)
         self.W_dst  = nn.Linear(node_dim, node_dim)
         self.W_A    = nn.Linear(node_dim, edge_dim)

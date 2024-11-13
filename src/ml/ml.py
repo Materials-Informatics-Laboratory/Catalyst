@@ -1,5 +1,5 @@
 from ..ml.utils.distributed import set_spawn_method
-from ..io.io import save_dictionary
+from ..io.io import save_dictionary, get_system_info
 from torch import nn
 import numpy as np
 import torch
@@ -17,7 +17,8 @@ class ML():
                                    ddp_backend='',
                                    run_ddp=False,
                                    pin_memory=False,
-                                   find_unused_parameters=False
+                                   find_unused_parameters=False,
+                                   system_info = None
                                ),
                                io_dict = dict(
                                    main_path='',
@@ -286,6 +287,7 @@ class ML():
             print('No loader dictionary set...killing run...')
             exit(0)
         set_spawn_method(new_params)
+        new_params['device_dict']['system_info'] = get_system_info()
         self.parameters = new_params
 
         if save_params:
