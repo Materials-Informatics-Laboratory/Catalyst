@@ -40,16 +40,20 @@ def test_non_intepretable_internal(loader,model,parameters,ind_fn='all',rank=0):
     for data in loader:
         data = data.to(parameters['device_dict']['device'], non_blocking=parameters['device_dict']['pin_memory'])
         pred = model(data)
-        preds, y = accumulate_predictions(pred,data,loss_accum)
+        preds, y, vec = accumulate_predictions(pred, data, loss_accum)
         preds = preds.to(y.device)
-        loss_list = [0.0] * len(preds)
-        for i in range(len(preds)):
-            loss_list[i] = loss_fn(preds[i], y[i])
-        epoch_loss += torch.sum(torch.stack(loss_list)).item()
+        if vec:
+            loss_list = [0.0] * len(preds)
+            for i in range(len(preds)):
+                loss_list[i] = loss_fn(preds[i], y[i])
+        else:
+            loss_list = [loss_fn(preds, y)]
+        batch_loss = torch.sum(torch.stack(loss_list))
+        epoch_loss += batch_loss.item()
 
         if parameters['io_dict']['write_indv_pred']:
-            values[0].append(preds)
-            values[1].append(y)
+            values[0].append(preds.tolist())
+            values[1].append(y.tolist())
             values[2].append(loss_list)
             gids.append(data.gid)
 
@@ -59,7 +63,8 @@ def test_non_intepretable_internal(loader,model,parameters,ind_fn='all',rank=0):
             'pred': values[0],
             'y': values[1],
             'loss': values[2],
-            'loss_fn': parameters['model_dict']['accumulate_loss'][2]
+            'loss_fn': parameters['model_dict']['accumulate_loss'][2],
+            'vec':vec
         }
         if parameters['device_dict']['run_ddp']:
             test_info = combine_dicts_across_gpus(test_info)

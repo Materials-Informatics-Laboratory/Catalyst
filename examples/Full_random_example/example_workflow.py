@@ -405,22 +405,50 @@ def plot_test_data(ml):
         for ny in range(regression_outdim):
             pred[i].append([])
     for data in run_data:
-        for data_y in data['y']:
-            for i,ty in enumerate(data_y):
-                for elem in ty:
-                    pred[0][i].append(elem.item())
-        for data_y in data['pred']:
-            for i,ty in enumerate(data_y):
-                for elem in ty:
-                    pred[1][i].append(elem.item())
+        if data['vec']:
+            for data_y in data['y']:
+                if data['loss_fn'] == 'sum':
+                    for i, ty in enumerate(data_y):
+                        pred[0][i].append(ty)
+                else:
+                    for i, ty in enumerate(data_y):
+                        for item in ty:
+                            pred[0][i].append(item)
+            for data_y in data['pred']:
+                if data['loss_fn'] == 'sum':
+                    for i, ty in enumerate(data_y):
+                        pred[1][i].append(ty)
+                else:
+                    for i, ty in enumerate(data_y):
+                        for item in ty:
+                            pred[1][i].append(item)
+        else:
+            for data_y in data['y']:
+                if data['loss_fn'] == 'sum':
+                    pred[0][0].append(data_y)
+                else:
+                    for i, ty in enumerate(data_y):
+                        pred[0][0].append(ty)
+            for data_y in data['pred']:
+                if data['loss_fn'] == 'sum':
+                    pred[1][0].append(data_y)
+                else:
+                    for i, ty in enumerate(data_y):
+                        pred[1][0].append(ty)
 
-    fig, ax = plt.subplots(nrows=2, ncols=len(pred[0]), sharex=True, sharey=False)
-    for i in range(len(pred[0])):
-        ax[0][i].plot(pred[0][i],pred[1][i],linestyle='',color='dodgerblue',marker='o',markeredgecolor='k')
-        ax[0][i].plot(pred[0][i],pred[0][i],linestyle='-',color='r')
-        ax[0][i].set_xlabel('True values')
-        ax[0][i].set_ylabel('ML values')
-
+    if len(pred[0]) > 1:
+        fig, ax = plt.subplots(nrows=2, ncols=len(pred[0]), sharex=True, sharey=False)
+        for i in range(len(pred[0])):
+            ax[0][i].plot(pred[0][i],pred[1][i],linestyle='',color='dodgerblue',marker='o',markeredgecolor='k')
+            ax[0][i].plot(pred[0][i],pred[0][i],linestyle='-',color='r')
+            ax[0][i].set_xlabel('True values')
+            ax[0][i].set_ylabel('ML values')
+    else:
+        fig, ax = plt.subplots(nrows=1, ncols=2, sharex=True, sharey=False)
+        ax[0].plot(pred[0][0], pred[1][0], linestyle='', color='dodgerblue', marker='o', markeredgecolor='k')
+        ax[0].plot(pred[0][0], pred[0][0], linestyle='-', color='r')
+        ax[0].set_xlabel('True values')
+        ax[0].set_ylabel('ML values')
     ml.parameters['io_dict']['results_dir'] = None
     del ml.parameters['io_dict']['results_dir']
     ml.parameters['io_dict']['results_dir'] = os.path.join(ml.parameters['io_dict']['main_path'], 'testing',                                                     'training')
@@ -431,20 +459,47 @@ def plot_test_data(ml):
         for ny in range(regression_outdim):
             pred[i].append([])
     for data in run_data:
-        for data_y in data['y']:
-            for i, ty in enumerate(data_y):
-                for elem in ty:
-                    pred[0][i].append(elem.item())
-        for data_y in data['pred']:
-            for i, ty in enumerate(data_y):
-                for elem in ty:
-                    pred[1][i].append(elem.item())
-
-    for i in range(len(pred[0])):
-        ax[1][i].plot(pred[0][i], pred[1][i], linestyle='', color='dodgerblue', marker='o', markeredgecolor='k')
-        ax[1][i].plot(pred[0][i], pred[0][i], linestyle='-', color='r')
-        ax[1][i].set_xlabel('True values')
-        ax[1][i].set_ylabel('ML values')
+        if data['vec']:
+            for data_y in data['y']:
+                if data['loss_fn'] == 'sum':
+                    for i, ty in enumerate(data_y):
+                        pred[0][i].append(ty)
+                else:
+                    for i, ty in enumerate(data_y):
+                        for item in ty:
+                            pred[0][i].append(item)
+            for data_y in data['pred']:
+                if data['loss_fn'] == 'sum':
+                    for i, ty in enumerate(data_y):
+                        pred[1][i].append(ty)
+                else:
+                    for i, ty in enumerate(data_y):
+                        for item in ty:
+                            pred[1][i].append(item)
+        else:
+            for data_y in data['y']:
+                if data['loss_fn'] == 'sum':
+                    pred[0][0].append(data_y)
+                else:
+                    for i, ty in enumerate(data_y):
+                        pred[0][0].append(ty)
+            for data_y in data['pred']:
+                if data['loss_fn'] == 'sum':
+                    pred[1][0].append(data_y)
+                else:
+                    for i, ty in enumerate(data_y):
+                        pred[1][0].append(ty)
+    if len(pred[0]) > 1:
+        for i in range(len(pred[0])):
+            ax[1][i].plot(pred[0][i], pred[1][i], linestyle='', color='dodgerblue', marker='o', markeredgecolor='k')
+            ax[1][i].plot(pred[0][i], pred[0][i], linestyle='-', color='r')
+            ax[1][i].set_xlabel('True values')
+            ax[1][i].set_ylabel('ML values')
+    else:
+        ax[1].plot(pred[0][0], pred[1][0], linestyle='', color='dodgerblue', marker='o', markeredgecolor='k')
+        ax[1].plot(pred[0][0], pred[0][0], linestyle='-', color='r')
+        ax[1].set_xlabel('True values')
+        ax[1].set_ylabel('ML values')
     plt.show()
 
 def rank_features(ml):
@@ -478,7 +533,7 @@ if __name__ == '__main__':
     projection_indim = 10
     projection_outdim = 10
     regression_indim = 10
-    regression_outdim = 3
+    regression_outdim = 1
     cutoff = 4.0
     n_convs = 3
     n_data = 20000 # total number of samples
@@ -519,7 +574,7 @@ if __name__ == '__main__':
         ),
         loader_dict=dict(
             shuffle_loader=False,
-            batch_size=[10,10,10],
+            batch_size=[200,200,300],
             num_workers=0,
             shuffle_steps=10
         ),
@@ -534,12 +589,12 @@ if __name__ == '__main__':
         ),
         model_dict=dict(
             n_models=1,
-            num_epochs=[5,5],
-            train_delta=[0.01, 0.01],
+            num_epochs=[10,10],
+            train_delta=[0.01, 0.001],
             train_tolerance=[1.0, 0.0001],
             max_deltas=4,
             loss_func=torch.nn.MSELoss(),
-            accumulate_loss=['exact', 'exact', 'exact'],
+            accumulate_loss=['sum', 'exact', 'exact'],
             model=ALIGNN(
                 encoder=Encoder_atomic(num_species=n_types, cutoff=cutoff, dim=regression_indim, act_func=nn.SiLU()),
                 processor=Processor(num_convs=n_convs, dim=regression_indim, conv_type='mesh'),
@@ -561,9 +616,9 @@ if __name__ == '__main__':
     ml = ML()
     ml.set_params(ml_parameters)
 
-    gen_graphs = False
-    project_graphs = False
-    gen_samples = False
+    gen_graphs = True
+    project_graphs = True
+    gen_samples = True
     perform_train = True
     perform_retrain = False
     perform_test = True

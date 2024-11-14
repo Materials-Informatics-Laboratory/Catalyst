@@ -35,12 +35,15 @@ def train(loader,model,parameters,optimizer,pretrain=False):
             data.to(parameters['device_dict']['device'], non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
             pred = model(data)
-            preds, y = accumulate_predictions(pred,data,loss_accum)
+            preds, y, vec = accumulate_predictions(pred,data,loss_accum)
             preds = preds.to(y.device)
-            loss_list = [0.0]*len(preds)
-            for i in range(len(preds)):
-                loss_list[i] = loss_fn(preds[i],y[i])
-            batch_loss = torch.sum(torch.stack(loss_list))
+            if vec:
+                loss_list = [0.0]*len(preds)
+                for i in range(len(preds)):
+                    loss_list[i] = loss_fn(preds[i],y[i])
+                batch_loss = torch.sum(torch.stack(loss_list))
+            else:
+                batch_loss = loss_fn(preds,y)
             nonlocal epoch_loss
             epoch_loss += batch_loss.item()
             batch_loss.backward()
