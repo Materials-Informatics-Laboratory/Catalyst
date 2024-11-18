@@ -1,5 +1,5 @@
 from catalyst.src.ml.nn.models.alignn import Encoder_generic,Encoder_atomic, Processor, Decoder,PositiveScalarsDecoder, ALIGNN
-from catalyst.src.ml.testing import predict_intepretable, test_non_intepretable_external
+from catalyst.src.ml.testing import predict_external, test_non_intepretable_external
 from catalyst.src.ml.training import run_training, run_pre_training
 from catalyst.src.characterization.sodas.model.sodas import SODAS
 from catalyst.src.graph.generic_build import generic_pairwise
@@ -528,6 +528,36 @@ def rank_features(ml):
     print(f'Number of test graphs: {len(loader.dataset)}')
     predictions = predict_intepretable(loader=loader, model=ml.model, parameters=ml.parameters)
 
+def predict(ml):
+    ml.parameters['io_dict']['write_indv_pred'] = True
+    ml.parameters['io_dict']['results_dir'] = None
+    del ml.parameters['io_dict']['results_dir']
+    ml.parameters['io_dict']['results_dir'] = os.path.join(ml.parameters['io_dict']['main_path'], 'testing', 'predict')
+    if os.path.isdir(ml.parameters['io_dict']['results_dir']):
+        shutil.rmtree(ml.parameters['io_dict']['results_dir'])
+    os.makedirs(ml.parameters['io_dict']['results_dir'], exist_ok=True)
+    ml.parameters['io_dict']['model_dir'] = None
+    del ml.parameters['io_dict']['model_dir']
+    ml.parameters['io_dict']['model_dir'] = os.path.join(ml.parameters['io_dict']['main_path'], 'models', 'training',
+                                                         '0')
+    ml.parameters['io_dict']['loaded_model_name'] = None
+    del ml.parameters['io_dict']['loaded_model_name']
+    ml.parameters['io_dict']['loaded_model_name'] = \
+    glob.glob(os.path.join(ml.parameters['io_dict']['model_dir'], 'model*'))[0]
+    if ml.parameters['device_dict']['run_ddp']:
+        processes = []
+        for rank in range(ml.parameters['device_dict']['world_size']):
+            p = mp.Process(target=predict_external, args=(ml, 'all', rank,0))
+            p.start()
+            processes.append(p)
+        for p in processes:
+            p.join()
+        cuda_destroy()
+    else:
+        predict_external(ml, 'all', rank=0,interpretable=0)
+
+    return
+
 if __name__ == '__main__':
     n_types = 3  # number of ficticious types to label each node in G
     projection_indim = 10
@@ -616,15 +646,16 @@ if __name__ == '__main__':
     ml = ML()
     ml.set_params(ml_parameters)
 
-    gen_graphs = True
-    project_graphs = True
-    gen_samples = True
-    perform_train = True
+    gen_graphs = False
+    project_graphs = False
+    gen_samples = False
+    perform_train = False
     perform_retrain = False
-    perform_test = True
-    plot_test = True
+    perform_test = False
+    plot_test = False
     plot_training = False
     perform_ranking = False
+    perform_predictions = True
 
     if gen_graphs:
         generate_data(ml,visualize_final=True)
@@ -658,6 +689,8 @@ if __name__ == '__main__':
         plot_test_data(ml)
     if perform_ranking:
         rank_features(ml)
+    if perform_predictions:
+        predict(ml)
 
 
 

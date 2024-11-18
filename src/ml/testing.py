@@ -27,7 +27,10 @@ def test_non_intepretable_external(ml,ind_fn='all',rank=0):
     loss = test_non_intepretable_internal(loader=loader_valid,
                                           model=model,
                                           parameters=parameters,
-                                          ind_fn='all',rank=rank)
+                                          ind_fn=ind_fn,rank=rank)
+    if parameters['device_dict']['run_ddp']:
+        ddp_destroy()
+    return loss
 @torch.no_grad()
 def test_non_intepretable_internal(loader,model,parameters,ind_fn='all',rank=0):
     model.eval()
@@ -76,41 +79,63 @@ def test_non_intepretable_internal(loader,model,parameters,ind_fn='all',rank=0):
     return epoch_loss / (len(loader) * parameters['device_dict']['world_size'])
 
 @torch.no_grad()
-def predict_non_intepretable(loader,model,parameters,ind_fn='all'):
+def predict_external(ml,ind_fn='all',rank=0,interpretable=0):
+    parameters = ml.parameters
+    if parameters['device_dict']['run_ddp']:
+        ddp_setup(rank, parameters['device_dict']['world_size'], parameters['device_dict']['ddp_backend'])
+
+    if rank == 0:
+        print('Reading data...')
+    data = dict(validation = [torch.load(file_name) for file_name in
+                  glob.glob(os.path.join(parameters['io_dict']['data_dir'], '*'))]
+    )
+    model = setup_model(ml, rank=rank,load=True)
+    loader_valid = setup_dataloader(data=data,ml=ml,mode=2)
+    if rank == 0:
+        print('Predicting...')
+    if interpretable:
+        predict_intepretable(loader=loader_valid,
+                                          model=model,
+                                          parameters=parameters,
+                                          ind_fn=ind_fn, rank=rank)
+    else:
+        predict_non_intepretable(loader=loader_valid,
+                                          model=model,
+                                          parameters=parameters,
+                                          ind_fn=ind_fn,rank=rank)
+    if parameters['device_dict']['run_ddp']:
+        ddp_destroy()
+
+@torch.no_grad()
+def predict_non_intepretable(loader,model,parameters,ind_fn='all',rank=0):
     model.eval()
     all_preds = []
     for i,data in enumerate(loader):
-        print('predicting on structure ', i)
+        if rank == 0:
+            print('predicting on structure (rank = 0) ', i)
         data = data.to(parameters['device_dict']['device'], non_blocking=parameters['device_dict']['pin_memory'])
         pred = model(data)
-        for p in pred:
-            if preds is None:
-                preds = p.sum()
-            else:
-                preds += p.sum()
+        preds, y, vec = accumulate_predictions(pred, data, 'exact')
         all_preds.append(preds)
     if parameters['io_dict']['write_indv_pred']:
         test_info = {
             'pred': all_preds,
         }
-        save_dictionary(fname=os.path.join(parameters['io_dict']['results_dir'], ind_fn + '_indv_pred.data'),
+        if parameters['device_dict']['run_ddp']:
+            test_info = combine_dicts_across_gpus(test_info)
+        if rank == 0:
+            save_dictionary(fname=os.path.join(parameters['io_dict']['results_dir'], ind_fn + '_indv_pred.data'),
                         data=test_info)
-    return all_preds
 
 @torch.no_grad()
-def predict_intepretable(loader,model,parameters,ind_fn='all'):
+def predict_intepretable(loader,model,parameters,ind_fn='all',rank=0):
     model.eval()
     all_preds = []
     for i,data in enumerate(loader):
         print('predicting on structure ',i)
         data = data.to(parameters['device_dict']['device'], non_blocking=parameters['device_dict']['pin_memory'])
         pred = model(data)
-        preds = None
-        for p in pred:
-            if preds is None:
-                preds = p.sum()
-            else:
-                preds += p.sum()
+        preds, y, vec = accumulate_predictions(pred, data, 'exact')
         all_preds.append(preds)
         if hasattr(data, 'x_atm_batch'):
             amounts = [data['atm_amounts'],data['bnd_amounts']]
@@ -164,15 +189,20 @@ def predict_intepretable(loader,model,parameters,ind_fn='all'):
         if hasattr(data, 'x_ang') or hasattr(data, 'edge_A'):
             for a in i_ea:
                 ranked_data['ea_data'].append(edge_A_contrib[a])
-        save_dictionary(fname=os.path.join(parameters['io_dict']['results_dir'], str(i) + '_rankings.data'),
+        if parameters['device_dict']['run_ddp']:
+            ranked_data = combine_dicts_across_gpus(ranked_data)
+        if rank == 0:
+            save_dictionary(fname=os.path.join(parameters['io_dict']['results_dir'], str(i) + '_rankings.data'),
                         data=ranked_data)
     if parameters['io_dict']['write_indv_pred']:
         test_info = {
             'pred': all_preds,
         }
-        save_dictionary(fname=os.path.join(parameters['io_dict']['results_dir'], ind_fn + '_indv_pred.data'),
+        if parameters['device_dict']['run_ddp']:
+            test_info = combine_dicts_across_gpus(test_info)
+        if rank == 0:
+            save_dictionary(fname=os.path.join(parameters['io_dict']['results_dir'], ind_fn + '_indv_pred.data'),
                         data=test_info)
-    return all_preds
 
 
 

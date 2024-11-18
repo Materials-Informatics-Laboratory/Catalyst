@@ -1,8 +1,10 @@
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 from torch_geometric.loader import DataLoader
+import torch.distributed as dist
 
 from ..graph.graph import Atomic_Graph_Data, Generic_Graph_Data, Graph_Data
+from ..ml.utils.distributed import sync_training_dicts_across_gpus
 
 from datetime import datetime
 from pathlib import PurePath
@@ -245,42 +247,54 @@ def get_system_info():
         )
     return info
 
-def read_training_data(params,samples_file,pretrain=False,format=0):
-    training_graphs = None
-    training_samples = None
-    validation_graphs = None
-    validation_samples = None
+def read_training_data(params,samples_file,pretrain=False,format=0, rank=0):
+    if rank == 0:
+        training_graphs = None
+        training_samples = None
+        validation_graphs = None
+        validation_samples = None
 
-    graph_files = glob.glob(os.path.join(params['io_dict']['data_dir'],'*'))
-    samples = load_dictionary(samples_file)
-    training_samples = samples['training']
-    if pretrain == False:
-        validation_samples = samples['validation']
+        graph_files = glob.glob(os.path.join(params['io_dict']['data_dir'],'*'))
+        samples = load_dictionary(samples_file)
+        training_samples = samples['training']
+        if pretrain == False:
+            validation_samples = samples['validation']
 
-    if format == 0:
-        gids = [PurePath(graph).parts[-1].split('.')[0] for graph in graph_files]
-        if len(gids) == 0:
-            print('Error: no graph files found...')
-            exit(0)
-    else:
-        gids = [torch.load(gname)['gid'] for gname in graph_files]
+        if format == 0:
+            gids = [PurePath(graph).parts[-1].split('.')[0] for graph in graph_files]
+            if len(gids) == 0:
+                print('Error: no graph files found...')
+                exit(0)
+        else:
+            gids = [torch.load(gname)['gid'] for gname in graph_files]
 
-    cross_list = set(training_samples).intersection(gids)
-    idx = [gids.index(x) for x in cross_list]
-    selected_graphs = [graph_files[i] for i in idx]
-    if format == 0:
-        training_graphs = [torch.load(x) for x in selected_graphs]
-    else:
-        training_graphs = [x for x in selected_graphs]
-    if pretrain == False:
-        cross_list = set(validation_samples).intersection(gids)
+        cross_list = set(training_samples).intersection(gids)
         idx = [gids.index(x) for x in cross_list]
         selected_graphs = [graph_files[i] for i in idx]
         if format == 0:
-            validation_graphs = [torch.load(x) for x in selected_graphs]
+            training_graphs = [torch.load(x) for x in selected_graphs]
         else:
-            validation_graphs = [x for x in selected_graphs]
-    return dict(training=training_graphs, validation=validation_graphs), dict(training_samples=training_samples,validation_samples=validation_samples)
+            training_graphs = [x for x in selected_graphs]
+        if pretrain == False:
+            cross_list = set(validation_samples).intersection(gids)
+            idx = [gids.index(x) for x in cross_list]
+            selected_graphs = [graph_files[i] for i in idx]
+            if format == 0:
+                validation_graphs = [torch.load(x) for x in selected_graphs]
+            else:
+                validation_graphs = [x for x in selected_graphs]
+
+        graph_dict = dict(training=training_graphs, validation=validation_graphs)
+        samples_dict = dict(training_samples=training_samples,validation_samples=validation_samples)
+    else:
+        graph_dict = None
+        samples_dict = None
+    if params['device_dict']['device'] == 'cuda':
+        dist.barrier()
+        dict_list = sync_training_dicts_across_gpus(graph_dict,samples_dict)
+        return dict_list[0], dict_list[1]
+    else:
+        return graph_dict, samples_dict
 
 def port_graphdata_to_atomicgraphdata(path):
     graph_files = glob.glob(os.path.join(path, '*'))

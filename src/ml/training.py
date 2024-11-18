@@ -78,7 +78,8 @@ def run_training(rank,iteration,ml=None):
         print('Reading data...')
 
     data, samples = read_training_data(parameters,
-                              os.path.join(parameters['io_dict']['samples_dir'], str(iteration), 'train_valid_split.npy'),format=parameters['io_dict']['graph_read_format'],)
+                              os.path.join(parameters['io_dict']['samples_dir'], str(iteration), 'train_valid_split.npy'),
+                                       format=parameters['io_dict']['graph_read_format'],rank=rank)
     load_model = False
     if parameters['model_dict']['pre_training'] or parameters['model_dict']['restart_training']:
         load_model=True
@@ -194,7 +195,7 @@ def run_pre_training(rank,ml=None):
 
     data, samples = read_training_data(parameters,
                                        os.path.join(parameters['io_dict']['samples_dir'], 'train_valid_split.npy'),
-                                       pretrain=True,format=parameters['io_dict']['graph_read_format'])
+                                       pretrain=True,format=parameters['io_dict']['graph_read_format'],rank=rank)
     model = setup_model(ml,rank=rank)
     loader_train = setup_dataloader(data=data, ml=ml,mode=0)
 

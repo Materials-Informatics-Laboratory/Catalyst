@@ -46,5 +46,9 @@ def combine_dicts_across_gpus(local_dict):
     dist.all_gather_object(all_dicts, local_dict)
     return all_dicts
 
+def sync_training_dicts_across_gpus(graph_dict, samples_dict):
+    dict_list = [graph_dict,samples_dict]
+    dist.broadcast_object_list(dict_list, src=0, device='cuda')
+    return dict_list
 
 

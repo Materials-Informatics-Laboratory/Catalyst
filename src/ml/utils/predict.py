@@ -151,10 +151,13 @@ def accumulate_predictions(pred,data,loss_tag):
                     else:
                         preds.append(sorted_nodes_G[i].sum() + sorted_nodes_A[i].sum())
                 preds = torch.stack(preds)
-            if len(data.y) == 1:
-                y = data.y[0].flatten()
+            if hasattr(data, 'y'):
+                if len(data.y) == 1:
+                    y = data.y[0].flatten()
+                else:
+                    y = data.y.flatten()
             else:
-                y = data.y.flatten()
+                y = None
         elif loss_tag == 'sum':
             preds = None
             for p in pred:
@@ -162,10 +165,13 @@ def accumulate_predictions(pred,data,loss_tag):
                     preds = p.sum()
                 else:
                     preds += p.sum()
-            if len(data.y) == 1:
-                y = data.y[0].flatten().sum()
+            if hasattr(data, 'y'):
+                if len(data.y) == 1:
+                    y = data.y[0].flatten().sum()
+                else:
+                    y = data.y.flatten().sum()
             else:
-                y = data.y.flatten().sum()
+                None
 
     if len(pred[0][0]) > 1:
         return torch.stack(tuple(preds)), torch.stack(tuple(y)), True
