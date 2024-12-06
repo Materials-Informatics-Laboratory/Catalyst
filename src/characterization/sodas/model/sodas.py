@@ -5,68 +5,70 @@ import torch
 from torch_geometric.utils import scatter
 
 from ....graph.graph import Generic_Graph_Data, Atomic_Graph_Data
-
+from ....ml.utils.predict import accumulate_predictions
 class SODAS():
     def __init__(self, mod, ls_mod):
         super().__init__()
 
         self.model = mod
+        self.model.eval()
         self.dim_model = ls_mod
         self.preprocess = None
 
-    def generate_gnn_latent_space(self,loader,device=''):
-        if device == '':
-            print(f"Is CUDA supported by this system?{torch.cuda.is_available()}")
-            print(f"CUDA version: {torch.version.cuda}")
-
-            # Storing ID of current CUDA device
-            cuda_id = torch.cuda.current_device()
-            print(f"ID of current CUDA device:{torch.cuda.current_device()}")
-
-            print(f"Name of current CUDA device:{torch.cuda.get_device_name(cuda_id)}")
-
-            # Prepare model
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            #self.model = nn.DataParallel(self.model)
-        self.model.eval()
+    def send_model(self,device='cuda'):
         self.model.to(device)
+        if device == 'cpu':
+            torch.cuda.empty_cache()
+
+    def generate_gnn_latent_space(self,parameters,loader,global_data=True):
         # Run a forward pass
-        counter = 0
+        print('Performing graph encodings...')
         total_data = []
         for data in loader:
-            data = data.to(device)
-            pred = self.model(data)
-            if isinstance(data,Atomic_Graph_Data):
-                if hasattr(data, 'x_ang'):
-                    pred = scatter(pred,torch.cat((data.x_atm_batch,data.x_bnd_batch,data.x_ang_batch),0), dim=0, reduce='mean')
-                else:
-                    pred = scatter(pred, torch.cat((data.x_atm_batch, data.x_bnd_batch), 0), dim=0,
-                                   reduce='mean')
-            elif isinstance(data,Generic_Graph_Data):
-                if hasattr(data, 'edge_A'):
-                    pred = scatter(pred,torch.cat((data.node_G_batch,data.node_A_batch,data.edge_A_batch),0), dim=0, reduce='mean')
-                else:
-                    pred = scatter(pred, torch.cat((data.node_G_batch, data.node_A_batch), 0), dim=0,
-                                   reduce='mean')
-            data.detach()
-            tx = []
-            for p in pred[0]:
-                x = p.cpu().detach().numpy()
-                tx.append(p.item())
-            total_data.append(tx)
-            counter += 1
+            data.to(parameters['device_dict']['device'], non_blocking=True)
+            preds = self.model(data)
+                #for i,pred in enumerate(preds):
+            if global_data:
+                if isinstance(data,Atomic_Graph_Data):
+                    if  'x_ang' in loader.follow_batch:
+                        rp = scatter(preds,torch.cat((data.x_atm_batch,data.x_bnd_batch,data.x_ang_batch),0), dim=0, reduce='mean')
+                    else:
+                        rp = scatter(preds, torch.cat((data.x_atm_batch, data.x_bnd_batch), 0), dim=0,
+                                               reduce='mean')
+                elif isinstance(data,Generic_Graph_Data):
+                    if 'edge_A' in loader.follow_batch:
+                        rp = scatter(preds,torch.cat((data.node_G_batch,data.node_A_batch,data.edge_A_batch),0), dim=0, reduce='mean')
+                    else:
+                        rp = scatter(preds, torch.cat((data.node_G_batch, data.node_A_batch), 0), dim=0,
+                                               reduce='mean')
+            else:
+                if isinstance(data,Atomic_Graph_Data):
+                    if  'x_ang' in loader.follow_batch:
+                        rp = scatter(preds,torch.cat((data.x_atm_batch,data.x_bnd_batch,data.x_ang_batch),0), dim=0)
+                    else:
+                        rp = scatter(preds, torch.cat((data.x_atm_batch, data.x_bnd_batch), 0), dim=0)
+                elif isinstance(data,Generic_Graph_Data):
+                    if 'edge_A' in loader.follow_batch:
+                        rp = scatter(preds,torch.cat((data.node_G_batch,data.node_A_batch,data.edge_A_batch),0), dim=0)
+                    else:
+                        rp = scatter(preds, torch.cat((data.node_G_batch, data.node_A_batch), 0), dim=0)
+            for tensor in rp:
+                total_data.append(tensor.cpu().tolist())
         return np.array(total_data)
 
     def fit_preprocess(self,data):
+        print('Performing graph preprocessing...')
         from sklearn import preprocessing
         self.preprocess = preprocessing.StandardScaler().fit(data)
 
     def fit_dim_red(self,data,preprocess_data=1):
+        print('Performing latent space conversion...')
         if preprocess_data:
             data = self.preprocess.transform(data)
         self.dim_model.fit(data)
 
     def project_data(self,data,preprocess_data=1):
+        print('Performing projections...')
         if preprocess_data:
             data = self.preprocess.transform(data)
         data = self.dim_model.transform(data)

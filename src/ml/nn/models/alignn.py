@@ -98,21 +98,22 @@ class Encoder_generic(nn.Module):
         return data
 
 class Processor(nn.Module):
-    def __init__(self, num_convs, dim,conv_type='mesh',encode_a=1,act=None,aggr=None):
+    def __init__(self, num_convs, dim,conv_type='mesh',aggr='add',encode_a=1,act=None):
         super().__init__()
         self.num_convs = num_convs
         self.dim = dim
         self.aggr = aggr
         self.act = act
         self.conv = conv_type
+        self.ang = encode_a
 
         if self.conv == 'mesh':
             self.g_convs = nn.ModuleList([copy.deepcopy(MeshGraphNetsConv(self.dim, self.dim,aggr_scheme=self.aggr)) for _ in range(self.num_convs)])
-            if encode_a:
+            if self.ang:
                 self.a_convs = nn.ModuleList([copy.deepcopy(MeshGraphNetsConv(self.dim, self.dim,aggr_scheme=self.aggr)) for _ in range(self.num_convs)])
         elif self.conv == 'gcn':
             self.g_convs = nn.ModuleList([copy.deepcopy(GatedGCN(self.dim, self.dim,aggr_scheme=self.aggr,act=self.act)) for _ in range(self.num_convs)])
-            if encode_a:
+            if self.ang:
                 self.a_convs = nn.ModuleList([copy.deepcopy(GatedGCN(self.dim, self.dim,aggr_scheme=self.aggr,act=self.act)) for _ in range(self.num_convs)])
 
     def forward(self, data):
@@ -152,7 +153,7 @@ class Decoder(nn.Module):
                     return torch.cat((atm_scalars,bnd_scalars,ang_scalars),0)
                 else:
                     return [atm_scalars, bnd_scalars, ang_scalars]
-            else:
+            elif hasattr(data, 'x_bnd'):
                 if self.combine:
                     return torch.cat((atm_scalars,bnd_scalars),0)
                 else:
@@ -166,7 +167,7 @@ class Decoder(nn.Module):
                     return torch.cat((g_node_scalars, a_node_scalars, a_edge_scalars), 0)
                 else:
                     return [g_node_scalars, a_node_scalars, a_edge_scalars]
-            else:
+            elif hasattr(data, 'node_A'):
                 if self.combine:
                     return torch.cat((g_node_scalars, a_node_scalars), 0)
                 else:

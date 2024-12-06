@@ -5,12 +5,12 @@ from torch_geometric.utils import scatter
 
 
 class GatedGCN(MessagePassing):
-    def __init__(self, node_dim, edge_dim, epsilon=1e-5, aggr_scheme='add'):
+    def __init__(self, node_dim, edge_dim, epsilon=1e-5, aggr_scheme='add',act=nn.SiLU()):
         super().__init__(aggr=aggr_scheme)
         self.W_src  = nn.Linear(node_dim, node_dim)
         self.W_dst  = nn.Linear(node_dim, node_dim)
         self.W_e    = nn.Linear(node_dim*2 + edge_dim, edge_dim)
-        self.act    = nn.SiLU()
+        self.act    = act
         self.sigma  = nn.Sigmoid()
         self.norm_x = nn.LayerNorm([node_dim])
         self.norm_e = nn.LayerNorm([edge_dim])

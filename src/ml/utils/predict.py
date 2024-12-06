@@ -3,7 +3,7 @@ from ...graph.graph import Atomic_Graph_Data, Generic_Graph_Data
 import torch
 
 import torch.distributed as dist
-def accumulate_predictions(pred,data,loss_tag):
+def accumulate_predictions(pred,data,loss_tag,return_y=True):
     if len(pred[0][0]) > 1:
         if loss_tag == 'exact':
             if hasattr(data, 'x_atm_batch'): #atomic graph
@@ -79,16 +79,18 @@ def accumulate_predictions(pred,data,loss_tag):
                             py[j] = sorted_nodes_G[i][j].sum() + sorted_nodes_A[i][j].sum()
                     preds.append(py)
             preds = torch.stack(preds, dim=1)
-            y = torch.stack(data.y)
+            if return_y:
+                y = torch.stack(data.y)
 
         elif loss_tag == 'sum':
             preds = [0.0]*len(pred[0][0])
-            y = [None] * len(data.y)
             for i in range(len(pred)):
                 py = torch.stack(tuple(pred[i]),dim=1)
                 preds[i] = torch.sum(py)
-            for i in range(len(data.y)):
-                 y[i] = data.y[i].sum()
+            if return_y:
+                y = [None] * len(data.y)
+                for i in range(len(data.y)):
+                     y[i] = data.y[i].sum()
     else:
         if loss_tag == 'exact':
             if hasattr(data, 'x_atm_batch'):  # atomic graph
@@ -151,13 +153,14 @@ def accumulate_predictions(pred,data,loss_tag):
                     else:
                         preds.append(sorted_nodes_G[i].sum() + sorted_nodes_A[i].sum())
                 preds = torch.stack(preds)
-            if hasattr(data, 'y'):
-                if len(data.y) == 1:
-                    y = data.y[0].flatten()
+            if return_y:
+                if hasattr(data, 'y'):
+                    if len(data.y) == 1:
+                        y = data.y[0].flatten()
+                    else:
+                        y = data.y.flatten()
                 else:
-                    y = data.y.flatten()
-            else:
-                y = None
+                    y = None
         elif loss_tag == 'sum':
             preds = None
             for p in pred:
@@ -165,18 +168,24 @@ def accumulate_predictions(pred,data,loss_tag):
                     preds = p.sum()
                 else:
                     preds += p.sum()
-            if hasattr(data, 'y'):
-                if len(data.y) == 1:
-                    y = data.y[0].flatten().sum()
+            if return_y:
+                if hasattr(data, 'y'):
+                    if len(data.y) == 1:
+                        y = data.y[0].flatten().sum()
+                    else:
+                        y = data.y.flatten().sum()
                 else:
-                    y = data.y.flatten().sum()
-            else:
-                None
-
-    if len(pred[0][0]) > 1:
-        return torch.stack(tuple(preds)), torch.stack(tuple(y)), True
+                    None
+    if return_y:
+        if len(pred[0][0]) > 1:
+            return torch.stack(tuple(preds)), torch.stack(tuple(y)), True
+        else:
+            return preds, y, False
     else:
-        return preds, y, False
+        if len(pred[0][0]) > 1:
+            return torch.stack(tuple(preds)), True
+        else:
+            return preds, False
 
 
 

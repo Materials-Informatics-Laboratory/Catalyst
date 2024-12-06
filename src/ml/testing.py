@@ -17,9 +17,12 @@ def test_non_intepretable_external(ml,ind_fn='all',rank=0):
 
     if rank == 0:
         print('Reading data...')
-    data = dict(validation = [torch.load(file_name) for file_name in
-                  glob.glob(os.path.join(parameters['io_dict']['data_dir'], '*'))]
-    )
+
+    files = glob.glob(os.path.join(parameters['io_dict']['data_dir'], '*'))
+    graphs = [None]*len(files)
+    for i in range(len(files)):
+        graphs[i] = torch.load(files[i])
+    data = dict(validation = graphs)
     model = setup_model(ml, rank=rank,load=True)
     loader_valid = setup_dataloader(data=data,ml=ml,mode=2)
     if rank == 0:

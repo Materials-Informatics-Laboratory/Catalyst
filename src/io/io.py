@@ -11,9 +11,11 @@ from pathlib import PurePath
 import numpy as np
 import secrets
 import pickle
+import random
 import torch
 import glob
 import math
+import sys
 import os
 
 import platform
@@ -36,13 +38,14 @@ def setup_dataloader(data,ml,epoch=-1,reshuffle=False,mode=0):
     if mode == 0:
         if reshuffle:
             if parameters['device_dict']['run_ddp']:
-                loader_train.sampler.set_epoch(epoch)
+                train_sampler = DistributedSampler(data['training'],
+                                                   shuffle=parameters['loader_dict']['shuffle_loader'],
+                                                   seed=random.randint(-sys.maxsize - 1, sys.maxsize))
+                train_sampler.set_epoch(epoch)
                 loader_train = DataLoader(data['training'], batch_size=math.ceil(
                     parameters['loader_dict']['batch_size'][0] / parameters['device_dict']['world_size']),
                                           pin_memory=parameters['device_dict']['pin_memory'], follow_batch=follow_batch,
-                                          sampler=DistributedSampler(data['training'],
-                                                                     shuffle=parameters['loader_dict']['shuffle_loader'],
-                                                                     seed=random.randint(-sys.maxsize - 1, sys.maxsize)),
+                                          sampler=train_sampler,
                                           num_workers=parameters['loader_dict']['num_workers'])
             else:
                 loader_train = DataLoader(data['training'], pin_memory=parameters['device_dict']['pin_memory'],
@@ -64,21 +67,33 @@ def setup_dataloader(data,ml,epoch=-1,reshuffle=False,mode=0):
     elif mode == 1:
         if reshuffle:
             if parameters['device_dict']['run_ddp']:
-                loader_train.sampler.set_epoch(epoch)
-                loader_valid.sampler.set_epoch(epoch)
+                train_sampler = DistributedSampler(data['training'],shuffle=parameters['loader_dict']['shuffle_loader'],
+                                                                     seed=random.randint(-sys.maxsize - 1,sys.maxsize))
+                valid_sampler = DistributedSampler(data['validation'],
+                                                   shuffle=parameters['loader_dict']['shuffle_loader'],
+                                                   seed=random.randint(-sys.maxsize - 1, sys.maxsize))
+                train_sampler.set_epoch(epoch)
+                valid_sampler.set_epoch(epoch)
                 loader_train = DataLoader(data['training'], batch_size=int(
                     parameters['loader_dict']['batch_size'][1] / parameters['device_dict']['world_size']),
                                           pin_memory=parameters['device_dict']['pin_memory'],
                                           follow_batch=follow_batch,
-                                          sampler=DistributedSampler(data['training'],
-                                                                     shuffle=parameters['loader_dict'][
-                                                                         'shuffle_loader'],
-                                                                     seed=random.randint(-sys.maxsize - 1,
-                                                                                         sys.maxsize)),
+                                          sampler=train_sampler,
+                                          num_workers=parameters['loader_dict']['num_workers'])
+                loader_valid = DataLoader(data['validation'],batch_size=int(
+                    parameters['loader_dict']['batch_size'][2] / parameters['device_dict']['world_size']),
+                                          pin_memory=parameters['device_dict']['pin_memory'],
+                                          follow_batch=follow_batch,
+                                          sampler=valid_sampler,
                                           num_workers=parameters['loader_dict']['num_workers'])
             else:
                 loader_train = DataLoader(data['training'], pin_memory=parameters['device_dict']['pin_memory'],
                                           batch_size=parameters['loader_dict']['batch_size'][1],
+                                          shuffle=parameters['loader_dict']['shuffle_loader'],
+                                          follow_batch=follow_batch,
+                                          num_workers=parameters['loader_dict']['num_workers'])
+                loader_valid = DataLoader(data['validation'], pin_memory=parameters['device_dict']['pin_memory'],
+                                          batch_size=parameters['loader_dict']['batch_size'][2],
                                           shuffle=parameters['loader_dict']['shuffle_loader'],
                                           follow_batch=follow_batch,
                                           num_workers=parameters['loader_dict']['num_workers'])
@@ -272,24 +287,32 @@ def read_training_data(params,samples_file,pretrain=False,format=0, rank=0):
         idx = [gids.index(x) for x in cross_list]
         selected_graphs = [graph_files[i] for i in idx]
         if format == 0:
-            training_graphs = [torch.load(x) for x in selected_graphs]
+            training_graphs = [None]*len(selected_graphs)
+            for i in range(len(selected_graphs)):
+                training_graphs[i] = torch.load(selected_graphs[i])
         else:
-            training_graphs = [x for x in selected_graphs]
+            training_graphs = [None] * len(selected_graphs)
+            for i in range(len(selected_graphs)):
+                training_graphs[i] = selected_graphs[i]
         if pretrain == False:
             cross_list = set(validation_samples).intersection(gids)
             idx = [gids.index(x) for x in cross_list]
             selected_graphs = [graph_files[i] for i in idx]
             if format == 0:
-                validation_graphs = [torch.load(x) for x in selected_graphs]
+                validation_graphs = [None] * len(selected_graphs)
+                for i in range(len(selected_graphs)):
+                    validation_graphs[i] = torch.load(selected_graphs[i])
             else:
-                validation_graphs = [x for x in selected_graphs]
+                validation_graphs = [None] * len(selected_graphs)
+                for i in range(len(selected_graphs)):
+                    validation_graphs[i] = selected_graphs[i]
 
         graph_dict = dict(training=training_graphs, validation=validation_graphs)
         samples_dict = dict(training_samples=training_samples,validation_samples=validation_samples)
     else:
         graph_dict = None
         samples_dict = None
-    if params['device_dict']['device'] == 'cuda':
+    if params['device_dict']['run_ddp']:
         dist.barrier()
         dict_list = sync_training_dicts_across_gpus(graph_dict,samples_dict)
         return dict_list[0], dict_list[1]

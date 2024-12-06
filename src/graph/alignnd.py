@@ -381,7 +381,7 @@ def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False, store_a
             if store_atoms_type == 'ase-atoms':
                 atm = global_graph['atoms']
             else:
-                atm = atom
+                atm = atomglobal_graph['atoms'][atom]
 
         if include_angs:
             edge_index_bnd_ang = line_graph(edge_index_G)
