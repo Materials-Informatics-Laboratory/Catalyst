@@ -4,6 +4,7 @@ from scipy.spatial import distance
 from scipy import stats
 import networkx as nx
 import numpy as np
+import torch
 import math
 import sys
 
@@ -241,13 +242,14 @@ def find_nearest_nodes(x,nodes,k=1):
 
 def assign_gammas(ref_data,new_data,path_data,version='1',k=1,iterations=1,scale=1,cutoff=10.0):
     gammas = path_data['d']
-    assigned_gammas = [0.0]*len(new_data)
+
     nodes = []
 
     reference = [path_data['weighted_path'][i] for i in range(len(path_data['weighted_path']))]
 
     iter = 0
     while iter < iterations:
+        assigned_gammas = [0.0] * len(new_data)
         for i, point in enumerate(new_data):
             avg_gamma = 0.0
             weight = 0.0
@@ -285,10 +287,14 @@ def assign_gammas(ref_data,new_data,path_data,version='1',k=1,iterations=1,scale
 
 def manual_convolution(data,gammas,k=2,iterations=1,cutoff=10):
     iter = 0
-    new_gammas = [0.0]*len(data)
     tree = KDTree(data, leaf_size=2)
     dists, ids = tree.query(data, k=k + 1)
     while iter < iterations:
+        new_gammas = [0.0] * len(data)
+        for i in range(len(gammas)):
+            if isinstance(gammas[i], float):
+                gammas[i] = [torch.tensor(gammas[i])]
+
         #ids, dists = find_nearest_nodes(reference_point, data, k)
         for i, d in enumerate(data):
             for j in range(len(ids[i])):
@@ -298,7 +304,7 @@ def manual_convolution(data,gammas,k=2,iterations=1,cutoff=10):
                     weight = 1.0
                 else:
                     weight = 0.5 * (math.cos((dists[i][j] * math.pi) / cutoff) + 1)
-                new_gammas[i] += weight * gammas[ids[i][j]]
+                new_gammas[i] += weight * gammas[ids[i][j]][0].item()
                 if new_gammas[i] < 0.0:
                     new_gammas[i] = 0.0
             new_gammas[i] /= float(len(ids[i]))
