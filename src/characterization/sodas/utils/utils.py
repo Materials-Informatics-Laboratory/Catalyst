@@ -76,6 +76,7 @@ def generate_latent_space_path(X,k=7,boundaries=[0,-1],version='1',reduction=1.0
         except:
             print('Failed pathfinding...increasing k...')
             k += 1
+        print(k,' ',len(G))
 
     if version == '1':
         path_edges = list(zip(weighted_path, weighted_path[1:]))
@@ -260,7 +261,7 @@ def assign_gammas(ref_data,new_data,path_data,version='1',k=1,iterations=1,scale
                         if dists[j] > cutoff:
                             weight = 0.0
                         else:
-                            weight = 0.5*(math.cos((dists[j]*math.pi)/cutoff) + 1)
+                            weight = 0.5*math.fabs(math.cos((dists[j]*math.pi)/cutoff) + 1)
                         avg_gamma += weight*gammas[ids[j]]
                         if avg_gamma < 0.0:
                             avg_gamma = 0.0
@@ -274,14 +275,15 @@ def assign_gammas(ref_data,new_data,path_data,version='1',k=1,iterations=1,scale
                         if dists[j] > cutoff:
                             weight = 0.0
                         else:
-                            weight = 0.5 * (math.cos((dists[j] * math.pi) / cutoff) + 1)
-                        avg_gamma += weight*assigned_gammas[ids[j]]
+                            weight = 0.5 * math.fabs(math.cos((dists[j] * math.pi) / cutoff) + 1)
+                        avg_gamma += weight*gammas[ids[j]]
                         if avg_gamma < 0.0:
                             avg_gamma = 0.0
                     avg_gamma /= float(len(ids))
                 else:
                     avg_gamma += assigned_gammas[i]
             assigned_gammas[i] = avg_gamma
+        gammas = assigned_gammas
         iter += 1
     return assigned_gammas
 
