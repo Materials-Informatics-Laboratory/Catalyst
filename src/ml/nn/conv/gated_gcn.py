@@ -3,7 +3,6 @@ from torch import nn
 from torch_geometric.nn import MessagePassing
 from torch_geometric.utils import scatter
 
-
 class GatedGCN(MessagePassing):
     def __init__(self, node_dim, edge_dim, epsilon=1e-5, aggr_scheme='add',act=nn.SiLU()):
         super().__init__(aggr=aggr_scheme)
@@ -28,8 +27,8 @@ class GatedGCN(MessagePassing):
 
         # Calculate gated edges
         sigma_e = self.sigma(edge_attr)
-        e_sum   = scatter(src=sigma_e, index=i, dim=0)
-        e_gated = sigma_e / (e_sum[i] + self.eps)
+        e_prop   = scatter(src=sigma_e, index=i, dim=0,reduce=self.aggr)
+        e_gated = sigma_e / (e_prop[i] + self.eps)
 
         # Update the nodes (this utilizes the gated edges)
         out = self.propagate(edge_index, x=x, e_gated=e_gated)

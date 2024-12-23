@@ -98,12 +98,12 @@ class Encoder_generic(nn.Module):
         return data
 
 class Processor(nn.Module):
-    def __init__(self, num_convs, dim,conv_type='mesh',aggr='add',encode_a=1,act=None):
+    def __init__(self, num_convs, dim,conv_type='mesh',aggr='add',encode_a=1,act_func=None):
         super().__init__()
         self.num_convs = num_convs
         self.dim = dim
         self.aggr = aggr
-        self.act = act
+        self.act = act_func
         self.conv = conv_type
         self.ang = encode_a
 

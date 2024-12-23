@@ -4,6 +4,7 @@ from .graph import Atomic_Graph_Data
 from .graph import atoms2graph
 from .graph import line_graph
 import torch
+import math
 
 def alignnd(atoms,cutoff,dihedral=False, store_atoms=False, use_pt=False,include_angs=True, atom_labels=''):
     """Converts ASE `atoms` into a PyG graph data holding the atomic graph (G) and the angular graph (A).
@@ -269,7 +270,6 @@ def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[],store_atoms=False
                     tx[i] *= atom.number
                 break
         ohe.append(tx)
-    x_atm = np.array(ohe)
 
     edge_index_G, x_bnd = atoms2graph(atoms,cutoff=cutoff)
     data = []
@@ -280,41 +280,55 @@ def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[],store_atoms=False
                 atm = global_graph['atoms']
             else:
                 atm = atom
-        try:
-            idx = np.where(edge_index_G[0] == i)
-            tmp_edge_index_G = [edge_index_G[0][idx],edge_index_G[1][idx]]
-            tmp_x_bnd = x_bnd[idx]
+        idx = np.where(edge_index_G[0] == i)
+        tmp_edge_index_G = [edge_index_G[0][idx],edge_index_G[1][idx]]
+        tmp_x_bnd = x_bnd[idx]
             #print('start: ' + str(len(tmp_edge_index_G[0])) + ' bl ' + str(len(tmp_x_bnd)))
-            for j, val in enumerate(tmp_edge_index_G[1]):
-                tmp_edge_index_G[0] = np.append(tmp_edge_index_G[0],val)
-                tmp_edge_index_G[1] = np.append(tmp_edge_index_G[1],i)
+        for j, val in enumerate(tmp_edge_index_G[1]):
+            tmp_edge_index_G[0] = np.append(tmp_edge_index_G[0],val)
+            tmp_edge_index_G[1] = np.append(tmp_edge_index_G[1],i)
                 #idx_bnd = np.where((edge_index_G[0] == i) & (edge_index_G[1] == val))
-                tmp_x_bnd = np.append(tmp_x_bnd,x_bnd[j])
+            tmp_x_bnd = np.append(tmp_x_bnd,x_bnd[j])
             #print('end: ' + str(len(tmp_edge_index_G[0])) + ' bl ' + str(len(tmp_x_bnd)))
-            tmp_edge_index_G = np.array(tmp_edge_index_G)
+        tmp_edge_index_G = np.array(tmp_edge_index_G)
+
+        data_amounts["x_bnd"].append(len(tmp_x_bnd) - 1)
+        if include_angs:
+            edge_index_bnd_ang = line_graph(tmp_edge_index_G)
+            x_bnd_ang = get_bnd_angs(atoms, tmp_edge_index_G, edge_index_bnd_ang)
+
+            unique_elements, indices = np.unique(tmp_edge_index_G[0], return_index=True)
+            unique_elements_in_order = unique_elements[np.argsort(indices)]
+            for m in range(len(tmp_edge_index_G[0])):
+                for n in range(len(unique_elements_in_order)):
+                    if unique_elements_in_order[n] == tmp_edge_index_G[0][m]:
+                        tmp_edge_index_G[0][m] = n
+                        break
+            for m in range(len(tmp_edge_index_G[1])):
+                for n in range(len(unique_elements_in_order)):
+                    if unique_elements_in_order[n] == tmp_edge_index_G[1][m]:
+                        tmp_edge_index_G[1][m] = n
+                        break
+            x_atm = np.array(ohe)[unique_elements_in_order]
+            edge_index_bnd_ang = line_graph(tmp_edge_index_G)
+
+            if dihedral:
+                edge_index_dih_ang = dihedral_graph(tmp_edge_index_G)
+                edge_index_A = np.hstack([edge_index_bnd_ang, edge_index_dih_ang])
+                x_dih_ang = get_dih_angs(atoms, tmp_edge_index_G, edge_index_dih_ang)
+                x_ang = np.concatenate([x_bnd_ang,x_dih_ang])
+                mask_dih_ang = [False] * len(x_bnd_ang) + [True]*len(x_dih_ang)
+            else:
+                edge_index_A = np.hstack([edge_index_bnd_ang])
+                x_ang = np.concatenate([x_bnd_ang])
+                mask_dih_ang = [False]
+
             data_amounts["x_atm"].append(len(x_atm) - 1)
-            data_amounts["x_bnd"].append(len(tmp_x_bnd) - 1)
-            if include_angs:
-                edge_index_bnd_ang = line_graph(tmp_edge_index_G)
-                x_bnd_ang = get_bnd_angs(atoms, tmp_edge_index_G, edge_index_bnd_ang)
+            data_amounts["x_ang"].append(len(x_ang) - 1)
+            if dihedral:
+                data_amounts["x_dih_ang"].append(len(x_dih_ang) - 1)
 
-                if dihedral:
-                    edge_index_dih_ang = dihedral_graph(tmp_edge_index_G)
-                    edge_index_A = np.hstack([edge_index_bnd_ang, edge_index_dih_ang])
-                    x_dih_ang = get_dih_angs(atoms, tmp_edge_index_G, edge_index_dih_ang)
-                    x_ang = np.concatenate([x_bnd_ang,x_dih_ang])
-                    mask_dih_ang = [False] * len(x_bnd_ang) + [True]*len(x_dih_ang)
-
-                else:
-                    edge_index_A = np.hstack([edge_index_bnd_ang])
-                    x_ang = np.concatenate([x_bnd_ang])
-                    mask_dih_ang = [False]
-
-                data_amounts["x_ang"].append(len(x_ang) - 1)
-                if dihedral:
-                    data_amounts["x_dih_ang"].append(len(x_dih_ang) - 1)
-
-                data.append(Atomic_Graph_Data(
+            data.append(Atomic_Graph_Data(
                     atoms=atms,
                     edge_index_G=torch.tensor(tmp_edge_index_G, dtype=torch.long),
                     edge_index_A=torch.tensor(edge_index_A, dtype=torch.long),
@@ -326,8 +340,24 @@ def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[],store_atoms=False
                     ang_amounts=torch.tensor(data_amounts['x_ang'], dtype=torch.long),
                     mask_dih_ang=torch.tensor(mask_dih_ang, dtype=torch.bool)
                 ))
-            else:
-                data.append(Atomic_Graph_Data(
+        else:
+            unique_elements, indices = np.unique(tmp_edge_index_G[0], return_index=True)
+            unique_elements_in_order = unique_elements[np.argsort(indices)]
+            for m in range(len(tmp_edge_index_G[0])):
+                for n in range(len(unique_elements_in_order)):
+                    if unique_elements_in_order[n] == tmp_edge_index_G[0][m]:
+                        tmp_edge_index_G[0][m] = n
+                        break
+            for m in range(len(tmp_edge_index_G[1])):
+                for n in range(len(unique_elements_in_order)):
+                    if unique_elements_in_order[n] == tmp_edge_index_G[1][m]:
+                        tmp_edge_index_G[1][m] = n
+                        break
+            x_atm = np.array(ohe)[unique_elements_in_order]
+            for i in range(len(tmp_x_bnd)):
+                tmp_x_bnd[i] = 1.0/math.pow(tmp_x_bnd[i],2)
+            data_amounts["x_atm"].append(len(x_atm) - 1)
+            data.append(Atomic_Graph_Data(
                     atoms=atms,
                     edge_index_G=torch.tensor(tmp_edge_index_G, dtype=torch.long),
                     edge_index_A=None,
@@ -338,11 +368,7 @@ def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[],store_atoms=False
                     bnd_amounts=torch.tensor(data_amounts['x_bnd'], dtype=torch.long),
                     ang_amounts=None,
                     mask_dih_ang=None
-                ))
-        except:
-            print('Failed graph gen...')
-            data.append(None)
-
+            ))
     for graph in data:
         graph.generate_gid()
 
@@ -387,6 +413,21 @@ def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False, store_a
             edge_index_bnd_ang = line_graph(edge_index_G)
             x_bnd_ang = get_bnd_angs(global_graph['atoms'], edge_index_G, edge_index_bnd_ang)
 
+            unique_elements, indices = np.unique(tmp_edge_index_G[0], return_index=True)
+            unique_elements_in_order = unique_elements[np.argsort(indices)]
+            for m in range(len(tmp_edge_index_G[0])):
+                for n in range(len(unique_elements_in_order)):
+                    if unique_elements_in_order[n] == tmp_edge_index_G[0][m]:
+                        tmp_edge_index_G[0][m] = n
+                        break
+            for m in range(len(tmp_edge_index_G[1])):
+                for n in range(len(unique_elements_in_order)):
+                    if unique_elements_in_order[n] == tmp_edge_index_G[1][m]:
+                        tmp_edge_index_G[1][m] = n
+                        break
+            x_atm = np.array(ohe)[unique_elements_in_order]
+            edge_index_bnd_ang = line_graph(tmp_edge_index_G)
+
             if dihedral:
                 edge_index_dih_ang = dihedral_graph(edge_index_G)
                 edge_index_A = np.hstack([edge_index_bnd_ang, edge_index_dih_ang])
@@ -412,6 +453,22 @@ def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False, store_a
                 )
             )
         else:
+            unique_elements, indices = np.unique(tmp_edge_index_G[0], return_index=True)
+            unique_elements_in_order = unique_elements[np.argsort(indices)]
+            for m in range(len(tmp_edge_index_G[0])):
+                for n in range(len(unique_elements_in_order)):
+                    if unique_elements_in_order[n] == tmp_edge_index_G[0][m]:
+                        tmp_edge_index_G[0][m] = n
+                        break
+            for m in range(len(tmp_edge_index_G[1])):
+                for n in range(len(unique_elements_in_order)):
+                    if unique_elements_in_order[n] == tmp_edge_index_G[1][m]:
+                        tmp_edge_index_G[1][m] = n
+                        break
+            x_atm = np.array(ohe)[unique_elements_in_order]
+            for i in range(len(tmp_x_bnd)):
+                tmp_x_bnd[i] = 1.0 / math.pow(tmp_x_bnd[i], 2)
+            data_amounts["x_atm"].append(len(x_atm) - 1)
             data.append(Atomic_Graph_Data(
                     atoms=atm,
                     edge_index_G=torch.tensor(edge_index_G, dtype=torch.long),

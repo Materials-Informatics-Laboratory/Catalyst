@@ -269,43 +269,59 @@ def read_training_data(params,samples_file,pretrain=False,format=0, rank=0):
         validation_graphs = None
         validation_samples = None
 
-        graph_files = glob.glob(os.path.join(params['io_dict']['data_dir'],'*'))
-        samples = load_dictionary(samples_file)
-        training_samples = samples['training']
-        if pretrain == False:
-            validation_samples = samples['validation']
+        if format != 2:
+            graph_files = glob.glob(os.path.join(params['io_dict']['data_dir'],'*'))
+            samples = load_dictionary(samples_file)
+            training_samples = samples['training']
+            if pretrain == False:
+                validation_samples = samples['validation']
 
-        if format == 0:
-            gids = [PurePath(graph).parts[-1].split('.')[0] for graph in graph_files]
-            if len(gids) == 0:
-                print('Error: no graph files found...')
-                exit(0)
-        else:
-            gids = [torch.load(gname)['gid'] for gname in graph_files]
+            if format == 0:
+                gids = [PurePath(graph).parts[-1].split('.')[0] for graph in graph_files]
+                if len(gids) == 0:
+                    print('Error: no graph files found...')
+                    exit(0)
+            else:
+                gids = [torch.load(gname)['gid'] for gname in graph_files]
 
-        cross_list = set(training_samples).intersection(gids)
-        idx = [gids.index(x) for x in cross_list]
-        selected_graphs = [graph_files[i] for i in idx]
-        if format == 0:
-            training_graphs = [None]*len(selected_graphs)
-            for i in range(len(selected_graphs)):
-                training_graphs[i] = torch.load(selected_graphs[i])
-        else:
-            training_graphs = [None] * len(selected_graphs)
-            for i in range(len(selected_graphs)):
-                training_graphs[i] = selected_graphs[i]
-        if pretrain == False:
-            cross_list = set(validation_samples).intersection(gids)
+            cross_list = set(training_samples).intersection(gids)
             idx = [gids.index(x) for x in cross_list]
             selected_graphs = [graph_files[i] for i in idx]
             if format == 0:
-                validation_graphs = [None] * len(selected_graphs)
+                training_graphs = [None]*len(selected_graphs)
                 for i in range(len(selected_graphs)):
-                    validation_graphs[i] = torch.load(selected_graphs[i])
+                    training_graphs[i] = torch.load(selected_graphs[i])
             else:
-                validation_graphs = [None] * len(selected_graphs)
+                training_graphs = [None] * len(selected_graphs)
                 for i in range(len(selected_graphs)):
-                    validation_graphs[i] = selected_graphs[i]
+                    training_graphs[i] = selected_graphs[i]
+            if pretrain == False:
+                cross_list = set(validation_samples).intersection(gids)
+                idx = [gids.index(x) for x in cross_list]
+                selected_graphs = [graph_files[i] for i in idx]
+                if format == 0:
+                    validation_graphs = [None] * len(selected_graphs)
+                    for i in range(len(selected_graphs)):
+                        validation_graphs[i] = torch.load(selected_graphs[i])
+                else:
+                    validation_graphs = [None] * len(selected_graphs)
+                    for i in range(len(selected_graphs)):
+                        validation_graphs[i] = selected_graphs[i]
+        else:
+            graph_file = load_dictionary(glob.glob(os.path.join(params['io_dict']['data_dir'], '*'))[0])
+            samples = load_dictionary(samples_file)
+            training_samples = samples['training']
+            if pretrain == False:
+                validation_samples = samples['validation']
+            gids = graph_file['gids']
+
+            cross_list = set(training_samples).intersection(gids)
+            idx = [gids.index(x) for x in cross_list]
+            training_graphs = [graph_file['graphs'][i] for i in idx]
+            if pretrain == False:
+                cross_list = set(validation_samples).intersection(gids)
+                idx = [gids.index(x) for x in cross_list]
+                validation_graphs = [graph_file['graphs'][i] for i in idx]
 
         graph_dict = dict(training=training_graphs, validation=validation_graphs)
         samples_dict = dict(training_samples=training_samples,validation_samples=validation_samples)
