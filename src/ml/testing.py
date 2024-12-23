@@ -1,7 +1,7 @@
 from ..utilities.rankings import organize_rankings_atomic, organize_rankings_generic
 from .utils.predict import accumulate_predictions
 from .utils.distributed import reduce_tensor, combine_dicts_across_gpus, ddp_destroy, ddp_setup
-from ..io.io import read_training_data, setup_model, setup_dataloader, save_model, save_dictionary
+from ..io.io import read_training_data, setup_model, setup_dataloader, save_model, save_dictionary, load_dictionary
 from torch import nn
 import torch
 
@@ -18,10 +18,14 @@ def test_non_intepretable_external(ml,ind_fn='all',rank=0):
     if rank == 0:
         print('Reading data...')
 
-    files = glob.glob(os.path.join(parameters['io_dict']['data_dir'], '*'))
-    graphs = [None]*len(files)
-    for i in range(len(files)):
-        graphs[i] = torch.load(files[i])
+    if ml.parameters['io_dict']['graph_read_format'] != 2:
+        files = glob.glob(os.path.join(parameters['io_dict']['data_dir'], '*'))
+        graphs = [None]*len(files)
+        for i in range(len(files)):
+            graphs[i] = torch.load(files[i])
+    else:
+        graphs = load_dictionary(glob.glob(os.path.join(ml.parameters['io_dict']['data_dir'], '*'))[0])['graphs']
+
     data = dict(validation = graphs)
     model = setup_model(ml, rank=rank,load=True)
     loader_valid = setup_dataloader(data=data,ml=ml,mode=2)
