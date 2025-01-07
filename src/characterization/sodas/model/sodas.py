@@ -14,8 +14,10 @@ class SODAS():
         self.model.eval()
         self.dim_model = ls_mod
         self.preprocess = None
+        self.device = 'cpu'
 
     def send_model(self,device='cuda'):
+        self.device = device
         self.model.to(device)
         if device == 'cpu':
             torch.cuda.empty_cache()
@@ -78,6 +80,8 @@ class SODAS():
     def clear_model(self):
         self.model.cpu()
         del self.model
+        if self.device == 'cuda':
+            torch.cuda.empty_cache()
 
 
 

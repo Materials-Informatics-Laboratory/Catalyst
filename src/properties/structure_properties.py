@@ -1,6 +1,8 @@
 import numpy as np
 import torch
 
+from ..utilities.data_tools import unique_lists_2d
+
 def unit_vector(vector):
     """ Returns the unit vector of the vector.  """
     return vector / np.linalg.norm(vector)
@@ -34,15 +36,19 @@ def get_dih_angs(atoms, edge_index_G, edge_index_A_dih_ang):
     dih_angs = atoms.get_dihedrals(indices[:, [0, 1, 3, 2]])
     return np.radians(dih_angs)
 
-def get_unique_bonds(bonds):
+def get_unique_2body(bonds):
+    unique_bonds, indices = unique_lists_2d(bonds,return_indices=1)
+
+    '''
     sums = []
     for bnd in bonds:
         if torch.is_tensor(bnd):
             bnd = bnd.tolist()
         sums.append(sum(bnd))
     unique_bonds, indices = np.unique(np.array(sums), return_inverse=True)
+    print(unique_bonds)
 
-    '''
+
     unique_bonds = []
     indicies = []
 
@@ -65,25 +71,31 @@ def get_unique_bonds(bonds):
         for j,ub in enumerate(unique_bonds):
             if (bond[0] == ub[0] and bond[1] == ub[1]) or (bond[0] == ub[1] and bond[1] == ub[0]):
                 indicies[j].append(i)
+
+    print(unique_bonds)
     '''
+
     return unique_bonds, indices
 
-def get_unique_bond_angles(angles):
+def get_unique_3body(angles):
+    unique_angles, indices = unique_lists_2d(angles, return_indices=1,sorted_search=0)
 
+    '''
     sums = []
     for ang in angles:
         if torch.is_tensor(ang):
             ang = ang.tolist()
         sums.append(sum(ang))
     unique_angles , indices = np.unique(np.array(sums), return_inverse=True)
-
-    '''
+    
+    unique_angles = []
+    indices = []
     counter = 0
     check = 0
     while counter < len(angles):
         if len(unique_angles) == 0:
             unique_angles.append(angles[counter])
-            indicies.append([])
+            indices.append([])
         else:
             for i, ua in enumerate(unique_angles):
                 check = 0
@@ -93,13 +105,14 @@ def get_unique_bond_angles(angles):
                     break
             if check == 0:
                 unique_angles.append(angles[counter])
-                indicies.append([])
+                indices.append([])
         counter += 1
     for i, angle in enumerate(angles):
         for j, ua in enumerate(unique_angles):
             if (angle[0] == ua[0] and angle[1] == ua[1] and angle[2] == ua[2]) or (
                     angle[0] == ua[2] and angle[1] == ua[0] and angle[2] == ua[0]):
-                indicies[j].append(i)
+                indices[j].append(i)
                 break
+    print(unique_angles)
     '''
     return unique_angles, indices

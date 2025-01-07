@@ -10,25 +10,25 @@ import glob as glob
 import os
 
 @torch.no_grad()
-def test_non_intepretable_external(ml,ind_fn='all',rank=0):
-    parameters = ml.parameters
+def test_non_intepretable_external(cat,ind_fn='all',rank=0):
+    parameters = cat.parameters
     if parameters['device_dict']['run_ddp']:
         ddp_setup(rank, parameters['device_dict']['world_size'], parameters['device_dict']['ddp_backend'])
 
     if rank == 0:
         print('Reading data...')
 
-    if ml.parameters['io_dict']['graph_read_format'] != 2:
+    if cat.parameters['io_dict']['graph_read_format'] != 2:
         files = glob.glob(os.path.join(parameters['io_dict']['data_dir'], '*'))
         graphs = [None]*len(files)
         for i in range(len(files)):
             graphs[i] = torch.load(files[i])
     else:
-        graphs = load_dictionary(glob.glob(os.path.join(ml.parameters['io_dict']['data_dir'], '*'))[0])['graphs']
+        graphs = load_dictionary(glob.glob(os.path.join(cat.parameters['io_dict']['data_dir'], '*'))[0])['graphs']
 
     data = dict(validation = graphs)
-    model = setup_model(ml, rank=rank,load=True)
-    loader_valid = setup_dataloader(data=data,ml=ml,mode=2)
+    model = setup_model(cat, rank=rank,load=True)
+    loader_valid = setup_dataloader(data=data,cat=cat,mode=2)
     if rank == 0:
         print('Testing...')
     loss = test_non_intepretable_internal(loader=loader_valid,
@@ -86,34 +86,34 @@ def test_non_intepretable_internal(loader,model,parameters,ind_fn='all',rank=0):
     return epoch_loss / (len(loader) * parameters['device_dict']['world_size'])
 
 @torch.no_grad()
-def predict_external(ml,ind_fn='all',rank=0,interpretable=0):
-    parameters = ml.parameters
+def predict_external(cat,ind_fn='all',rank=0,interpretable=0):
+    parameters = cat.parameters
     if parameters['device_dict']['run_ddp']:
         ddp_setup(rank, parameters['device_dict']['world_size'], parameters['device_dict']['ddp_backend'])
 
     if rank == 0:
         print('Reading data...')
 
-    if ml.parameters['io_dict']['graph_read_format'] != 2:
+    if cat.parameters['io_dict']['graph_read_format'] != 2:
         files = glob.glob(os.path.join(parameters['io_dict']['data_dir'], '*'))
         graphs = [None]*len(files)
         for i in range(len(files)):
             graphs[i] = torch.load(files[i])
     else:
-        graphs = load_dictionary(glob.glob(os.path.join(ml.parameters['io_dict']['data_dir'], '*'))[0])['graphs']
+        graphs = load_dictionary(glob.glob(os.path.join(cat.parameters['io_dict']['data_dir'], '*'))[0])['graphs']
 
     data = dict(validation = graphs)
-    model = setup_model(ml, rank=rank,load=True)
-    loader_valid = setup_dataloader(data=data,ml=ml,mode=2)
+    model = setup_model(cat, rank=rank,load=True)
+    loader_valid = setup_dataloader(data=data,cat=cat,mode=2)
     if rank == 0:
         print('Predicting...')
     if interpretable:
-        predict_intepretable(loader=loader_valid,
+        predict_interpretable(loader=loader_valid,
                                           model=model,
                                           parameters=parameters,
                                           ind_fn=ind_fn, rank=rank)
     else:
-        predict_non_intepretable(loader=loader_valid,
+        predict_non_interpretable(loader=loader_valid,
                                           model=model,
                                           parameters=parameters,
                                           ind_fn=ind_fn,rank=rank)
@@ -121,7 +121,7 @@ def predict_external(ml,ind_fn='all',rank=0,interpretable=0):
         ddp_destroy()
 
 @torch.no_grad()
-def predict_non_intepretable(loader,model,parameters,ind_fn='all',rank=0):
+def predict_non_interpretable(loader,model,parameters,ind_fn='all',rank=0):
     model.eval()
     all_preds = []
     for i,data in enumerate(loader):
@@ -142,7 +142,7 @@ def predict_non_intepretable(loader,model,parameters,ind_fn='all',rank=0):
                         data=test_info)
 
 @torch.no_grad()
-def predict_intepretable(loader,model,parameters,ind_fn='all',rank=0):
+def predict_interpretable(loader,model,parameters,ind_fn='all',rank=0):
     model.eval()
     all_preds = []
     for i,data in enumerate(loader):

@@ -54,7 +54,7 @@ def train(loader,model,parameters,optimizer,pretrain=False):
         epoch_loss = reduce_tensor(torch.tensor(epoch_loss).to(parameters['device_dict']['device'])).item()
     return epoch_loss / (len(loader)*parameters['device_dict']['world_size'])
 
-def run_training(rank,iteration,ml=None):
+def run_training(rank,iteration,cat=None):
     epoch_times = []
     running_valid_delta = []
     L_train, L_valid = [], []
@@ -63,7 +63,7 @@ def run_training(rank,iteration,ml=None):
     min_loss_train = 1.0E30
     min_loss_valid = 1.0E30
     ep = 0
-    parameters = ml.parameters
+    parameters = cat.parameters
     if parameters['device_dict']['run_ddp']:
         ddp_setup(rank, parameters['device_dict']['world_size'], parameters['device_dict']['ddp_backend'])
 
@@ -83,8 +83,8 @@ def run_training(rank,iteration,ml=None):
     load_model = False
     if parameters['model_dict']['pre_training'] or parameters['model_dict']['restart_training']:
         load_model=True
-    model = setup_model(ml,rank=rank,load=load_model)
-    loader_train, loader_valid = setup_dataloader(data=data,ml=ml,mode=1)
+    model = setup_model(cat,rank=rank,load=load_model)
+    loader_train, loader_valid = setup_dataloader(data=data,cat=cat,mode=1)
 
     if parameters['model_dict']['optimizer_params']['dynamic_lr']:
         dist_params = dict(
@@ -110,7 +110,7 @@ def run_training(rank,iteration,ml=None):
             if ep % parameters['loader_dict']['shuffle_steps'] == 0 and ep > 0:
                 if rank == 0:
                     print('Shuffling training data...')
-                loader_train, loader_valid = setup_dataloader(data=data,ml=ml,epoch=ep,reshuffle=True,mode=1)
+                loader_train, loader_valid = setup_dataloader(data=data,cat=cat,epoch=ep,reshuffle=True,mode=1)
                 shuffle_counter += 1
 
         parameters['model_dict']['optimizer_params']['params_group']['lr'] = lr_data[ep]
@@ -144,7 +144,7 @@ def run_training(rank,iteration,ml=None):
                         'L_train':L_train[-1],
                         'L_valid':L_valid[-1]
                     }
-                    save_model(model=model, ml=ml, model_params_group=model_params_group,remove_old_models=parameters['io_dict']['remove_old_model'])
+                    save_model(model=model, cat=cat, model_params_group=model_params_group,remove_old_models=parameters['io_dict']['remove_old_model'])
         if ep > 1:
             delta_val = loss_valid - L_valid[-2]
             running_valid_delta.append(abs(delta_val))
@@ -167,11 +167,11 @@ def run_training(rank,iteration,ml=None):
             'training_loss':L_train,
             'validation_loss': L_valid,
         }
-        save_dictionary(fname=os.path.join(ml.parameters['io_dict']['model_dir'],'run_information.npy'),data=run_data)
+        save_dictionary(fname=os.path.join(cat.parameters['io_dict']['model_dir'],'run_information.npy'),data=run_data)
     if parameters['device_dict']['run_ddp']:
         ddp_destroy()
 
-def run_pre_training(rank,ml=None):
+def run_pre_training(rank,cat=None):
     epoch_times = []
     running_train_delta = []
     L_train = []
@@ -179,7 +179,7 @@ def run_pre_training(rank,ml=None):
     met_tolerance = 0
     min_loss_train = 1.0E30
     ep = 0
-    parameters = ml.parameters
+    parameters = cat.parameters
 
     if parameters['device_dict']['run_ddp']:
         ddp_setup(rank, parameters['device_dict']['world_size'],parameters['device_dict']['ddp_backend'])
@@ -196,8 +196,8 @@ def run_pre_training(rank,ml=None):
     data, samples = read_training_data(parameters,
                                        os.path.join(parameters['io_dict']['samples_dir'], 'train_valid_split.npy'),
                                        pretrain=True,format=parameters['io_dict']['graph_read_format'],rank=rank)
-    model = setup_model(ml,rank=rank)
-    loader_train = setup_dataloader(data=data, ml=ml,mode=0)
+    model = setup_model(cat,rank=rank)
+    loader_train = setup_dataloader(data=data, cat=cat,mode=0)
 
     if parameters['model_dict']['optimizer_params']['dynamic_lr']:
         dist_params = dict(
@@ -224,7 +224,7 @@ def run_pre_training(rank,ml=None):
             if ep % parameters['loader_dict']['shuffle_steps'] == 0:
                 if rank == 0:
                     print('Shuffling training data...')
-                loader_train = setup_dataloader(data=data, ml=ml,epoch=ep,reshuffle=True,mode=0)
+                loader_train = setup_dataloader(data=data, cat=cat,epoch=ep,reshuffle=True,mode=0)
                 shuffle_counter += 1
 
         parameters['model_dict']['optimizer_params']['params_group']['lr'] = lr_data[ep]
@@ -253,7 +253,7 @@ def run_pre_training(rank,ml=None):
                     'samples': samples,
                     'L_train': L_train[-1],
                 }
-                save_model(model=model, ml=ml, model_params_group=model_params_group,pretrain=True)
+                save_model(model=model, cat=cat, model_params_group=model_params_group,pretrain=True)
         if ep > 1:
             delta_train = loss_train - L_train[-2]
             running_train_delta.append(abs(delta_train))
@@ -275,7 +275,7 @@ def run_pre_training(rank,ml=None):
             'met_tolerance':met_tolerance,
             'training_loss': L_train
         }
-        save_dictionary(fname=os.path.join(ml.parameters['io_dict']['model_dir'],'run_information.npy'),data=run_data)
+        save_dictionary(fname=os.path.join(cat.parameters['io_dict']['model_dir'],'run_information.npy'),data=run_data)
     if parameters['device_dict']['run_ddp']:
         ddp_destroy()
 

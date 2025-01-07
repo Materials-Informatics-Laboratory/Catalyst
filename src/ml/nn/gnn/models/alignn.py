@@ -4,21 +4,22 @@ import torch
 import copy
 
 from ..conv import MeshGraphNetsConv
-from src.ml.nn.utils.basis import gaussian, bessel, scalar2basis
+from ...utils.basis import gaussian, bessel, scalar2basis
 from ..conv import GatedGCN
-from src.ml.nn.mlp import MLP
+from ...mlp import MLP
 
-from src.graph.graph import Generic_Graph_Data, Atomic_Graph_Data
+from .....graph.graph import Generic_Graph_Data, Atomic_Graph_Data
 
 class Encoder_atomic(nn.Module):
-    def __init__(self, num_species, cutoff,act_func, dim=128, dihedral=False,params_group=None):
+    def __init__(self, num_species, cutoff,act, dim=128, dihedral=False,params_group=None):
         super().__init__()
         self.num_species = num_species
         self.cutoff      = cutoff
         self.dim         = dim
         self.dihedral    = dihedral
+        self.act_func = act
         
-        self.embed_g_node = nn.Sequential(MLP([num_species, dim, dim], act=act_func), nn.LayerNorm(dim))
+        self.embed_g_node = nn.Sequential(MLP([num_species, dim, dim], act=self.act_func), nn.LayerNorm(dim))
         self.embed_a_node = partial(bessel, start=0, end=cutoff, num_basis=dim)
         self.embed_a_edge = self.embed_ang_with_dihedral if dihedral else self.embed_ang_without_dihedral
 
@@ -58,13 +59,13 @@ class Encoder_atomic(nn.Module):
         return data
 
 class Encoder_generic(nn.Module):
-    def __init__(self, act_func, dim=128,basis='gaussian', params_group=None):
+    def __init__(self, act, dim=128,basis='gaussian', params_group=None):
         super().__init__()
         self.dim = dim
         self.a_node_len = 0
         self.a_edge_len = 0
         self.g_node_len = 0
-        self.act_func = act_func
+        self.act_func = act
         self.embed_g_node = None
         self.embed_a_node = None
         self.embed_a_edge = None
@@ -136,12 +137,13 @@ class Processor(nn.Module):
         return data
 
 class Decoder(nn.Module):
-    def __init__(self, in_dim, out_dim,act_func,combine=True):
+    def __init__(self, in_dim, out_dim,act,combine=True):
         super().__init__()
         self.node_dim = in_dim
         self.out_dim = out_dim
         self.combine = combine
-        self.decoder = MLP([in_dim, in_dim, out_dim], act=act_func)
+        self.act_func = act
+        self.decoder = MLP([in_dim, in_dim, out_dim], act=self.act_func)
 
     def forward(self, data):
         if isinstance(data,Atomic_Graph_Data):
@@ -172,14 +174,17 @@ class Decoder(nn.Module):
                     return torch.cat((g_node_scalars, a_node_scalars), 0)
                 else:
                     return [g_node_scalars, a_node_scalars]
+        else:
+            print('Warning: data type not supported...')
 
 class PositiveScalarsDecoder(nn.Module):
-    def __init__(self, dim,act_func):
+    def __init__(self, dim,act):
         super().__init__()
         self.dim = dim
-        self.transform_g_node = nn.Sequential(MLP([dim, dim, 1], act=act_func), nn.Softplus())
-        self.transform_a_node = nn.Sequential(MLP([dim, dim, 1], act=act_func), nn.Softplus())
-        self.transform_a_edge = nn.Sequential(MLP([dim, dim, 1], act=act_func), nn.Softplus())
+        self.act_func = act
+        self.transform_g_node = nn.Sequential(MLP([dim, dim, 1], act=self.act_func), nn.Softplus())
+        self.transform_a_node = nn.Sequential(MLP([dim, dim, 1], act=self.act_func), nn.Softplus())
+        self.transform_a_edge = nn.Sequential(MLP([dim, dim, 1], act=self.act_func), nn.Softplus())
 
     def forward(self, data):
         if isinstance(data,Atomic_Graph_Data):

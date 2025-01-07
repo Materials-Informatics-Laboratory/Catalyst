@@ -22,8 +22,8 @@ import platform
 import psutil
 import GPUtil
 
-def setup_dataloader(data,ml,epoch=-1,reshuffle=False,mode=0):
-    parameters = ml.parameters
+def setup_dataloader(data,cat,epoch=-1,reshuffle=False,mode=0):
+    parameters = cat.parameters
     if mode == 1 or mode == 0:
         if isinstance(data['training'][0], Atomic_Graph_Data):
             follow_batch = ['x_atm', 'x_bnd', 'x_ang'] if hasattr(data['training'][0], 'x_ang') else ['x_atm', 'x_bnd']
@@ -137,35 +137,35 @@ def setup_dataloader(data,ml,epoch=-1,reshuffle=False,mode=0):
                                           num_workers=parameters['loader_dict']['num_workers'])
         return loader_valid
 
-def setup_model(ml,rank=0,data_only=False,load=False):
+def setup_model(cat,rank=0,data_only=False,load=False):
     if data_only:
-        return torch.load(ml.parameters['io_dict']['loaded_model_name'])
+        return torch.load(cat.parameters['io_dict']['loaded_model_name'])
     else:
-        ml.set_model()
-        ml.model.to(ml.parameters['device_dict']['device'])
-        model = ml.model
+        cat.set_model()
+        cat.model.to(cat.parameters['device_dict']['device'])
+        model = cat.model
         if load:
-            model_data = torch.load(ml.parameters['io_dict']['loaded_model_name'])
+            model_data = torch.load(cat.parameters['io_dict']['loaded_model_name'])
             model.load_state_dict(model_data['model'])
-        if ml.parameters['device_dict']['run_ddp']:
+        if cat.parameters['device_dict']['run_ddp']:
             model = DDP(model, device_ids=[rank],
-                            find_unused_parameters=ml.parameters['device_dict']['find_unused_parameters'])
+                            find_unused_parameters=cat.parameters['device_dict']['find_unused_parameters'])
             model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
         return model
 
-def save_model(model,ml,model_params_group,remove_old_models=True,pretrain=False):
+def save_model(model,cat,model_params_group,remove_old_models=True,pretrain=False):
     print('Saving model...')
     id = secrets.token_hex(32)
     now = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    if ml.parameters['device_dict']['run_ddp']:
+    if cat.parameters['device_dict']['run_ddp']:
         model_state = model.module.state_dict()
     else:
         model_state = model.state_dict()
     if remove_old_models:
         if pretrain:
-            model_names = glob.glob(os.path.join(ml.parameters['io_dict']['model_dir'], 'pre*'))
+            model_names = glob.glob(os.path.join(cat.parameters['io_dict']['model_dir'], 'pre*'))
         else:
-            model_names = glob.glob(os.path.join(ml.parameters['io_dict']['model_dir'], 'model_*'))
+            model_names = glob.glob(os.path.join(cat.parameters['io_dict']['model_dir'], 'model_*'))
         if len(model_names) > 0:
             for model_name in model_names:
                 os.remove(model_name)
@@ -180,10 +180,10 @@ def save_model(model,ml,model_params_group,remove_old_models=True,pretrain=False
             ),
             id=id,
             time=str(now),
-            parameters=ml.parameters,
-            system_info=ml.parameters['device_dict']['system_info']
+            parameters=cat.parameters,
+            system_info=cat.parameters['device_dict']['system_info']
         )
-        torch.save(model_data, os.path.join(ml.parameters['io_dict']['model_dir'], 'pre_' + str(id) + '_' + str(now)))
+        torch.save(model_data, os.path.join(cat.parameters['io_dict']['model_dir'], 'pre_' + str(id) + '_' + str(now)))
     else:
         model_data = dict(
             model_type='train',
@@ -195,11 +195,11 @@ def save_model(model,ml,model_params_group,remove_old_models=True,pretrain=False
             ),
             id=id,
             time=str(now),
-            parameters=ml.parameters,
-            system_info=ml.parameters['device_dict']['system_info']
+            parameters=cat.parameters,
+            system_info=cat.parameters['device_dict']['system_info']
         )
         torch.save(model_data,
-                   os.path.join(ml.parameters['io_dict']['model_dir'], 'model_' + str(id) + '_' + str(now)))
+                   os.path.join(cat.parameters['io_dict']['model_dir'], 'model_' + str(id) + '_' + str(now)))
 
 def save_dictionary(fname,data):
     with open(fname, 'wb') as handle:

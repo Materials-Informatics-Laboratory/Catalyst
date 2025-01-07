@@ -1,6 +1,6 @@
 import numpy as np
 import torch as torch
-from src.properties.structure_properties import get_unique_bonds, get_unique_bond_angles
+from src.properties.structure_properties import get_unique_2body, get_unique_3body
 from src.properties.physics_database import Physics_data
 
 def organize_rankings_atomic(data,atom_data,bond_data,angle_data,atom_mode='atomic_numbers'):
@@ -42,8 +42,8 @@ def organize_rankings_atomic(data,atom_data,bond_data,angle_data,atom_mode='atom
                 bx[j] = atom_data[b].numpy()
             bonds = [np.where(bx[0] == 1)[0][0], np.where(bx[1] == 1)[0][0], np.where(bx[2] == 1)[0][0]]
             angle = [elements[bonds[0]], elements[bonds[1]], elements[bonds[2]]]
-            ang_type[i] = torch.tensor(angle)
-        x_ang, i_ang = get_unique_bond_angles(ang_type)
+            ang_type[i] = angle
+        x_ang, i_ang = get_unique_3body(ang_type)
     else:
         x_ang = None
         i_ang = None
@@ -55,7 +55,7 @@ def organize_rankings_atomic(data,atom_data,bond_data,angle_data,atom_mode='atom
             column = np.where(ad.numpy() == 1.0)[0][0]
             if column == i:
                 i_atm[-1].append(j)
-    x_bnd, i_bnd = get_unique_bonds(bnd_type)
+    x_bnd, i_bnd = get_unique_2body(bnd_type)
 
     return i_atm,x_bnd, i_bnd, x_ang, i_ang, elements
 
@@ -85,8 +85,8 @@ def organize_rankings_generic(data,g_node_data,a_node_data,a_edge_data):
                 bx[j] = g_node_data[b].numpy()
             two_body = [np.where(bx[0] == 1)[0][0], np.where(bx[1] == 1)[0][0], np.where(bx[2] == 1)[0][0]]
             three_body = [ng_type[two_body[0]], ng_type[two_body[1]], ng_type[two_body[2]]]
-            ea_type[i] = torch.tensor(three_body)
-        x_ea, i_ea = get_unique_bond_angles(ea_type)
+            ea_type[i] = three_body
+        x_ea, i_ea = get_unique_3body(ea_type)
     else:
         x_ea = None
         i_ea = None
@@ -98,6 +98,6 @@ def organize_rankings_generic(data,g_node_data,a_node_data,a_edge_data):
             column = np.where(ad.numpy() == 1.0)[0][0]
             if column == i:
                 i_ng[-1].append(j)
-    x_na, i_na = get_unique_bonds(na_type)
+    x_na, i_na = get_unique_2body(na_type)
 
     return i_ng,x_na, i_na, x_ea, i_ea, ng_type
