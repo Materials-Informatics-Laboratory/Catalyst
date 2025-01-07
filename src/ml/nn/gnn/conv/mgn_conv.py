@@ -8,7 +8,7 @@ from torch import Tensor
 from typing import List, Optional, Tuple
 from torch_geometric.typing import Adj
 
-from ..mlp import MLP
+from src.ml.nn.mlp import MLP
 
 
 class EdgeProcessor(nn.Module):

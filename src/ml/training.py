@@ -7,7 +7,7 @@ from ..io.io import read_training_data, setup_model, setup_dataloader, save_mode
 from .utils.distributed import ddp_destroy, ddp_setup, reduce_tensor
 from ..utilities.distributions import get_distribution
 from .utils.predict import accumulate_predictions
-from .testing import test_non_intepretable_internal
+from .inference import test_non_intepretable_internal
 from .utils.optimizer import set_optimizer
 from .utils.memory import optimizer_to
 

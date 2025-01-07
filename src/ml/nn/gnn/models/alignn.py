@@ -4,11 +4,11 @@ import torch
 import copy
 
 from ..conv import MeshGraphNetsConv
-from ..basis import gaussian, bessel, scalar2basis
+from src.ml.nn.utils.basis import gaussian, bessel, scalar2basis
 from ..conv import GatedGCN
-from ..mlp import MLP
+from src.ml.nn.mlp import MLP
 
-from ....graph.graph import Generic_Graph_Data, Atomic_Graph_Data
+from src.graph.graph import Generic_Graph_Data, Atomic_Graph_Data
 
 class Encoder_atomic(nn.Module):
     def __init__(self, num_species, cutoff,act_func, dim=128, dihedral=False,params_group=None):
@@ -98,12 +98,12 @@ class Encoder_generic(nn.Module):
         return data
 
 class Processor(nn.Module):
-    def __init__(self, num_convs, dim,conv_type='mesh',aggr='add',encode_a=1,act_func=None):
+    def __init__(self, num_convs, dim,conv_type='mesh',aggr='add',encode_a=1,act=None):
         super().__init__()
         self.num_convs = num_convs
         self.dim = dim
         self.aggr = aggr
-        self.act = act_func
+        self.act = act
         self.conv = conv_type
         self.ang = encode_a
 

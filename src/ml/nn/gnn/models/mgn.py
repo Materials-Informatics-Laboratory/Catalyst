@@ -2,8 +2,8 @@ import torch
 from torch import nn
 import copy
 
-from ..mlp import MLP
-from ..basis import GaussianRandomFourierFeatures
+from src.ml.nn.mlp import MLP
+from src.ml.nn.utils.basis import GaussianRandomFourierFeatures
 from ..conv import MeshGraphNetsConv
 
 

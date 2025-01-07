@@ -1,12 +1,12 @@
-from ..ml.utils.distributed import set_spawn_method
-from ..io.io import save_dictionary, get_system_info
+from src.ml.utils.distributed import set_spawn_method
+from src.io.io import save_dictionary, get_system_info
 from torch import nn
 import numpy as np
 import torch
 import os
 import gc
 
-class ML():
+class Catalyst():
     def __init__(self):
         super().__init__()
 

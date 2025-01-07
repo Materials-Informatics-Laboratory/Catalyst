@@ -1,5 +1,5 @@
 from ..utilities.physics_database import Physics_data
-from ..utilities.structure_properties import *
+from src.properties.structure_properties import *
 from .graph import Atomic_Graph_Data
 from .graph import atoms2graph
 from .graph import line_graph

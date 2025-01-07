@@ -1,7 +1,7 @@
 import numpy as np
 import torch as torch
-from .structure_properties import get_unique_bonds, get_unique_bond_angles
-from ..utilities.physics_database import Physics_data
+from src.properties.structure_properties import get_unique_bonds, get_unique_bond_angles
+from src.properties.physics_database import Physics_data
 
 def organize_rankings_atomic(data,atom_data,bond_data,angle_data,atom_mode='atomic_numbers'):
 

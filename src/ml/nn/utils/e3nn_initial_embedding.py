@@ -1,6 +1,6 @@
 from functools import partial
 from torch import nn
-from ..basis import bessel
+from src.ml.nn.utils.basis import bessel
 
 class InitialEmbedding(nn.Module):
     def __init__(self, num_species, cutoff):

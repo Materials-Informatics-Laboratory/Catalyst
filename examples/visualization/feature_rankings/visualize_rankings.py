@@ -1,15 +1,12 @@
 from pathlib import Path
-import shutil
 import glob
-import sys
 import os
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import math
 
-from catalyst.src.utilities.physics_database import Physics_data
+from src.properties.physics_database import Physics_data
 
 def get_top_nperc_rankings(data):
     data = sorted(data, key=float)
@@ -21,8 +18,6 @@ def get_top_nperc_rankings(data):
     return mean
 
 def plot_data(data):
-    from ase.symbols import Symbols
-
     atom_data = []
     bond_data = []
     angle_data = []
