@@ -6,7 +6,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from src.properties.physics_database import Physics_data
+from catalyst.src.properties.physics_database import Physics_data
+from catalyst.src.io.io import load_dictionary
 
 def get_top_nperc_rankings(data):
     data = sorted(data, key=float)
@@ -26,7 +27,6 @@ def plot_data(data):
 
     means = [[],[],[]]
     image = 0
-    print(data)
     for at in data["avg_ng_features"][image]:
         atom_data.append(at)
         means[0].append(get_top_nperc_rankings(at))
@@ -45,7 +45,8 @@ def plot_data(data):
 
     fixed_labels = []
     labels = [item.get_text() for item in ax[0].get_xticklabels()]
-    for i,at in enumerate(data["all_ea_types"]):
+
+    for i,at in enumerate(data["all_ng_types"]):
         labels[i] = at
     fixed_labels.append(labels)
     from ase import Atoms
@@ -57,27 +58,14 @@ def plot_data(data):
     labels = [item.get_text() for item in ax[1].get_xticklabels()]
     for i, at in enumerate(data["all_na_types"]):
         labels[i] = at
-    for i in range(len(numbers)):
-        for j in range(len(numbers)):
-            sum = numbers[i] + numbers[j]
-            for k in range(len(labels)):
-                if labels[k] == sum:
-                    labels[k] = [str(elements[i])+'-'+str(elements[j])]
-                    break
+
     fixed_labels.append(labels)
     ax[1].set_xticklabels(labels)
 
     labels = [item.get_text() for item in ax[2].get_xticklabels()]
     for i, at in enumerate(data["all_ea_types"]):
         labels[i] = at
-    for i in range(len(numbers)):
-        for j in range(len(numbers)):
-            for k in range(len(numbers)):
-                sum = numbers[i] + numbers[j] + numbers[k]
-                for l in range(len(labels)):
-                    if labels[l] == sum:
-                        labels[l] = [str(elements[i])+'-'+str(elements[j])+'-'+str(elements[k])]
-                        break
+
     fixed_labels.append(labels)
     ax[2].set_xticklabels(labels)
 
@@ -178,20 +166,20 @@ def get_total_statistics(all_stats_data, all_data):
         for feature_types in data.items():
             for i, image_vals in enumerate(feature_types[1]):
                 final_data[feature_types[0]].append([])
-                if 'na' in feature_types[0]:
+                if 'avg_na' in feature_types[0]:
                     for j in range(len(all_na)):
                         final_data[feature_types[0]][-1].append([])
-                elif 'ea' in feature_types[0]:
+                elif 'avg_ea' in feature_types[0]:
                     for j in range(len(all_ea)):
                         final_data[feature_types[0]][-1].append([])
-                elif 'ng' in feature_types[0]:
+                elif 'avg_ng' in feature_types[0]:
                     for j in range(len(all_ng)):
                         final_data[feature_types[0]][-1].append([])
         break
     for k,data in enumerate(all_stats_data):
         for feature_types in data.items():
             for i, image_vals in enumerate(feature_types[1]):
-                if 'na' in feature_types[0]:
+                if 'avg_na' in feature_types[0]:
                     for n, val in enumerate(image_vals):
                         index = -1
                         for j in range(len(all_na)):
@@ -200,7 +188,7 @@ def get_total_statistics(all_stats_data, all_data):
                                 break
                         if float(val) > -1.0:
                             final_data[feature_types[0]][i][index].append(float(val))
-                if 'ea' in feature_types[0]:
+                if 'avg_ea' in feature_types[0]:
                     for n, val in enumerate(image_vals):
                         index = -1
                         for j in range(len(all_ea)):
@@ -209,7 +197,7 @@ def get_total_statistics(all_stats_data, all_data):
                                 break
                         if float(val) > -1.0:
                             final_data[feature_types[0]][i][index].append(float(val))
-                if 'ng' in feature_types[0]:
+                if 'avg_ng' in feature_types[0]:
                     for n, val in enumerate(image_vals):
                         index = -1
                         for j in range(len(all_ng)):
@@ -346,8 +334,10 @@ else:
         files = glob.glob(os.path.join(model,'*'))
         for f in files:
             print('Analyzing ',f.split('\\')[-1])
-            rankings_dict = np.load(f, allow_pickle=True)
-            rankings_dict = rankings_dict.item()
+            #rankings_dict = np.load(f, allow_pickle=True)
+            rankings_dict = load_dictionary(f)
+            #print(rankings_dict)
+            #rankings_dict = rankings_dict.item()
             amounts_dict = dict(ng_amounts = [],
                                 na_amounts = [],
                                 ea_amounts = [],
