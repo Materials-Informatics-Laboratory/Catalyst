@@ -1,4 +1,4 @@
-from ..utilities.physics_database import Physics_data
+from ..properties.physics_database import Physics_data
 from src.properties.structure_properties import *
 from .graph import Atomic_Graph_Data
 from .graph import atoms2graph

@@ -146,7 +146,8 @@ def predict_interpretable(loader,model,parameters,ind_fn='all',rank=0):
     model.eval()
     all_preds = []
     for i,data in enumerate(loader):
-        print('predicting on structure ',i)
+        if rank == 0:
+            print('predicting on structure ',i,' of ',len(loader))
         data = data.to(parameters['device_dict']['device'], non_blocking=parameters['device_dict']['pin_memory'])
         pred = model(data)
         preds, y, vec = accumulate_predictions(pred, data, 'exact')
