@@ -354,8 +354,6 @@ def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[],store_atoms=False
                         tmp_edge_index_G[1][m] = n
                         break
             x_atm = np.array(ohe)[unique_elements_in_order]
-            for i in range(len(tmp_x_bnd)):
-                tmp_x_bnd[i] = 1.0/math.pow(tmp_x_bnd[i],2)
             data_amounts["x_atm"].append(len(x_atm) - 1)
             data.append(Atomic_Graph_Data(
                     atoms=atms,
@@ -466,8 +464,6 @@ def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False, store_a
                         tmp_edge_index_G[1][m] = n
                         break
             x_atm = np.array(ohe)[unique_elements_in_order]
-            for i in range(len(tmp_x_bnd)):
-                tmp_x_bnd[i] = 1.0 / math.pow(tmp_x_bnd[i], 2)
             data_amounts["x_atm"].append(len(x_atm) - 1)
             data.append(Atomic_Graph_Data(
                     atoms=atm,
