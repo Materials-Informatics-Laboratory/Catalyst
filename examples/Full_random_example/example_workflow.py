@@ -2,7 +2,7 @@ from catalyst.src.ml.nn.gnn.models.alignn import Encoder_generic,Encoder_atomic,
 from catalyst.src.ml.inference import predict_external, test_non_intepretable_external, predict_interpretable
 from catalyst.src.ml.training import run_training, run_pre_training
 from catalyst.src.characterization.sodas.model.sodas import SODAS
-from catalyst.src.graph.generic_build import generic_pairwise
+from catalyst.src.graph.generic_build import generic_graph_gen
 from catalyst.src.ml.utils.distributed import cuda_destroy
 import catalyst.src.utilities.sampling as sampling
 from catalyst.src.io.io import load_dictionary, save_dictionary
@@ -100,7 +100,13 @@ def generate_data(cat,visualize_final=False):
             'ind':ind,
             'g_nodes':g_node_labels
         }
-        graph = generic_pairwise(data,data_params=neighbor_data)
+        graph_gen_data = {
+            'raw_data':data,
+            'params':neighbor_data,
+            'line_graph':True,
+            'type':'generic_pairwise'
+        }
+        graph = generic_graph_gen(graph_gen_data)
         graph.y = []
         for i in range(regression_outdim):
             graph.y.append(torch.tensor(y[i][ds],dtype=torch.float))
@@ -400,7 +406,7 @@ def plot_test_data(cat):
     cat.parameters['io_dict']['results_dir'] = os.path.join(cat.parameters['io_dict']['main_path'],'testing','pretraining')
     fname = os.path.join(cat.parameters['io_dict']['results_dir'],'all_indv_pred.data')
     pred = [[],[]]
-    run_data = [load_dictionary(fname)]
+    run_data = load_dictionary(fname)
     for i in range(len(pred)):
         for ny in range(regression_outdim):
             pred[i].append([])
@@ -454,7 +460,7 @@ def plot_test_data(cat):
     cat.parameters['io_dict']['results_dir'] = os.path.join(cat.parameters['io_dict']['main_path'], 'testing',                                                     'training')
     fname = os.path.join(cat.parameters['io_dict']['results_dir'],'all_indv_pred.data')
     pred = [[],[]]
-    run_data = [load_dictionary(fname)]
+    run_data = load_dictionary(fname)
     for i in range(len(pred)):
         for ny in range(regression_outdim):
             pred[i].append([])
@@ -503,7 +509,7 @@ def plot_test_data(cat):
     plt.show()
 
 def predict(cat,interpret):
-    cat.parameters['io_dict']['write_indv_pred'] = True
+    cat.parameters['io_dict']['write_indv_pred'] = False
     cat.parameters['io_dict']['results_dir'] = None
     del cat.parameters['io_dict']['results_dir']
     cat.parameters['io_dict']['results_dir'] = os.path.join(cat.parameters['io_dict']['main_path'], 'testing', 'predict')
@@ -521,7 +527,7 @@ def predict(cat,interpret):
     if cat.parameters['device_dict']['run_ddp']:
         processes = []
         for rank in range(cat.parameters['device_dict']['world_size']):
-            p = mp.Process(target=predict_external, args=(cat, 'all', rank,0))
+            p = mp.Process(target=predict_external, args=(cat, 'all', rank,interpret))
             p.start()
             processes.append(p)
         for p in processes:
@@ -534,13 +540,13 @@ def predict(cat,interpret):
 
 if __name__ == '__main__':
     n_types = 3  # number of ficticious types to label each node in G
-    projection_indim = 10
-    projection_outdim = 10
-    regression_indim = 10
+    projection_indim = 100
+    projection_outdim = 100
+    regression_indim = 100
     regression_outdim = 1
-    cutoff = 4.0
+    cutoff = 10.0
     n_convs = 3
-    n_data = 2500 # total number of samples
+    n_data = 30000 # total number of samples
     n_nodes = np.linspace(10, 100, n_data)  # number of data points per sample
     n_dim = 5  # number of dimensions in intial raw data
     parameters = dict(
@@ -578,7 +584,7 @@ if __name__ == '__main__':
         ),
         loader_dict=dict(
             shuffle_loader=False,
-            batch_size=[10,10,1],
+            batch_size=[20,20,1],
             num_workers=0,
             shuffle_steps=10
         ),
@@ -593,7 +599,7 @@ if __name__ == '__main__':
         ),
         model_dict=dict(
             n_models=1,
-            num_epochs=[100,100],
+            num_epochs=[500,500],
             train_delta=[0.01, 0.001],
             train_tolerance=[1.0, 0.0001],
             max_deltas=4,
@@ -602,8 +608,8 @@ if __name__ == '__main__':
             model=ALIGNN(
                 encoder=Encoder_atomic(num_species=n_types, cutoff=cutoff, dim=regression_indim, act=nn.SiLU()),
                 processor=Processor(num_convs=n_convs, dim=regression_indim, conv_type='mesh', act=nn.SiLU()),
-                #decoder=PositiveScalarsDecoder(dim=regression_indim, act_func=nn.SiLU()),
-                decoder=Decoder(in_dim=regression_indim, out_dim=regression_outdim, act=nn.SiLU(),combine=False)
+                decoder=PositiveScalarsDecoder(dim=regression_indim, act=nn.SiLU()),
+                #decoder=Decoder(in_dim=regression_indim, out_dim=regression_outdim, act=nn.SiLU(),combine=False)
             ),
             interpretable=False,
             pre_training=True,
@@ -612,7 +618,7 @@ if __name__ == '__main__':
                 dynamic_lr=False,
                 optimizer='AdamW',
                 params_group={
-                    'lr': 0.001
+                    'lr': 0.0001
                 }
             )
         )
@@ -620,14 +626,14 @@ if __name__ == '__main__':
     cat = Catalyst()
     cat.set_params(parameters)
 
-    gen_graphs =True
-    project_graphs =True
-    gen_samples = True
-    perform_train = True
+    gen_graphs =False
+    project_graphs =False
+    gen_samples = False
+    perform_train = False
     perform_retrain = False
-    perform_test = True
-    plot_test = True
-    plot_training =True
+    perform_test = False
+    plot_test = False
+    plot_training =False
     perform_ranking = True
     perform_predictions = True
 

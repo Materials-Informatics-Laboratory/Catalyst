@@ -6,6 +6,26 @@ from .graph import line_graph
 import torch
 import math
 
+def alignn_gen(data):
+    if data['type'] == 'alignnd':
+        graphs = alignnd(atoms=data['raw_data'],cutoff=data['cutoff'],dihedral=data['is_dihedral'],
+                         store_atoms=data['store_raw_data'],use_pt=data['use_pt'],include_angs=data['include_angs'],
+                         atom_labels=data['node_labels'])
+    if data['type'] == 'realignnd':
+        graphs = realignnd(structures=data['raw_data'],cutoff=data['cutoff'],dihedral=data['is_dihedral'],
+                         store_atoms=data['store_raw_data'],use_pt=data['use_pt'],include_angs=data['include_angs'],
+                         atom_labels=data['node_labels'])
+    if data['type'] == 'atomic_alignnd':
+        graphs = atomic_alignnd(atoms=data['raw_data'],cutoff=data['cutoff'],dihedral=data['is_dihedral'],
+                         store_atoms=data['store_raw_data'],use_pt=data['use_pt'],include_angs=data['include_angs'],
+                         atom_labels=data['node_labels'],all_elements=data['element_list'],store_atoms_type=data['store_atoms_type'])
+    if data['type'] == 'atomic_alignnd_from_global_grap':
+        graphs = atomic_alignnd_from_global_grap(atoms=data['raw_data'],cutoff=data['cutoff'],dihedral=data['is_dihedral'],
+                         store_atoms=data['store_raw_data'],use_pt=data['use_pt'],include_angs=data['include_angs'],
+                         atom_labels=data['node_labels'],store_atoms_type=data['store_atoms_type'])
+
+    return graphs
+
 def alignnd(atoms,cutoff,dihedral=False, store_atoms=False, use_pt=False,include_angs=True, atom_labels=''):
     """Converts ASE `atoms` into a PyG graph data holding the atomic graph (G) and the angular graph (A).
     The angular graph holds bond angle information, but can also calculate dihedral information upon request.
@@ -371,7 +391,7 @@ def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[],store_atoms=False
         graph.generate_gid()
 
     return data
-def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False, store_atoms=False,return_ids=False,include_angs=True,store_atoms_type='ase-atoms'):
+def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False, store_atoms=False,include_angs=True,store_atoms_type='ase-atoms'):
     data_amounts = dict(x_atm=[], x_bnd=[], x_ang=[])
     atm = None
 
@@ -481,10 +501,7 @@ def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False, store_a
     for graph in data:
         graph.generate_gid()
 
-    if return_ids:
-        return data, unique_atoms
-    else:
-        return data
+    return data
 
 
 

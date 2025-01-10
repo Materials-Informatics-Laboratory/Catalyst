@@ -5,6 +5,12 @@ from .graph import line_graph
 import numpy as np
 import torch
 
+def generic_graph_gen(data):
+    if data['type'] == 'generic_pairwise':
+        graphs = generic_pairwise(data=data['raw_data'],data_params=data['params'],gen_line_graph=data['line_graph'])
+
+    return graphs
+
 def generic_pairwise(data,data_params,gen_line_graph=True):
     ind = data_params['ind']
     dist = data_params['dist']
