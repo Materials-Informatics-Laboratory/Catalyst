@@ -6,8 +6,7 @@ import os
 from ase.io import read
 import torch as torch
 
-from catalyst.src.utilities.stoichiometry import get_structure_stoichiometry, check_stoichiometry, check_num_elements
-from catalyst.src.properties.chemical_properties import calc_reaction_enthalpy
+from catalyst.src.properties.chemical_properties import get_structure_stoichiometry, check_stoichiometry, check_num_elements, calc_reaction_enthalpy
 from catalyst.src.graph.alignnd import realignnd
 
 # PREPROCESS DATA

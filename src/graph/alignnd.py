@@ -19,10 +19,9 @@ def alignn_gen(data):
         graphs = atomic_alignnd(atoms=data['raw_data'],cutoff=data['cutoff'],dihedral=data['is_dihedral'],
                          store_atoms=data['store_raw_data'],use_pt=data['use_pt'],include_angs=data['include_angs'],
                          atom_labels=data['node_labels'],all_elements=data['element_list'],store_atoms_type=data['store_atoms_type'])
-    if data['type'] == 'atomic_alignnd_from_global_grap':
-        graphs = atomic_alignnd_from_global_grap(atoms=data['raw_data'],cutoff=data['cutoff'],dihedral=data['is_dihedral'],
-                         store_atoms=data['store_raw_data'],use_pt=data['use_pt'],include_angs=data['include_angs'],
-                         atom_labels=data['node_labels'],store_atoms_type=data['store_atoms_type'])
+    if data['type'] == 'atomic_alignnd_from_global_graph':
+        graphs = atomic_alignnd_from_global_graph(global_graph=data['raw_data'],cutoff=data['cutoff'],dihedral=data['is_dihedral'],
+                         store_atoms=data['store_raw_data'],include_angs=data['include_angs'],store_atoms_type=data['store_atoms_type'])
 
     return graphs
 
@@ -303,13 +302,10 @@ def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[],store_atoms=False
         idx = np.where(edge_index_G[0] == i)
         tmp_edge_index_G = [edge_index_G[0][idx],edge_index_G[1][idx]]
         tmp_x_bnd = x_bnd[idx]
-            #print('start: ' + str(len(tmp_edge_index_G[0])) + ' bl ' + str(len(tmp_x_bnd)))
         for j, val in enumerate(tmp_edge_index_G[1]):
             tmp_edge_index_G[0] = np.append(tmp_edge_index_G[0],val)
             tmp_edge_index_G[1] = np.append(tmp_edge_index_G[1],i)
-                #idx_bnd = np.where((edge_index_G[0] == i) & (edge_index_G[1] == val))
             tmp_x_bnd = np.append(tmp_x_bnd,x_bnd[j])
-            #print('end: ' + str(len(tmp_edge_index_G[0])) + ' bl ' + str(len(tmp_x_bnd)))
         tmp_edge_index_G = np.array(tmp_edge_index_G)
 
         data_amounts["x_bnd"].append(len(tmp_x_bnd) - 1)
@@ -425,26 +421,26 @@ def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False, store_a
             if store_atoms_type == 'ase-atoms':
                 atm = global_graph['atoms']
             else:
-                atm = atomglobal_graph['atoms'][atom]
+                atm = global_graph['atoms'][atom]
 
         if include_angs:
             edge_index_bnd_ang = line_graph(edge_index_G)
             x_bnd_ang = get_bnd_angs(global_graph['atoms'], edge_index_G, edge_index_bnd_ang)
 
-            unique_elements, indices = np.unique(tmp_edge_index_G[0], return_index=True)
+            unique_elements, indices = np.unique(edge_index_G[0], return_index=True)
             unique_elements_in_order = unique_elements[np.argsort(indices)]
-            for m in range(len(tmp_edge_index_G[0])):
+            for m in range(len(edge_index_G[0])):
                 for n in range(len(unique_elements_in_order)):
-                    if unique_elements_in_order[n] == tmp_edge_index_G[0][m]:
-                        tmp_edge_index_G[0][m] = n
+                    if unique_elements_in_order[n] == edge_index_G[0][m]:
+                        edge_index_G[0][m] = n
                         break
-            for m in range(len(tmp_edge_index_G[1])):
+            for m in range(len(edge_index_G[1])):
                 for n in range(len(unique_elements_in_order)):
-                    if unique_elements_in_order[n] == tmp_edge_index_G[1][m]:
-                        tmp_edge_index_G[1][m] = n
+                    if unique_elements_in_order[n] == edge_index_G[1][m]:
+                        edge_index_G[1][m] = n
                         break
-            x_atm = np.array(ohe)[unique_elements_in_order]
-            edge_index_bnd_ang = line_graph(tmp_edge_index_G)
+            x_atm = global_graph['x_atm'][unique_elements_in_order]
+            edge_index_bnd_ang = line_graph(edge_index_G)
 
             if dihedral:
                 edge_index_dih_ang = dihedral_graph(edge_index_G)
@@ -473,17 +469,17 @@ def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False, store_a
         else:
             unique_elements, indices = np.unique(tmp_edge_index_G[0], return_index=True)
             unique_elements_in_order = unique_elements[np.argsort(indices)]
-            for m in range(len(tmp_edge_index_G[0])):
+            for m in range(len(edge_index_G[0])):
                 for n in range(len(unique_elements_in_order)):
-                    if unique_elements_in_order[n] == tmp_edge_index_G[0][m]:
-                        tmp_edge_index_G[0][m] = n
+                    if unique_elements_in_order[n] == edge_index_G[0][m]:
+                        edge_index_G[0][m] = n
                         break
-            for m in range(len(tmp_edge_index_G[1])):
+            for m in range(len(edge_index_G[1])):
                 for n in range(len(unique_elements_in_order)):
-                    if unique_elements_in_order[n] == tmp_edge_index_G[1][m]:
-                        tmp_edge_index_G[1][m] = n
+                    if unique_elements_in_order[n] == edge_index_G[1][m]:
+                        edge_index_G[1][m] = n
                         break
-            x_atm = np.array(ohe)[unique_elements_in_order]
+            x_atm = global_graph['x_atm'][unique_elements_in_order]
             data_amounts["x_atm"].append(len(x_atm) - 1)
             data.append(Atomic_Graph_Data(
                     atoms=atm,
