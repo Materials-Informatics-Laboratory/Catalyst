@@ -308,12 +308,12 @@ def read_training_data(params,samples_file,pretrain=False,format=0, rank=0):
                     for i in range(len(selected_graphs)):
                         validation_graphs[i] = selected_graphs[i]
         else:
-            graph_file = load_dictionary(glob.glob(os.path.join(params['io_dict']['data_dir'], '*'))[0])
+            graph_file = load_dictionary(glob.glob(os.path.join(params['io_dict']['data_dir'], 'graphs.data'))[0])
             samples = load_dictionary(samples_file)
             training_samples = samples['training']
             if pretrain == False:
                 validation_samples = samples['validation']
-            gids = graph_file['gids']
+            gids = [graph.gid for graph in graph_file['graphs']]
 
             cross_list = set(training_samples).intersection(gids)
             idx = [gids.index(x) for x in cross_list]

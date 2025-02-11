@@ -24,7 +24,7 @@ def test_non_intepretable_external(cat,ind_fn='all',rank=0):
         for i in range(len(files)):
             graphs[i] = torch.load(files[i])
     else:
-        graphs = load_dictionary(glob.glob(os.path.join(cat.parameters['io_dict']['data_dir'], '*'))[0])['graphs']
+        graphs = load_dictionary(glob.glob(os.path.join(cat.parameters['io_dict']['data_dir'], 'graphs.data'))[0])['graphs']
 
     data = dict(validation = graphs)
     model = setup_model(cat, rank=rank,load=True)
@@ -100,7 +100,7 @@ def predict_external(cat,ind_fn='all',rank=0,interpretable=0):
         for i in range(len(files)):
             graphs[i] = torch.load(files[i])
     else:
-        graphs = load_dictionary(glob.glob(os.path.join(cat.parameters['io_dict']['data_dir'], '*'))[0])['graphs']
+        graphs = load_dictionary(glob.glob(os.path.join(cat.parameters['io_dict']['data_dir'], 'graphs.data'))[0])['graphs']
 
     data = dict(validation = graphs)
     model = setup_model(cat, rank=rank,load=True)
