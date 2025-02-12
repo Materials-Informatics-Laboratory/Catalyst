@@ -76,7 +76,6 @@ def generate_latent_space_path(X,k=7,boundaries=[0,-1],version='1',reduction=1.0
         except:
             print('Failed pathfinding...increasing k...')
             k += 1
-        print(k,' ',len(G))
 
     if version == '1':
         path_edges = list(zip(weighted_path, weighted_path[1:]))

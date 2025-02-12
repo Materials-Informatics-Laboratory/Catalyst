@@ -14,6 +14,7 @@ import pickle
 import random
 import torch
 import glob
+import gzip
 import math
 import sys
 import os
@@ -202,11 +203,11 @@ def save_model(model,cat,model_params_group,remove_old_models=True,pretrain=Fals
                    os.path.join(cat.parameters['io_dict']['model_dir'], 'model_' + str(id) + '_' + str(now)))
 
 def save_dictionary(fname,data):
-    with open(fname, 'wb') as handle:
-        pickle.dump(data, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    with gzip.open(fname, "wb") as fp:
+        pickle.dump(data, fp,protocol=pickle.HIGHEST_PROTOCOL)
 
 def load_dictionary(fname):
-    with open(fname, 'rb') as handle:
+    with gzip.open(fname, "rb") as handle:
         dictionary = pickle.load(handle)
     return dictionary
 
@@ -263,77 +264,64 @@ def get_system_info():
     return info
 
 def read_training_data(params,samples_file,pretrain=False,format=0, rank=0):
-    if rank == 0:
-        training_graphs = None
-        training_samples = None
-        validation_graphs = None
-        validation_samples = None
+    training_graphs = None
+    training_samples = None
+    validation_graphs = None
+    validation_samples = None
 
-        if format != 2:
-            graph_files = glob.glob(os.path.join(params['io_dict']['data_dir'],'*'))
-            samples = load_dictionary(samples_file)
-            training_samples = samples['training']
-            if pretrain == False:
-                validation_samples = samples['validation']
+    if format != 2:
+        graph_files = glob.glob(os.path.join(params['io_dict']['data_dir'],'*'))
+        samples = load_dictionary(samples_file)
+        training_samples = samples['training']
+        if pretrain == False:
+            validation_samples = samples['validation']
 
-            if format == 0:
-                gids = [PurePath(graph).parts[-1].split('.')[0] for graph in graph_files]
-                if len(gids) == 0:
-                    print('Error: no graph files found...')
-                    exit(0)
-            else:
-                gids = [torch.load(gname)['gid'] for gname in graph_files]
-
-            cross_list = set(training_samples).intersection(gids)
-            idx = [gids.index(x) for x in cross_list]
-            selected_graphs = [graph_files[i] for i in idx]
-            if format == 0:
-                training_graphs = [None]*len(selected_graphs)
-                for i in range(len(selected_graphs)):
-                    training_graphs[i] = torch.load(selected_graphs[i])
-            else:
-                training_graphs = [None] * len(selected_graphs)
-                for i in range(len(selected_graphs)):
-                    training_graphs[i] = selected_graphs[i]
-            if pretrain == False:
-                cross_list = set(validation_samples).intersection(gids)
-                idx = [gids.index(x) for x in cross_list]
-                selected_graphs = [graph_files[i] for i in idx]
-                if format == 0:
-                    validation_graphs = [None] * len(selected_graphs)
-                    for i in range(len(selected_graphs)):
-                        validation_graphs[i] = torch.load(selected_graphs[i])
-                else:
-                    validation_graphs = [None] * len(selected_graphs)
-                    for i in range(len(selected_graphs)):
-                        validation_graphs[i] = selected_graphs[i]
+        if format == 0:
+            gids = [PurePath(graph).parts[-1].split('.')[0] for graph in graph_files]
+            if len(gids) == 0:
+                print('Error: no graph files found...')
+                exit(0)
         else:
-            graph_file = load_dictionary(glob.glob(os.path.join(params['io_dict']['data_dir'], 'graphs.data'))[0])
-            samples = load_dictionary(samples_file)
-            training_samples = samples['training']
-            if pretrain == False:
-                validation_samples = samples['validation']
-            gids = [graph.gid for graph in graph_file['graphs']]
+            gids = [torch.load(gname)['gid'] for gname in graph_files]
 
-            cross_list = set(training_samples).intersection(gids)
-            idx = [gids.index(x) for x in cross_list]
-            training_graphs = [graph_file['graphs'][i] for i in idx]
-            if pretrain == False:
-                cross_list = set(validation_samples).intersection(gids)
-                idx = [gids.index(x) for x in cross_list]
-                validation_graphs = [graph_file['graphs'][i] for i in idx]
+        a,b,c = np.intersect1d(training_samples,gids,return_indices=True)
+        selected_graphs = [graph_files[cc] for cc in c]
+        if format == 0:
+            training_graphs = [None]*len(selected_graphs)
+            for i in range(len(selected_graphs)):
+                training_graphs[i] = torch.load(selected_graphs[i])
+        else:
+            training_graphs = [None] * len(selected_graphs)
+            for i in range(len(selected_graphs)):
+                training_graphs[i] = selected_graphs[i]
+        if pretrain == False:
+            a,b,c = np.intersect1d(validation_samples,gids,return_indices=True)
+            selected_graphs = [graph_files[cc] for cc in c]
+            if format == 0:
+                validation_graphs = [None] * len(selected_graphs)
+                for i in range(len(selected_graphs)):
+                    validation_graphs[i] = torch.load(selected_graphs[i])
+            else:
+                validation_graphs = [None] * len(selected_graphs)
+                for i in range(len(selected_graphs)):
+                    validation_graphs[i] = selected_graphs[i]
+    else:
+        graph_file = load_dictionary(glob.glob(os.path.join(params['io_dict']['data_dir'], 'graphs.data'))[0])
+        samples = load_dictionary(samples_file)
+        training_samples = samples['training']
+        if pretrain == False:
+            validation_samples = samples['validation']
+        gids = [graph.gid for graph in graph_file['graphs']]
+        a,b,c = np.intersect1d(training_samples,gids,return_indices=True)
+        training_graphs = [graph_file['graphs'][cc] for cc in c]
+        if pretrain == False:
+            a, b, c = np.intersect1d(validation_samples, gids, return_indices=True)
+            validation_graphs = [graph_file['graphs'][cc] for cc in c]
 
-        graph_dict = dict(training=training_graphs, validation=validation_graphs)
-        samples_dict = dict(training_samples=training_samples,validation_samples=validation_samples)
-    else:
-        graph_dict = None
-        samples_dict = None
-    if params['device_dict']['run_ddp']:
-        dist.barrier()
-        dict_list = sync_training_dicts_across_gpus(graph_dict,samples_dict)
-        return dict_list[0], dict_list[1]
-    else:
-        return graph_dict, samples_dict
+    graph_dict = dict(training=training_graphs, validation=validation_graphs)
+    samples_dict = dict(training_samples=training_samples,validation_samples=validation_samples)
+
+    return graph_dict, samples_dict
 
 def port_graphdata_to_atomicgraphdata(path):
     graph_files = glob.glob(os.path.join(path, '*'))
