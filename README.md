@@ -3,6 +3,8 @@
 <!-- The ?branch=release-x.y.y is updated automatically by the initiate_version_release workflow -->
 [![All Contributors](https://img.shields.io/badge/all_contributors-4-orange.svg?style=flat-square)](#contributors)
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.14861737.svg)](https://doi.org/10.5281/zenodo.14861737)
+
 <!-- badges: end -->
 
 ![Screenshot](https://github.com/Materials-Informatics-Laboratory/Catalyst/blob/main/visuals/catalyst.jpg?raw=true)
