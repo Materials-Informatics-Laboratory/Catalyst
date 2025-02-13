@@ -50,4 +50,4 @@ pip uninstall catalyst
 - Questions regarding Catlayst should be directed to jc112358@bu.edu.
 
 ## Cite Catalyst!
-- Please cite Catalyst using the reference below:
+- Please cite Catalyst using the reference: `Materials-Informatics-Laboratory. (2025). Materials-Informatics-Laboratory/Catalyst: v1.0.3 (v1.0.3). Zenodo. https://doi.org/10.5281/zenodo.14861737`
