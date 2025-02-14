@@ -406,7 +406,7 @@ def plot_test_data(cat):
     cat.parameters['io_dict']['results_dir'] = os.path.join(cat.parameters['io_dict']['main_path'],'testing','pretraining')
     fname = os.path.join(cat.parameters['io_dict']['results_dir'],'all_indv_pred.data')
     pred = [[],[]]
-    run_data = load_dictionary(fname)
+    run_data = [load_dictionary(fname)]
     for i in range(len(pred)):
         for ny in range(regression_outdim):
             pred[i].append([])
@@ -460,7 +460,7 @@ def plot_test_data(cat):
     cat.parameters['io_dict']['results_dir'] = os.path.join(cat.parameters['io_dict']['main_path'], 'testing',                                                     'training')
     fname = os.path.join(cat.parameters['io_dict']['results_dir'],'all_indv_pred.data')
     pred = [[],[]]
-    run_data = load_dictionary(fname)
+    run_data = [load_dictionary(fname)]
     for i in range(len(pred)):
         for ny in range(regression_outdim):
             pred[i].append([])
@@ -539,16 +539,16 @@ def predict(cat,interpret):
     return
 
 if __name__ == '__main__':
-    n_types = 3  # number of ficticious types to label each node in G
+    n_types = 4  # number of ficticious types to label each node in G
     projection_indim = 100
     projection_outdim = 100
     regression_indim = 100
     regression_outdim = 1
     cutoff = 10.0
     n_convs = 3
-    n_data = 30000 # total number of samples
+    n_data = 1000 # total number of samples
     n_nodes = np.linspace(10, 100, n_data)  # number of data points per sample
-    n_dim = 5  # number of dimensions in intial raw data
+    n_dim = 10  # number of dimensions in intial raw data
     parameters = dict(
         device_dict=dict(
             world_size=2,
@@ -572,7 +572,7 @@ if __name__ == '__main__':
         ),
         sampling_dict=dict(
             sampling_types=['kmeans', 'kmeans', 'kmeans'],
-            split=[0.01, 0.01, 0.75],
+            split=[0.2, 0.25, 0.75],
             sampling_seed=112358,
             params_groups=[{
                 'clusters': 5,
@@ -584,7 +584,7 @@ if __name__ == '__main__':
         ),
         loader_dict=dict(
             shuffle_loader=False,
-            batch_size=[20,20,1],
+            batch_size=[10,100,100],
             num_workers=0,
             shuffle_steps=10
         ),
@@ -599,12 +599,16 @@ if __name__ == '__main__':
         ),
         model_dict=dict(
             n_models=1,
-            num_epochs=[500,500],
+            num_epochs=[2,250],
             train_delta=[0.01, 0.001],
             train_tolerance=[1.0, 0.0001],
             max_deltas=4,
-            loss_func=torch.nn.MSELoss(),
-            accumulate_loss=['sum', 'exact', 'exact'],
+            loss_params={
+                'function':'MaxNpercent',
+                'sub_function':torch.nn.L1Loss(),
+                'percent':0.1
+            },
+            accumulate_loss=['exact', 'exact', 'exact'],
             model=ALIGNN(
                 encoder=Encoder_atomic(num_species=n_types, cutoff=cutoff, dim=regression_indim, act=nn.SiLU()),
                 processor=Processor(num_convs=n_convs, dim=regression_indim, conv_type='mesh', act=nn.SiLU()),
@@ -626,16 +630,16 @@ if __name__ == '__main__':
     cat = Catalyst()
     cat.set_params(parameters)
 
-    gen_graphs =False
-    project_graphs =False
-    gen_samples = False
-    perform_train = False
-    perform_retrain = False
-    perform_test = False
-    plot_test = False
-    plot_training =False
-    perform_ranking = True
-    perform_predictions = True
+    gen_graphs =0
+    project_graphs =0
+    gen_samples = 0
+    perform_train = 1
+    perform_retrain = 0
+    perform_test = 1
+    plot_test = 1
+    plot_training =0
+    perform_ranking = 0
+    perform_predictions = 0
 
     if gen_graphs:
         generate_data(cat,visualize_final=True)

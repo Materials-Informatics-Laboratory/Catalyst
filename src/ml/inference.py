@@ -1,5 +1,6 @@
 from ..utilities.rankings import organize_rankings_atomic, organize_rankings_generic
 from .utils.predict import accumulate_predictions
+from .utils.loss import loss_setup
 from .utils.distributed import reduce_tensor, combine_dicts_across_gpus, ddp_destroy, ddp_setup
 from ..io.io import read_training_data, setup_model, setup_dataloader, save_model, save_dictionary, load_dictionary
 from torch import nn
@@ -41,7 +42,7 @@ def test_non_intepretable_external(cat,ind_fn='all',rank=0):
 @torch.no_grad()
 def test_non_intepretable_internal(loader,model,parameters,ind_fn='all',rank=0):
     model.eval()
-    loss_fn = parameters['model_dict']['loss_func']
+    loss_fn = loss_setup(params=parameters['model_dict']['loss_params'])
     epoch_loss = 0.0
     loss_accum = parameters['model_dict']['accumulate_loss'][2]
     if parameters['io_dict']['write_indv_pred']:

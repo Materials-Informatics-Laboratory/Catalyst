@@ -10,6 +10,7 @@ from .utils.predict import accumulate_predictions
 from .inference import test_non_intepretable_internal
 from .utils.optimizer import set_optimizer
 from .utils.memory import optimizer_to
+from .utils.loss import loss_setup
 
 import numpy as np
 import random
@@ -29,7 +30,7 @@ def train(loader,model,parameters,optimizer,pretrain=False):
     epoch_loss = 0.0
     if parameters['device_dict']['run_ddp'] == False:
         model.to(parameters['device_dict']['device'])
-    loss_fn = parameters['model_dict']['loss_func']
+    loss_fn = loss_setup(params=parameters['model_dict']['loss_params'])
     for data in loader:
         def closure():
             data.to(parameters['device_dict']['device'], non_blocking=True)

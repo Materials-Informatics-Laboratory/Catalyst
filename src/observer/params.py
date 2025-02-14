@@ -59,7 +59,9 @@ class Catalyst():
                                    train_tolerance =[1.0,1.0],
                                    max_deltas=4,
                                    accumulate_loss=['sum', 'sum', 'sum'],
-                                   loss_func=torch.nn.MSELoss(),
+                                   loss_params={
+                                       'function':None
+                                   },
                                    model = None,
                                    model_params_group=dict(
                                         encoder=dict(
