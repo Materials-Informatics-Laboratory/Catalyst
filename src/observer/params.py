@@ -94,6 +94,7 @@ class Catalyst():
         self.device_options = ['cuda','cpu']
         self.optimizer_options = ['AdamW','Adadelta','Adagrad','Adam','SparseAdam','Adamax','ASGD',
                                   'LBFGS','NAdam','RAdam','RMSprop','Rprop','SGD']
+        self.version = '1.0.4'
 
         '''
         graph clustering params
