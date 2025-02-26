@@ -1,4 +1,4 @@
-from src.properties.structure_properties import get_3body_angle
+from ..properties.structure_properties import get_3body_angle
 from .graph import Generic_Graph_Data
 from .graph import line_graph
 
