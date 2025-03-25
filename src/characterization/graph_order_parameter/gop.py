@@ -1,6 +1,7 @@
 from ...graph.graph import Generic_Graph_Data,Atomic_Graph_Data
 from sklearn.neighbors import KDTree
 from ase.atoms import Atoms
+from ase.geometry import get_distances
 import networkx as nx
 import numpy as np
 import math
@@ -87,7 +88,7 @@ class GOP():
                                                 edge = snapshot['node_A'][edge_id]
                                             if rc > -1.0 and edge < rc:
                                                 edge = 1.0 / edge
-                                            G.add_edge(ii, jj, weight=edge.item())
+                                                G.add_edge(ii, jj, weight=edge.item())
                         else:
                             idx = []
                             idx.append(np.where(np.array(kks) == i)[0])
@@ -108,7 +109,7 @@ class GOP():
                                                 edge = snapshot['node_A'][edge_id]
                                             if rc > -1.0 and edge < rc:
                                                 edge = 1.0 / edge
-                                            G.add_edge(ii, len(idx[0]) + jj, weight=edge.item())
+                                                G.add_edge(ii, len(idx[0]) + jj, weight=edge.item())
                         predictions[-1][-1][-1].append(self.calc_gop(G))
             else:
                 symbols = np.unique(snapshot.get_chemical_symbols())
@@ -134,7 +135,7 @@ class GOP():
                             for i, atom_i in enumerate(selected_atoms[0][0]):
                                 G.add_node(i)
                                 for j, atom_j in enumerate(selected_atoms[0][0]):
-                                    r = math.dist(atom_i.position, atom_j.position)
+                                    r = get_distances(atom_i.position, atom_j.position,cell=snapshot.get_cell(),pbc=True)[1][0][0]
                                     if r < rc and r > .01:
                                         G.add_edge(i, j, weight=1.0 / r)
                         else:
@@ -148,7 +149,7 @@ class GOP():
                                 for j, atom_j in enumerate(selected_atoms[1][0]):
                                     if i == 0:
                                         G.add_node(len(selected_atoms[0][0]) + j)
-                                    r = math.dist(atom_i.position, atom_j.position)
+                                    r = get_distances(atom_i.position, atom_j.position,cell=snapshot.get_cell(),pbc=True)[1][0][0]
                                     if r < rc and r > .01:
                                         G.add_edge(i, len(selected_atoms[0][0]) + j, weight=1.0 / r)
                         predictions[-1][-1][-1].append(self.calc_gop(G))
