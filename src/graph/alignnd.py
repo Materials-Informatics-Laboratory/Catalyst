@@ -1,12 +1,34 @@
 from ..properties.physics_database import Physics_data
-from src.properties.structure_properties import *
+from ..properties.structure_properties import *
 from .graph import Atomic_Graph_Data
 from .graph import atoms2graph
 from .graph import line_graph
 import torch
 import math
 
+def check_params(target_dict):
+    source_dict = {
+        'type':None,
+        'raw_data': None,
+        'node_labels': None,
+        'element_list': None,
+        'neighbor_params': [5.0, -1],
+        'is_dihedral': False,
+        'store_raw_data': False,
+        'use_pt': False,
+        'include_angs': False,
+        'store_atoms_type': 'ase-atoms'
+    }
+    updated_dict = target_dict.copy()
+
+    for key, source_value in source_dict.items():
+        if key not in updated_dict:
+            updated_dict[key] = source_value
+
+    return updated_dict
+
 def alignn_gen(data):
+    data = check_params(data)
     if data['type'] == 'alignnd':
         graphs = alignnd(atoms=data['raw_data'],neighbor_params=data['neighbor_params'],dihedral=data['is_dihedral'],
                          store_atoms=data['store_raw_data'],use_pt=data['use_pt'],include_angs=data['include_angs'],

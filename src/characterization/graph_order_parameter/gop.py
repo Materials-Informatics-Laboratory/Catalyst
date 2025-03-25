@@ -1,4 +1,4 @@
-from ....src.graph.graph import Generic_Graph_Data,Atomic_Graph_Data
+from ...graph.graph import Generic_Graph_Data,Atomic_Graph_Data
 from sklearn.neighbors import KDTree
 from ase.atoms import Atoms
 import networkx as nx
