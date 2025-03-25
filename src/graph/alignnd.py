@@ -8,24 +8,24 @@ import math
 
 def alignn_gen(data):
     if data['type'] == 'alignnd':
-        graphs = alignnd(atoms=data['raw_data'],cutoff=data['cutoff'],dihedral=data['is_dihedral'],
+        graphs = alignnd(atoms=data['raw_data'],neighbor_params=data['neighbor_params'],dihedral=data['is_dihedral'],
                          store_atoms=data['store_raw_data'],use_pt=data['use_pt'],include_angs=data['include_angs'],
                          atom_labels=data['node_labels'])
     if data['type'] == 'realignnd':
-        graphs = realignnd(structures=data['raw_data'],cutoff=data['cutoff'],dihedral=data['is_dihedral'],
+        graphs = realignnd(structures=data['raw_data'],neighbor_params=data['neighbor_params'],dihedral=data['is_dihedral'],
                          store_atoms=data['store_raw_data'],use_pt=data['use_pt'],include_angs=data['include_angs'],
                          atom_labels=data['node_labels'])
     if data['type'] == 'atomic_alignnd':
-        graphs = atomic_alignnd(atoms=data['raw_data'],cutoff=data['cutoff'],dihedral=data['is_dihedral'],
+        graphs = atomic_alignnd(atoms=data['raw_data'],neighbor_params=data['neighbor_params'],dihedral=data['is_dihedral'],
                          store_atoms=data['store_raw_data'],use_pt=data['use_pt'],include_angs=data['include_angs'],
                          atom_labels=data['node_labels'],all_elements=data['element_list'],store_atoms_type=data['store_atoms_type'])
     if data['type'] == 'atomic_alignnd_from_global_graph':
-        graphs = atomic_alignnd_from_global_graph(global_graph=data['raw_data'],cutoff=data['cutoff'],dihedral=data['is_dihedral'],
+        graphs = atomic_alignnd_from_global_graph(global_graph=data['raw_data'],dihedral=data['is_dihedral'],
                          store_atoms=data['store_raw_data'],include_angs=data['include_angs'],store_atoms_type=data['store_atoms_type'])
 
     return graphs
 
-def alignnd(atoms,cutoff,dihedral=False, store_atoms=False, use_pt=False,include_angs=True, atom_labels=''):
+def alignnd(atoms,neighbor_params,dihedral=False, store_atoms=False, use_pt=False,include_angs=True, atom_labels=''):
     """Converts ASE `atoms` into a PyG graph data holding the atomic graph (G) and the angular graph (A).
     The angular graph holds bond angle information, but can also calculate dihedral information upon request.
     """
@@ -58,7 +58,7 @@ def alignnd(atoms,cutoff,dihedral=False, store_atoms=False, use_pt=False,include
         ohe.append(tx)
     x_atm = np.array(ohe)
 
-    edge_index_G, x_bnd = atoms2graph(atoms,cutoff=cutoff)
+    edge_index_G, x_bnd = atoms2graph(atoms,cutoff=neighbor_params[0],k=neighbor_params[1])
     if include_angs:
         edge_index_bnd_ang = line_graph(edge_index_G)
         x_bnd_ang = get_bnd_angs(atoms, edge_index_G, edge_index_bnd_ang)
@@ -105,7 +105,7 @@ def alignnd(atoms,cutoff,dihedral=False, store_atoms=False, use_pt=False,include
 
     return data
 
-def realignnd(structures,cutoff,dihedral=False,store_atoms=False,use_pt=False,include_angs=True, atom_labels=''):
+def realignnd(structures,neighbor_params,dihedral=False,store_atoms=False,use_pt=False,include_angs=True, atom_labels=''):
     """Converts ASE `atoms` into a PyG graph data holding the atomic graph (G) and the angular graph (A).
     The angular graph holds bond angle information, but can also calculate dihedral information upon request.
     """
@@ -159,7 +159,7 @@ def realignnd(structures,cutoff,dihedral=False,store_atoms=False,use_pt=False,in
             ohe.append(tx)
         x_atm = np.array(ohe)
 
-        edge_index_G, x_bnd = atoms2graph(atoms,cutoff=cutoff)
+        edge_index_G, x_bnd = atoms2graph(atoms,cutoff=neighbor_params[0],k=neighbor_params[1])
         t_edge_index_G = []
         for i in range(len(edge_index_G)):
             t_edge_index_G.append([])
@@ -257,7 +257,7 @@ def realignnd(structures,cutoff,dihedral=False,store_atoms=False,use_pt=False,in
 
     return data
 
-def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[],store_atoms=False,use_pt=False,include_angs=True,store_atoms_type='ase-atoms',atom_labels=''):
+def atomic_alignnd(atoms,neighbor_params,dihedral=False,all_elements=[],store_atoms=False,use_pt=False,include_angs=True,store_atoms_type='ase-atoms',atom_labels=''):
     """Converts ASE `atoms` into a PyG graph data holding the atomic graph (G) and the angular graph (A).
     The angular graph holds bond angle information, but can also calculate dihedral information upon request.
     """
@@ -290,13 +290,13 @@ def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[],store_atoms=False
                 break
         ohe.append(tx)
 
-    edge_index_G, x_bnd = atoms2graph(atoms,cutoff=cutoff)
+    edge_index_G, x_bnd = atoms2graph(atoms,cutoff=neighbor_params[0],k=neighbor_params[1])
     data = []
 
     for i,atom in enumerate(atoms):
         if store_atoms:
             if store_atoms_type == 'ase-atoms':
-                atm = global_graph['atoms']
+                atm = atoms
             else:
                 atm = atom
         idx = np.where(edge_index_G[0] == i)
@@ -383,11 +383,12 @@ def atomic_alignnd(atoms,cutoff,dihedral=False,all_elements=[],store_atoms=False
                     ang_amounts=None,
                     mask_dih_ang=None
             ))
+
     for graph in data:
         graph.generate_gid()
 
     return data
-def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False, store_atoms=False,include_angs=True,store_atoms_type='ase-atoms'):
+def atomic_alignnd_from_global_graph(global_graph,dihedral=False, store_atoms=False,include_angs=True,store_atoms_type='ase-atoms'):
     data_amounts = dict(x_atm=[], x_bnd=[], x_ang=[])
     atm = None
 
@@ -415,6 +416,7 @@ def atomic_alignnd_from_global_graph(global_graph,cutoff,dihedral=False, store_a
             edge_index_G[0] = np.append(edge_index_G[0], val)
             edge_index_G[1] = np.append(edge_index_G[1], edge_index_G[0][0])
             x_bnd = np.append(x_bnd, x_bnd[i])
+
         edge_index_G = np.array(edge_index_G)
 
         if store_atoms:

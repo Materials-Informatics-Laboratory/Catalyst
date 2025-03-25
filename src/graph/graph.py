@@ -1,5 +1,5 @@
 from ase.neighborlist import neighbor_list
-
+from scipy.spatial import cKDTree
 from functools import partial
 import pandas as pd
 import numpy as np
@@ -140,7 +140,7 @@ def summary(model):
     params.append(('Total', total_num))
     return pd.DataFrame(params, columns=['Layer', 'Params'])
 
-def atoms2graph(atoms, cutoff):
+def atoms2graph(atoms, cutoff,k=5):
     """Convert an ASE `Atoms` object into a graph based on a radius cutoff.
     Returns the graph (in COO format) and its edge attributes (format 
     determined by `edge_dist`).
@@ -156,9 +156,25 @@ def atoms2graph(atoms, cutoff):
 
     :rtype: (ndarray, ndarray)
     """
-    i, j, d = neighbor_list('ijd', atoms, cutoff)
+    if k < 0:
+        i, j, d = neighbor_list('ijd', atoms, cutoff)
+    else:
+        atoms.wrap()
+        lv_norm = [np.linalg.norm(atoms.cell[0]).item(),
+                   np.linalg.norm(atoms.cell[1]).item(),
+                   np.linalg.norm(atoms.cell[2]).item()]
 
-    return np.stack((i, j)), d.astype(np.float32)
+        tree = cKDTree(data=atoms.get_positions(),boxsize=lv_norm)
+        dd, ii = tree.query(x=atoms.get_positions(),k=k+1,distance_upper_bound=2.0*cutoff)
+
+        i = [[m] * k for m in range(len(ii))]
+        i = [n for one_dim in i for n in one_dim]
+        j = [sublist[1:] for sublist in ii]
+        j = [n for one_dim in j for n in one_dim]
+        d = [sublist[1:] for sublist in dd]
+        d = [n for one_dim in d for n in one_dim]
+
+    return np.stack((i, j)), np.array(d).astype(np.float32)
 
 def atoms2knngraph(atoms, cutoff, k=12, scale_inv=True):
     """Convert an ASE `Atoms` object into a graph based on k nearest neighbors.

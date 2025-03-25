@@ -20,7 +20,11 @@ class SODAS():
         self.device = device
         self.model.to(device)
         if device == 'cpu':
-            torch.cuda.empty_cache()
+            try:
+                torch.cuda.empty_cache()
+            except:
+                print('Clearing cuda cache failed...')
+                pass
 
     def generate_gnn_latent_space(self,parameters,loader,global_data=True):
         # Run a forward pass
