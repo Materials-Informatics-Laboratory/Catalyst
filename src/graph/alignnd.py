@@ -1,5 +1,6 @@
 from ..properties.physics_database import Physics_data
 from ..properties.structure_properties import *
+from ..utilities.data_tools import remove_duplicate_list_pairs
 from .graph import Atomic_Graph_Data
 from .graph import atoms2graph
 from .graph import line_graph
@@ -81,6 +82,8 @@ def alignnd(atoms,neighbor_params,dihedral=False, store_atoms=False, use_pt=Fals
     x_atm = np.array(ohe)
 
     edge_index_G, x_bnd = atoms2graph(atoms,cutoff=neighbor_params[0],k=neighbor_params[1])
+    edge_index_G, unique_edges = remove_duplicate_list_pairs(edge_index_G[0],edge_index_G[1])
+    x_bnd = x_bnd[unique_edges]
     if include_angs:
         edge_index_bnd_ang = line_graph(edge_index_G)
         x_bnd_ang = get_bnd_angs(atoms, edge_index_G, edge_index_bnd_ang)
@@ -181,7 +184,9 @@ def realignnd(structures,neighbor_params,dihedral=False,store_atoms=False,use_pt
             ohe.append(tx)
         x_atm = np.array(ohe)
 
-        edge_index_G, x_bnd = atoms2graph(atoms,cutoff=neighbor_params[0],k=neighbor_params[1])
+        edge_index_G, x_bnd = atoms2graph(atoms, cutoff=neighbor_params[0], k=neighbor_params[1])
+        edge_index_G, unique_edges = remove_duplicate_list_pairs(edge_index_G[0], edge_index_G[1])
+        x_bnd = x_bnd[unique_edges]
         t_edge_index_G = []
         for i in range(len(edge_index_G)):
             t_edge_index_G.append([])
@@ -312,7 +317,9 @@ def atomic_alignnd(atoms,neighbor_params,dihedral=False,all_elements=[],store_at
                 break
         ohe.append(tx)
 
-    edge_index_G, x_bnd = atoms2graph(atoms,cutoff=neighbor_params[0],k=neighbor_params[1])
+    edge_index_G, x_bnd = atoms2graph(atoms, cutoff=neighbor_params[0], k=neighbor_params[1])
+    edge_index_G, unique_edges = remove_duplicate_list_pairs(edge_index_G[0], edge_index_G[1])
+    x_bnd = x_bnd[unique_edges]
     data = []
 
     for i,atom in enumerate(atoms):

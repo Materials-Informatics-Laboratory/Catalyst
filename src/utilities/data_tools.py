@@ -1,4 +1,31 @@
 
+def make_pairs(list1, list2):
+    return list(zip(list1, list2))
+
+def remove_duplicate_tuples(tuple_list,return_unique_counts=True):
+    seen = set()  # Use a set to keep track of seen tuples
+    unique_list = []
+    ids = []
+    for i,tup in enumerate(tuple_list):
+        if tup not in seen:
+            unique_list.append(tup)
+            ids.append(i)
+            seen.add(tup)
+
+    if return_unique_counts:
+        return unique_list, ids
+    else:
+        return unique_list
+
+def tuples_to_2d_lists(tuple_list):
+    list1 = []
+    list2 = []
+
+    for tup in tuple_list:
+        list1.append(tup[0])
+        list2.append(tup[1])
+
+    return [list1, list2]
 def unique_lists_2d(lst,return_indices=1,sorted_search=1):
     unique_sublists = []
     indices = []
@@ -21,3 +48,13 @@ def unique_lists_2d(lst,return_indices=1,sorted_search=1):
             if sublist_tuple not in unique_sublists:
                 unique_sublists.append(sublist_tuple)
         return [list(sublist) for sublist in unique_sublists]
+
+def remove_duplicate_list_pairs(list1,list2,stack=False):
+    # create pairs
+    pairs = make_pairs(list1,list2)
+    new_pairs, unique_ids = remove_duplicate_tuples(pairs)
+    if len(pairs) == len(new_pairs):
+        return [list1,list2], unique_ids
+    else:
+        return tuples_to_2d_lists(new_pairs), unique_ids
+
