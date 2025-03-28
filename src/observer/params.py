@@ -1,5 +1,6 @@
 from ..ml.utils.distributed import set_spawn_method
 from ..io.io import save_dictionary, get_system_info
+from ..ml.utils.memory import clear_torch_memory, change_model_device
 from torch import nn
 import numpy as np
 import torch
@@ -49,9 +50,6 @@ class Catalyst():
                                     shuffle_steps=10,
                                     num_workers=0
                                 ),
-                               characterization_dict = dict(
-                                    model = None
-                                ),
                                model_dict = dict(
                                    n_models=1,
                                    num_epochs=[1, 1],
@@ -89,12 +87,11 @@ class Catalyst():
                                )
                             )
 
-        self.model = None
         self.accumulate_loss_options = ['exact','sum']
         self.device_options = ['cuda','cpu']
         self.optimizer_options = ['AdamW','Adadelta','Adagrad','Adam','SparseAdam','Adamax','ASGD',
                                   'LBFGS','NAdam','RAdam','RMSprop','Rprop','SGD']
-        self.version = '1.0.45'
+        self.version = '1.0.5'
 
         '''
         graph clustering params
@@ -105,155 +102,152 @@ class Catalyst():
         }
         '''
 
-    def set_model(self):
-        del self.model
-        gc.collect()
-        if self.parameters['device_dict']['device'] == 'cuda':
-            torch.cuda.empty_cache()
-        self.model = None
-        self.model = self.parameters['model_dict']['model']
+    def set_model(self,model):
+        if self.parameters['model_dict']['model'] is None:
+            self.parameters['model_dict']['model'] = model
+        else:
+            del self.parameters['model_dict']['model']
+            self.parameters['model_dict']['model'] = None
+            clear_torch_memory()
+            self.parameters['model_dict']['model'] = model
+        change_model_device(self.parameters['model_dict']['model'],self.parameters['device_dict']['device'])
 
     def set_params(self,new_params,save_params=True):
-        if not 'characterization_dict' in new_params:
-            print('WARNING: No characterization dictionary set...')
-        if 'characterization_dict' in new_params:
-            if not 'model' in new_params['characterization_dict']:
-                print('Warning: no model in characterization dictionary...')
-        else:
-            if not 'model_dict' in new_params:
-                print('No model dictionary set...killing run...')
-                exit(0)
-            if not 'optimizer_params' in new_params['model_dict']:
-                print('No optimizer dictionary set inside of model dictionary...killing run...')
-                exit(0)
-            checks = [0, 0, 0]
-            if 'accumulate_loss' in new_params['model_dict']:
-                for i,curr_option in enumerate(new_params['model_dict']['accumulate_loss']):
-                    for option in self.accumulate_loss_options:
-                        if option == curr_option:
-                            checks[i] = 1
-                            break
-            if sum(checks) < 3:
-                for i, curr_option in enumerate(new_params['model_dict']['accumulate_loss']):
-                    if checks[i] == 0:
-                        print('WARNING: Loss accumulation at element ',i,' has bad option...setting to exact')
-                    new_params['model_dict']['accumulate_loss'][i] = 'exact'
-            if 'optimizer' in new_params['model_dict']['optimizer_params']:
-                for option in self.optimizer_options:
-                    if option == new_params['model_dict']['optimizer_params']['optimizer']:
-                        check = True
+        '''
+        if not 'model_dict' in new_params:
+            print('No model dictionary set...killing run...')
+            exit(0)
+        if not 'optimizer_params' in new_params['model_dict']:
+            print('No optimizer dictionary set inside of model dictionary...killing run...')
+            exit(0)
+        checks = [0, 0, 0]
+        if 'accumulate_loss' in new_params['model_dict']:
+            for i,curr_option in enumerate(new_params['model_dict']['accumulate_loss']):
+                for option in self.accumulate_loss_options:
+                    if option == curr_option:
+                        checks[i] = 1
                         break
-            if check == False:
-                print('Optimizer not set...please choose from these available options: ', self.optimizer_options)
-                print('Killing job...')
+        if sum(checks) < 3:
+            for i, curr_option in enumerate(new_params['model_dict']['accumulate_loss']):
+                if checks[i] == 0:
+                    print('WARNING: Loss accumulation at element ',i,' has bad option...setting to exact')
+                new_params['model_dict']['accumulate_loss'][i] = 'exact'
+        if 'optimizer' in new_params['model_dict']['optimizer_params']:
+            for option in self.optimizer_options:
+                if option == new_params['model_dict']['optimizer_params']['optimizer']:
+                    check = True
+                    break
+        if check == False:
+            print('Optimizer not set...please choose from these available options: ', self.optimizer_options)
+            print('Killing job...')
+            exit(0)
+        if not 'loss_func' in new_params['model_dict']:
+            print('No loss function set...killing run...')
+            exit(0)
+        if not 'model' in new_params['model_dict']:
+            print('No model set...killing run...')
+            exit(0)
+        if not 'num_epochs' in new_params['model_dict']:
+            print('No epochs set...killing run...')
+            exit(0)
+        else:
+            if len(new_params['model_dict']['num_epochs']) != 2:
+                print('Num_epochs tag does not have 2 values...killing job...')
                 exit(0)
-            if not 'loss_func' in new_params['model_dict']:
-                print('No loss function set...killing run...')
-                exit(0)
-            if not 'model' in new_params['model_dict']:
-                print('No model set...killing run...')
-                exit(0)
-            if not 'num_epochs' in new_params['model_dict']:
-                print('No epochs set...killing run...')
-                exit(0)
-            else:
-                if len(new_params['model_dict']['num_epochs']) != 2:
-                    print('Num_epochs tag does not have 2 values...killing job...')
-                    exit(0)
-            if not 'pre_training' in new_params['model_dict']:
-                print('WARNING: Pretraining not set...setting to False...')
-                new_params['model_dict']['pre_training'] = False
-            if not 'train_tolerance' in new_params['model_dict']:
-                print('WARNGING: training tolerance not set...setting to 1e-3')
-                new_params['model_dict']['train_tolerance'] = [1e-3,1e-3]
-            else:
-                if not isinstance(new_params['model_dict']['train_delta'], list):
-                    print('WARNING: train_delta is not a list...fixing this for you...')
-                    if new_params['model_dict']['pre_training']:
-                        print(
+        if not 'pre_training' in new_params['model_dict']:
+            print('WARNING: Pretraining not set...setting to False...')
+            new_params['model_dict']['pre_training'] = False
+        if not 'train_tolerance' in new_params['model_dict']:
+            print('WARNGING: training tolerance not set...setting to 1e-3')
+            new_params['model_dict']['train_tolerance'] = [1e-3,1e-3]
+        else:
+            if not isinstance(new_params['model_dict']['train_delta'], list):
+                print('WARNING: train_delta is not a list...fixing this for you...')
+                if new_params['model_dict']['pre_training']:
+                     print(
                             'Pretraining set to True, interpreting your train_delta as pretraining delta...setting value for both training and pretraining')
-                        new_params['model_dict']['train_delta'] = [new_params['model_dict']['train_delta'],
+                     new_params['model_dict']['train_delta'] = [new_params['model_dict']['train_delta'],
                                                                     new_params['model_dict']['train_delta']]
+                else:
+                    print(
+                            'Pretraining set to False, interpreting your train_tolerance as training delta...setting value for training only')
+                    new_params['model_dict']['train_delta'] = [-1.0, new_params['model_dict']['train_delta']]
+            else:
+                if len(new_params['model_dict']['train_delta']) != 2:
+                    if new_params['model_dict']['pre_training']:
+                        print(
+                                'Pretraining set to True, interpreting your train_tolerance as pretraining tolerance...setting value for both training and pretraining')
+                        new_params['model_dict']['train_delta'] = [new_params['model_dict']['train_delta'],
+                                                                        new_params['model_dict']['train_delta']]
                     else:
                         print(
-                            'Pretraining set to False, interpreting your train_tolerance as training delta...setting value for training only')
+                                'Pretraining set to False, interpreting your train_tolerance as training tolerance...setting value for training only')
                         new_params['model_dict']['train_delta'] = [-1.0, new_params['model_dict']['train_delta']]
+        if not 'train_delta' in new_params['model_dict']:
+            print('WARNGING: training delta not set...setting to 1e-3')
+            new_params['model_dict']['train_delta'] = [1e-3,1e-3]
+        else:
+            if not isinstance(new_params['model_dict']['train_tolerance'], list):
+                print('WARNING: train_tolerance is not a list...fixing this for you...')
+                if new_params['model_dict']['pre_training']:
+                    print('Pretraining set to True, interpreting your train_tolerance as pretraining tolerance...setting value for both training and pretraining')
+                    new_params['model_dict']['train_tolerance'] = [new_params['model_dict']['train_tolerance'],new_params['model_dict']['train_tolerance']]
                 else:
-                    if len(new_params['model_dict']['train_delta']) != 2:
-                        if new_params['model_dict']['pre_training']:
-                            print(
-                                'Pretraining set to True, interpreting your train_tolerance as pretraining tolerance...setting value for both training and pretraining')
-                            new_params['model_dict']['train_delta'] = [new_params['model_dict']['train_delta'],
-                                                                        new_params['model_dict']['train_delta']]
-                        else:
-                            print(
-                                'Pretraining set to False, interpreting your train_tolerance as training tolerance...setting value for training only')
-                            new_params['model_dict']['train_delta'] = [-1.0, new_params['model_dict']['train_delta']]
-            if not 'train_delta' in new_params['model_dict']:
-                print('WARNGING: training delta not set...setting to 1e-3')
-                new_params['model_dict']['train_delta'] = [1e-3,1e-3]
+                    print('Pretraining set to False, interpreting your train_tolerance as training tolerance...setting value for training only')
+                    new_params['model_dict']['train_tolerance'] = [-1.0,new_params['model_dict']['train_tolerance']]
             else:
-                if not isinstance(new_params['model_dict']['train_tolerance'], list):
-                    print('WARNING: train_tolerance is not a list...fixing this for you...')
+                if len(new_params['model_dict']['train_tolerance']) != 2:
                     if new_params['model_dict']['pre_training']:
-                        print('Pretraining set to True, interpreting your train_tolerance as pretraining tolerance...setting value for both training and pretraining')
-                        new_params['model_dict']['train_tolerance'] = [new_params['model_dict']['train_tolerance'],new_params['model_dict']['train_tolerance']]
-                    else:
-                        print('Pretraining set to False, interpreting your train_tolerance as training tolerance...setting value for training only')
-                        new_params['model_dict']['train_tolerance'] = [-1.0,new_params['model_dict']['train_tolerance']]
-                else:
-                    if len(new_params['model_dict']['train_tolerance']) != 2:
-                        if new_params['model_dict']['pre_training']:
-                            print(
+                        print(
                                 'Pretraining set to True, interpreting your train_tolerance as pretraining tolerance...setting value for both training and pretraining')
-                            new_params['model_dict']['train_tolerance'] = [new_params['model_dict']['train_tolerance'],
+                        new_params['model_dict']['train_tolerance'] = [new_params['model_dict']['train_tolerance'],
                                                                         new_params['model_dict']['train_tolerance']]
-                        else:
-                            print(
+                    else:
+                        print(
                                 'Pretraining set to False, interpreting your train_tolerance as training tolerance...setting value for training only')
-                            new_params['model_dict']['train_tolerance'] = [-1.0, new_params['model_dict']['train_tolerance']]
-            if not 'max_deltas' in new_params['model_dict']:
-                print('WARNGING: max_deltas not set...setting to 3')
-                new_params['model_dict']['max_deltas'] = 3
-            if not 'shuffle_steps' in new_params['loader_dict']:
-                print('WARNGING: shuffle_Steps not set...setting to 10')
-                new_params['loader_dict']['shuffle_steps'] = 10
-            if not 'run_ddp' in new_params['device_dict']:
-                print('run_ddp not set...setting to false')
-                new_params['device_dict']['run_ddp'] = False
-            if new_params['device_dict']['run_ddp'] == True:
-                if not 'ddp_backend' in new_params['device_dict']:
-                    print('ddp_backend not set while using DDP...killing job...')
-                    exit(0)
-                if not 'world_size' in new_params['device_dict']:
-                    print(
-                        'world_size not set while using DDP...attempting to grab current world_size based on GPU count...')
-                    new_params['device_dict']['world_size'] = torch.cuda.device_count()
-            if new_params['device_dict']['run_ddp'] == False:
-                new_params['device_dict']['world_size'] = 1
-            if not 'dynamic_lr' in new_params['model_dict']['optimizer_params']:
-                print('WARNING: Dynamic learning rates not set...detting to false')
-                new_params['model_dict']['optimizer_params']['dynamic_lr'] = False
-            if new_params['model_dict']['optimizer_params']['dynamic_lr'] == True:
-                if not 'dist_type' in new_params['model_dict']['optimizer_params']:
-                    print('No dict_type chosen while using dynamic learning rates...killing job...')
-                    exit(0)
-                if not 'params_group' in new_params['model_dict']['optimizer_params']:
-                    print('No params_group set while using dynamic learning rates...killing job...')
-                    exit(0)
-                if not 'lr_scale' in new_params['model_dict']['optimizer_params']:
-                    print('No lr_scale set while using dynamic learning rates...killing job...')
-                    exit(0)
-            if not 'shuffle_loader' in new_params['loader_dict']:
-                print('WARNING: shuffle_loader not set...setting to false')
-                new_params['loader_dict']['shuffle_loader'] = False
-            if not 'batch_size' in new_params['loader_dict']:
-                print('batch_size not set in loader dictionary...killing job...')
+                        new_params['model_dict']['train_tolerance'] = [-1.0, new_params['model_dict']['train_tolerance']]
+        if not 'max_deltas' in new_params['model_dict']:
+            print('WARNGING: max_deltas not set...setting to 3')
+            new_params['model_dict']['max_deltas'] = 3
+        if not 'shuffle_steps' in new_params['loader_dict']:
+            print('WARNGING: shuffle_Steps not set...setting to 10')
+            new_params['loader_dict']['shuffle_steps'] = 10
+        if not 'run_ddp' in new_params['device_dict']:
+            print('run_ddp not set...setting to false')
+            new_params['device_dict']['run_ddp'] = False
+        if new_params['device_dict']['run_ddp'] == True:
+            if not 'ddp_backend' in new_params['device_dict']:
+                print('ddp_backend not set while using DDP...killing job...')
                 exit(0)
-            else:
-                if len(new_params['loader_dict']['batch_size']) != 3:
-                    print('batch_size length does not equal 3...killing job...')
-                    exit(0)
+            if not 'world_size' in new_params['device_dict']:
+                print(
+                        'world_size not set while using DDP...attempting to grab current world_size based on GPU count...')
+                new_params['device_dict']['world_size'] = torch.cuda.device_count()
+        if new_params['device_dict']['run_ddp'] == False:
+            new_params['device_dict']['world_size'] = 1
+        if not 'dynamic_lr' in new_params['model_dict']['optimizer_params']:
+            print('WARNING: Dynamic learning rates not set...detting to false')
+            new_params['model_dict']['optimizer_params']['dynamic_lr'] = False
+        if new_params['model_dict']['optimizer_params']['dynamic_lr'] == True:
+            if not 'dist_type' in new_params['model_dict']['optimizer_params']:
+                print('No dict_type chosen while using dynamic learning rates...killing job...')
+                exit(0)
+            if not 'params_group' in new_params['model_dict']['optimizer_params']:
+                print('No params_group set while using dynamic learning rates...killing job...')
+                exit(0)
+            if not 'lr_scale' in new_params['model_dict']['optimizer_params']:
+                print('No lr_scale set while using dynamic learning rates...killing job...')
+                exit(0)
+        if not 'shuffle_loader' in new_params['loader_dict']:
+            print('WARNING: shuffle_loader not set...setting to false')
+            new_params['loader_dict']['shuffle_loader'] = False
+        if not 'batch_size' in new_params['loader_dict']:
+            print('batch_size not set in loader dictionary...killing job...')
+            exit(0)
+        else:
+            if len(new_params['loader_dict']['batch_size']) != 3:
+                print('batch_size length does not equal 3...killing job...')
+                exit(0)
         check = False
         if 'device' in new_params['device_dict']:
             for option in self.device_options:
@@ -289,6 +283,7 @@ class Catalyst():
         if not 'loader_dict' in new_params:
             print('No loader dictionary set...killing run...')
             exit(0)
+        '''
         set_spawn_method(new_params)
         new_params['device_dict']['system_info'] = get_system_info()
         self.parameters = new_params

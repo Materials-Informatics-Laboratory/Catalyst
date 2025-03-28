@@ -6,6 +6,7 @@ from torch_geometric.utils import scatter
 
 from ....graph.graph import Generic_Graph_Data, Atomic_Graph_Data
 from ....ml.utils.predict import accumulate_predictions
+
 class SODAS():
     def __init__(self, mod, ls_mod):
         super().__init__()
@@ -14,17 +15,6 @@ class SODAS():
         self.model.eval()
         self.dim_model = ls_mod
         self.preprocess = None
-        self.device = 'cpu'
-
-    def send_model(self,device='cuda'):
-        self.device = device
-        self.model.to(device)
-        if device == 'cpu':
-            try:
-                torch.cuda.empty_cache()
-            except:
-                print('Clearing cuda cache failed...')
-                pass
 
     def generate_gnn_latent_space(self,parameters,loader,global_data=True):
         # Run a forward pass
@@ -81,11 +71,6 @@ class SODAS():
 
         return data
 
-    def clear_model(self):
-        self.model.cpu()
-        del self.model
-        if self.device == 'cuda':
-            torch.cuda.empty_cache()
 
 
 

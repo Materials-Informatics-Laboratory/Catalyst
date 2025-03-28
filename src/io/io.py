@@ -142,9 +142,9 @@ def setup_model(cat,rank=0,data_only=False,load=False):
     if data_only:
         return torch.load(cat.parameters['io_dict']['loaded_model_name'])
     else:
-        cat.set_model()
-        cat.model.to(cat.parameters['device_dict']['device'])
-        model = cat.model
+        #cat.set_model()
+        #cat.model.to(cat.parameters['device_dict']['device'])
+        model = cat.parameters['model_dict']['model']
         if load:
             model_data = torch.load(cat.parameters['io_dict']['loaded_model_name'])
             model.load_state_dict(model_data['model'])

@@ -7,6 +7,7 @@ from catalyst.src.ml.utils.distributed import cuda_destroy
 import catalyst.src.utilities.sampling as sampling
 from catalyst.src.io.io import load_dictionary, save_dictionary
 from catalyst.src.observer.params import Catalyst
+from catalyst.src.ml.utils.loss import MaxNpercent
 
 from torch_geometric.loader import DataLoader
 import torch.multiprocessing as mp
@@ -140,12 +141,12 @@ def project_data(cat):
         y.append(data.y)
     loader = DataLoader(graph_data, batch_size=100, shuffle=False, follow_batch=follow_batch,
                                 num_workers=cat.parameters['loader_dict']['num_workers'])
-    encoded_data = cat.parameters['characterization_dict']['model'].generate_gnn_latent_space(parameters=cat.parameters,loader=loader)
+    encoded_data = cat.parameters['model_dict']['model'].generate_gnn_latent_space(parameters=cat.parameters,loader=loader)
 
     encoded_data = np.array(encoded_data)
-    cat.parameters['characterization_dict']['model'].fit_preprocess(data=encoded_data)
-    cat.parameters['characterization_dict']['model'].fit_dim_red(data=encoded_data)
-    projected_data = cat.parameters['characterization_dict']['model'].project_data(data=encoded_data)
+    cat.parameters['model_dict']['model'].fit_preprocess(data=encoded_data)
+    cat.parameters['model_dict']['model'].fit_dim_red(data=encoded_data)
+    projected_data = cat.parameters['model_dict']['model'].project_data(data=encoded_data)
     stored_projections = dict(
             projections=projected_data,
             gids=gids
@@ -588,18 +589,9 @@ if __name__ == '__main__':
             num_workers=0,
             shuffle_steps=10
         ),
-        characterization_dict=dict(
-            model=SODAS(mod=ALIGNN(
-                encoder=Encoder_atomic(num_species=n_types, cutoff=cutoff, dim=projection_indim, act=nn.SiLU()),
-                processor=Processor(num_convs=n_convs, dim=projection_indim, conv_type='mesh',act=nn.SiLU()),
-                decoder=Decoder(in_dim=projection_indim, out_dim=projection_outdim, act=nn.SiLU())
-            ),
-                ls_mod=umap_.UMAP(n_neighbors=10, min_dist=0.1, n_components=2)
-            ),
-        ),
         model_dict=dict(
             n_models=1,
-            num_epochs=[2,250],
+            num_epochs=[5,5],
             train_delta=[0.01, 0.001],
             train_tolerance=[1.0, 0.0001],
             max_deltas=4,
@@ -609,12 +601,7 @@ if __name__ == '__main__':
                 'percent':0.1
             },
             accumulate_loss=['exact', 'exact', 'exact'],
-            model=ALIGNN(
-                encoder=Encoder_atomic(num_species=n_types, cutoff=cutoff, dim=regression_indim, act=nn.SiLU()),
-                processor=Processor(num_convs=n_convs, dim=regression_indim, conv_type='mesh', act=nn.SiLU()),
-                decoder=PositiveScalarsDecoder(dim=regression_indim, act=nn.SiLU()),
-                #decoder=Decoder(in_dim=regression_indim, out_dim=regression_outdim, act=nn.SiLU(),combine=False)
-            ),
+            model=None,
             interpretable=False,
             pre_training=True,
             restart_training=False,
@@ -627,12 +614,26 @@ if __name__ == '__main__':
             )
         )
     )
+    sodas_model = SODAS(
+                        mod=ALIGNN(
+                            encoder=Encoder_atomic(num_species=n_types, cutoff=cutoff, dim=projection_indim, act=nn.SiLU()),
+                            processor=Processor(num_convs=n_convs, dim=projection_indim, conv_type='mesh',act=nn.SiLU()),
+                            decoder=Decoder(in_dim=projection_indim, out_dim=projection_outdim, act=nn.SiLU())
+                        ),
+                        ls_mod=umap_.UMAP(n_neighbors=10, min_dist=0.1, n_components=2)
+                    )
+    alignnd_model = ALIGNN(
+                        encoder=Encoder_atomic(num_species=n_types, cutoff=cutoff, dim=regression_indim, act=nn.SiLU()),
+                        processor=Processor(num_convs=n_convs, dim=regression_indim, conv_type='mesh', act=nn.SiLU()),
+                        decoder=PositiveScalarsDecoder(dim=regression_indim, act=nn.SiLU()),
+                        #decoder=Decoder(in_dim=regression_indim, out_dim=regression_outdim, act=nn.SiLU(),combine=False)
+                    )
     cat = Catalyst()
     cat.set_params(parameters)
 
     gen_graphs =0
-    project_graphs =0
-    gen_samples = 0
+    project_graphs =1
+    gen_samples = 1
     perform_train = 1
     perform_retrain = 0
     perform_test = 1
@@ -644,12 +645,12 @@ if __name__ == '__main__':
     if gen_graphs:
         generate_data(cat,visualize_final=True)
     if project_graphs:
-        cat.parameters['characterization_dict']['model'].send_model()
+        cat.set_model(sodas_model)
         raw_data, projections = project_data(cat)
-        cat.parameters['characterization_dict']['model'].clear_model()
     if gen_samples:
         sample_data(cat,graph_data=raw_data,projected_data=projections)
     if perform_train:
+        cat.set_model(alignnd_model)
         train_model(cat)
         if perform_retrain:
             cat.parameters['model_dict']['restart_training'] = True
@@ -662,6 +663,7 @@ if __name__ == '__main__':
         if plot_training:
             plot_training_results(cat,retrain=perform_retrain)
     elif perform_retrain:
+        cat.set_model(alignnd_model)
         cat.parameters['model_dict']['restart_training'] = True
         cat.parameters['io_dict']['loaded_model_name'] = None
         del cat.parameters['io_dict']['loaded_model_name']
@@ -670,10 +672,12 @@ if __name__ == '__main__':
                                    'training', '0', 'model*'))[0]
         retrain_model(cat)
     if perform_test:
+        cat.set_model(alignnd_model)
         test_model(cat)
     if plot_test:
         plot_test_data(cat)
     if perform_predictions:
+        cat.set_model(alignnd_model)
         predict(cat,perform_ranking)
 
 
