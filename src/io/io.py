@@ -76,65 +76,65 @@ def setup_dataloader(data,cat,epoch=-1,reshuffle=False,mode=0):
                 train_sampler.set_epoch(epoch)
                 valid_sampler.set_epoch(epoch)
                 loader_train = DataLoader(data['training'], batch_size=int(
-                    parameters['loader_dict']['batch_size'][1] / parameters['device_dict']['world_size']),
+                    parameters['loader_dict']['batch_size'][0] / parameters['device_dict']['world_size']),
                                           pin_memory=parameters['device_dict']['pin_memory'],
                                           follow_batch=follow_batch,
                                           sampler=train_sampler,
                                           num_workers=parameters['loader_dict']['num_workers'])
                 loader_valid = DataLoader(data['validation'],batch_size=int(
-                    parameters['loader_dict']['batch_size'][2] / parameters['device_dict']['world_size']),
+                    parameters['loader_dict']['batch_size'][1] / parameters['device_dict']['world_size']),
                                           pin_memory=parameters['device_dict']['pin_memory'],
                                           follow_batch=follow_batch,
                                           sampler=valid_sampler,
                                           num_workers=parameters['loader_dict']['num_workers'])
             else:
                 loader_train = DataLoader(data['training'], pin_memory=parameters['device_dict']['pin_memory'],
-                                          batch_size=parameters['loader_dict']['batch_size'][1],
+                                          batch_size=parameters['loader_dict']['batch_size'][0],
                                           shuffle=parameters['loader_dict']['shuffle_loader'],
                                           follow_batch=follow_batch,
                                           num_workers=parameters['loader_dict']['num_workers'])
                 loader_valid = DataLoader(data['validation'], pin_memory=parameters['device_dict']['pin_memory'],
-                                          batch_size=parameters['loader_dict']['batch_size'][2],
+                                          batch_size=parameters['loader_dict']['batch_size'][1],
                                           shuffle=parameters['loader_dict']['shuffle_loader'],
                                           follow_batch=follow_batch,
                                           num_workers=parameters['loader_dict']['num_workers'])
         else:
             if parameters['device_dict']['run_ddp']:
                 loader_train = DataLoader(data['training'], batch_size=int(
-                    parameters['loader_dict']['batch_size'][1] / parameters['device_dict']['world_size']),
+                    parameters['loader_dict']['batch_size'][0] / parameters['device_dict']['world_size']),
                                           pin_memory=parameters['device_dict']['pin_memory'],
                                           follow_batch=follow_batch,
                                           sampler=DistributedSampler(data['training'],
                                                                      shuffle=False),
                                           num_workers=parameters['loader_dict']['num_workers'])
                 loader_valid = DataLoader(data['validation'], follow_batch=follow_batch, batch_size=int(
-                    parameters['loader_dict']['batch_size'][2] / parameters['device_dict']['world_size']),
+                    parameters['loader_dict']['batch_size'][1] / parameters['device_dict']['world_size']),
                                           pin_memory=parameters['device_dict']['pin_memory'],
                                           shuffle=False, sampler=DistributedSampler(data['validation']),
                                           num_workers=parameters['loader_dict']['num_workers'])
             else:
                 loader_train = DataLoader(data['training'], pin_memory=parameters['device_dict']['pin_memory'],
-                                          batch_size=parameters['loader_dict']['batch_size'][1],
+                                          batch_size=parameters['loader_dict']['batch_size'][0],
                                           shuffle=parameters['loader_dict']['shuffle_loader'],
                                           follow_batch=follow_batch,
                                           num_workers=parameters['loader_dict']['num_workers'])
 
                 loader_valid = DataLoader(data['validation'], follow_batch=follow_batch,
                                           pin_memory=parameters['device_dict']['pin_memory'],
-                                          batch_size=parameters['loader_dict']['batch_size'][2], shuffle=False,
+                                          batch_size=parameters['loader_dict']['batch_size'][1], shuffle=False,
                                           num_workers=parameters['loader_dict']['num_workers'])
         return loader_train, loader_valid
     elif mode == 2:
         if parameters['device_dict']['run_ddp']:
             loader_valid = DataLoader(data['validation'], follow_batch=follow_batch, batch_size=int(
-                    parameters['loader_dict']['batch_size'][2] / parameters['device_dict']['world_size']),
+                    parameters['loader_dict']['batch_size'][1] / parameters['device_dict']['world_size']),
                                           pin_memory=parameters['device_dict']['pin_memory'],
                                           shuffle=False, sampler=DistributedSampler(data['validation']),
                                           num_workers=parameters['loader_dict']['num_workers'])
         else:
             loader_valid = DataLoader(data['validation'], follow_batch=follow_batch,
                                           pin_memory=parameters['device_dict']['pin_memory'],
-                                          batch_size=parameters['loader_dict']['batch_size'][2], shuffle=False,
+                                          batch_size=parameters['loader_dict']['batch_size'][1], shuffle=False,
                                           num_workers=parameters['loader_dict']['num_workers'])
         return loader_valid
 

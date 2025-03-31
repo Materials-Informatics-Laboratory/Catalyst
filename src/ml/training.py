@@ -23,10 +23,7 @@ import gc
 
 def train(loader,model,parameters,optimizer,pretrain=False):
     model.train()
-    if pretrain:
-        loss_accum = parameters['model_dict']['accumulate_loss'][0]
-    else:
-        loss_accum = parameters['model_dict']['accumulate_loss'][1]
+    loss_accum = parameters['model_dict']['accumulate_loss']
     epoch_loss = 0.0
     if parameters['device_dict']['run_ddp'] == False:
         model.to(parameters['device_dict']['device'])
@@ -91,20 +88,20 @@ def run_training(rank,iteration,cat=None):
         dist_params = dict(
                 dist_type=parameters['model_dict']['optimizer_params']['dist_type'],
                 vars=parameters['model_dict']['optimizer_params']['lr_scale'],
-                size=parameters['model_dict']['num_epochs'][1],
+                size=parameters['model_dict']['num_epochs'],
                 floor=parameters['model_dict']['optimizer_params']['params_group']['lr']
             )
         lr_data = get_distribution(dist_params)
     else:
         lr_data = np.linspace(parameters['model_dict']['optimizer_params']['params_group']['lr'],
-                                  parameters['model_dict']['optimizer_params']['params_group']['lr'],parameters['model_dict']['num_epochs'][1])
+                                  parameters['model_dict']['optimizer_params']['params_group']['lr'],parameters['model_dict']['num_epochs'])
     if rank == 0:
         print('Training model ',iteration,' using ',len(data['training']), ' training points and ',len(data['validation']),' validation points...')
-    while ep < parameters['model_dict']['num_epochs'][1]:
+    while ep < parameters['model_dict']['num_epochs']:
         if rank == 0:
             if ep > 0:
                 start_time = time.time()
-            print('Epoch ',ep+1,' of ',parameters['model_dict']['num_epochs'][1],  ' lr_rate: ',lr_data[ep], 'loss_accum: ',parameters['model_dict']['accumulate_loss'][1])
+            print('Epoch ',ep+1,' of ',parameters['model_dict']['num_epochs'],  ' lr_rate: ',lr_data[ep], 'loss_accum: ',parameters['model_dict']['accumulate_loss'])
             sys.stdout.flush()
 
         if parameters['loader_dict']['shuffle_loader'] == True: #reshuffle training data to avoid overfitting
@@ -154,10 +151,10 @@ def run_training(rank,iteration,cat=None):
                 if rank == 0:
                     print('Running validation delta = ',sum(running_valid_delta)/len(running_valid_delta))
             if len(running_valid_delta) == parameters['model_dict']['max_deltas']:
-                if sum(running_valid_delta)/len(running_valid_delta)< parameters['model_dict']['train_delta'][1] and (sum(L_valid[-parameters['model_dict']['max_deltas']:])/parameters['model_dict']['max_deltas']) < parameters['model_dict']['train_tolerance'][1]:
+                if sum(running_valid_delta)/len(running_valid_delta)< parameters['model_dict']['train_delta'] and (sum(L_valid[-parameters['model_dict']['max_deltas']:])/parameters['model_dict']['max_deltas']) < parameters['model_dict']['train_tolerance']:
                     if rank == 0:
                         print('Validation delta satisfies set tolerance...exiting training loop...')
-                    ep = parameters['model_dict']['num_epochs'][1]
+                    ep = parameters['model_dict']['num_epochs']
                     met_tolerance = 1
         ep += 1
     if rank == 0:
@@ -204,21 +201,21 @@ def run_pre_training(rank,cat=None):
         dist_params = dict(
             dist_type=parameters['model_dict']['optimizer_params']['dist_type'],
             vars=parameters['model_dict']['optimizer_params']['lr_scale'],
-            size=parameters['model_dict']['num_epochs'][0],
+            size=parameters['model_dict']['num_epochs'],
             floor=parameters['model_dict']['optimizer_params']['params_group']['lr']
         )
         lr_data = get_distribution(dist_params)
     else:
         lr_data = np.linspace(parameters['model_dict']['optimizer_params']['params_group']['lr'],
                               parameters['model_dict']['optimizer_params']['params_group']['lr'],
-                              parameters['model_dict']['num_epochs'][0])
+                              parameters['model_dict']['num_epochs'])
     if rank == 0:
         print('Training using ', len(data['training']), ' training points')
-    while ep < parameters['model_dict']['num_epochs'][0]:
+    while ep < parameters['model_dict']['num_epochs']:
         if rank == 0:
             if ep > 0:
                 start_time = time.time()
-            print('Epoch ', ep+1, ' of ', parameters['model_dict']['num_epochs'][0], ' lr_rate: ',lr_data[ep])
+            print('Epoch ', ep+1, ' of ', parameters['model_dict']['num_epochs'], ' lr_rate: ',lr_data[ep])
             sys.stdout.flush()
 
         if parameters['loader_dict']['shuffle_loader'] == True and ep > 0:  # reshuffle training data to avoid overfitting
@@ -263,10 +260,10 @@ def run_pre_training(rank,cat=None):
                 if rank == 0:
                     print('Running training delta = ', sum(running_train_delta) / len(running_train_delta))
             if len(running_train_delta) == parameters['model_dict']['max_deltas']:
-                if sum(running_train_delta) / len(running_train_delta) < parameters['model_dict']['train_delta'][0] and (sum(L_train[-parameters['model_dict']['max_deltas']:])/parameters['model_dict']['max_deltas']) < parameters['model_dict']['train_tolerance'][0]:
+                if sum(running_train_delta) / len(running_train_delta) < parameters['model_dict']['train_delta'] and (sum(L_train[-parameters['model_dict']['max_deltas']:])/parameters['model_dict']['max_deltas']) < parameters['model_dict']['train_tolerance']:
                     if rank == 0:
                         print('Training delta satisfies set tolerance...exiting training loop...')
-                    ep = parameters['model_dict']['num_epochs'][0]
+                    ep = parameters['model_dict']['num_epochs']
                     met_tolerance = 1
         ep += 1
     if rank == 0:

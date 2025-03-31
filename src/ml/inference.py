@@ -44,7 +44,7 @@ def test_non_intepretable_internal(loader,model,parameters,ind_fn='all',rank=0):
     model.eval()
     loss_fn = loss_setup(params=parameters['model_dict']['loss_params'])
     epoch_loss = 0.0
-    loss_accum = parameters['model_dict']['accumulate_loss'][2]
+    loss_accum = parameters['model_dict']['accumulate_loss']
     if parameters['io_dict']['write_indv_pred']:
         values = [[],[],[]]
         gids = []
@@ -74,7 +74,7 @@ def test_non_intepretable_internal(loader,model,parameters,ind_fn='all',rank=0):
             'pred': values[0],
             'y': values[1],
             'loss': values[2],
-            'loss_fn': parameters['model_dict']['accumulate_loss'][2],
+            'loss_fn': parameters['model_dict']['accumulate_loss'],
             'vec':vec
         }
         if parameters['device_dict']['run_ddp']:

@@ -139,7 +139,7 @@ def project_data(cat):
     for data in graph_data:
         gids.append(data.gid)
         y.append(data.y)
-    loader = DataLoader(graph_data, batch_size=100, shuffle=False, follow_batch=follow_batch,
+    loader = DataLoader(graph_data, batch_size=parameters['loader_dict']['batch_size'][0], shuffle=False, follow_batch=follow_batch,
                                 num_workers=cat.parameters['loader_dict']['num_workers'])
     encoded_data = cat.parameters['model_dict']['model'].generate_gnn_latent_space(parameters=cat.parameters,loader=loader)
 
@@ -234,11 +234,11 @@ def sample_data(cat,graph_data,projected_data):
     del graph_data
     plt.show()
 
-def train_model(cat):
+def train_model(cat,pretrain=False):
     '''
     PERFORM MODEL TRAINING
     '''
-    if cat.parameters['model_dict']['pre_training']:
+    if pretrain:
         cat.parameters['io_dict']['samples_dir'] = None
         del cat.parameters['io_dict']['samples_dir']
         cat.parameters['io_dict']['samples_dir'] = os.path.join(cat.parameters['io_dict']['main_path'], 'samples',
@@ -260,23 +260,23 @@ def train_model(cat):
         del cat.parameters['io_dict']['loaded_model_name']
         cat.parameters['io_dict']['loaded_model_name'] = glob.glob(os.path.join(cat.parameters['io_dict']['main_path'], 'models',
                                'pretraining', 'pre*'))[0]
-
-    cat.parameters['io_dict']['samples_dir'] = None
-    del cat.parameters['io_dict']['samples_dir']
-    cat.parameters['io_dict']['samples_dir'] = os.path.join(cat.parameters['io_dict']['main_path'], 'samples','model_samples')
-    for iteration in range(cat.parameters['model_dict']['n_models']):
-        if cat.parameters['device_dict']['run_ddp']:
-            print('Performing training on model ', iteration)
-            processes = []
-            for rank in range(cat.parameters['device_dict']['world_size']):
-                p = mp.Process(target=run_training, args=(rank, iteration, cat,))
-                p.start()
-                processes.append(p)
-            for p in processes:
-                p.join()
-            cuda_destroy()
-        else:
-            run_training(rank=0, iteration=iteration, cat=cat)
+    else:
+        cat.parameters['io_dict']['samples_dir'] = None
+        del cat.parameters['io_dict']['samples_dir']
+        cat.parameters['io_dict']['samples_dir'] = os.path.join(cat.parameters['io_dict']['main_path'], 'samples','model_samples')
+        for iteration in range(cat.parameters['model_dict']['n_models']):
+            if cat.parameters['device_dict']['run_ddp']:
+                print('Performing training on model ', iteration)
+                processes = []
+                for rank in range(cat.parameters['device_dict']['world_size']):
+                    p = mp.Process(target=run_training, args=(rank, iteration, cat,))
+                    p.start()
+                    processes.append(p)
+                for p in processes:
+                    p.join()
+                cuda_destroy()
+            else:
+                run_training(rank=0, iteration=iteration, cat=cat)
     return
 
 def retrain_model(cat):
@@ -585,22 +585,22 @@ if __name__ == '__main__':
         ),
         loader_dict=dict(
             shuffle_loader=False,
-            batch_size=[10,100,100],
+            batch_size=[100,-1],
             num_workers=0,
             shuffle_steps=10
         ),
         model_dict=dict(
             n_models=1,
-            num_epochs=[5,5],
-            train_delta=[0.01, 0.001],
-            train_tolerance=[1.0, 0.0001],
+            num_epochs=5,
+            train_delta=0.001,
+            train_tolerance=1.0,
             max_deltas=4,
             loss_params={
                 'function':'MaxNpercent',
                 'sub_function':torch.nn.L1Loss(),
                 'percent':0.1
             },
-            accumulate_loss=['exact', 'exact', 'exact'],
+            accumulate_loss='exact',
             model=None,
             interpretable=False,
             pre_training=True,
@@ -651,7 +651,18 @@ if __name__ == '__main__':
         sample_data(cat,graph_data=raw_data,projected_data=projections)
     if perform_train:
         cat.set_model(alignnd_model)
-        train_model(cat)
+        if parameters['model_dict']['pre_training']:
+            cat.parameters['loader_dict']['batch_size'] = [10,-1]
+            cat.parameters['model_dict']['num_epochs'] = 5
+            cat.parameters['model_dict']['train_delta'] = 0.001
+            cat.parameters['model_dict']['train_tolerance'] = 1.0
+            train_model(cat,True)
+        cat.parameters['loader_dict']['batch_size'] = [100, 100]
+        cat.parameters['model_dict']['num_epochs'] = 5
+        cat.parameters['model_dict']['train_delta'] = 0.001
+        cat.parameters['model_dict']['train_tolerance'] = 0.001
+        train_model(cat, False)
+
         if perform_retrain:
             cat.parameters['model_dict']['restart_training'] = True
             cat.parameters['io_dict']['loaded_model_name'] = None
