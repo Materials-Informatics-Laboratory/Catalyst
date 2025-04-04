@@ -1,4 +1,5 @@
 from scipy.spatial.distance import squareform, pdist
+from sklearn.neighbors import NearestNeighbors
 from sklearn.neighbors import KDTree
 from scipy.spatial import distance
 from scipy import stats
@@ -35,7 +36,6 @@ def generate_latent_space_path(X,k=7,boundaries=[0,-1],version='1',reduction=1.0
         XX.insert(0,avg)
     X = np.array(XX)
     sink = len(X) - 1
-
     D = squareform(pdist(X, 'minkowski', p=2.))
     # select the kNN for each datapoint
     check = True
@@ -88,7 +88,7 @@ def generate_latent_space_path(X,k=7,boundaries=[0,-1],version='1',reduction=1.0
         for dist in path_distances:
             d += dist
             travelled_distances.append((d / total_distance))
-        x_to_path, x_to_path_dist = nearest_path_node(X, weighted_path, travelled_distances)
+        x_to_path, x_to_path_dist = nearest_path_node(X, weighted_path)
 
         data = {
             "path": x_to_path,
@@ -130,13 +130,11 @@ def generate_latent_space_path(X,k=7,boundaries=[0,-1],version='1',reduction=1.0
         return data
     elif version == '3':
         new_weighted_path = []
-        #new_weighted_path.append(weighted_path[0])
         take = math.ceil(reduction * len(weighted_path))
         accumulated_path = []
         for i in range(len(weighted_path)):
             accumulated_path.append(weighted_path[i])
             if i % take == 0:
-
                 avg_path = [0.0]*len(X[0])
                 for a_path in accumulated_path:
                     for j in range(len(X[a_path])):
@@ -145,8 +143,6 @@ def generate_latent_space_path(X,k=7,boundaries=[0,-1],version='1',reduction=1.0
                     avg_path[j] /= len(accumulated_path)
                 new_weighted_path.append(avg_path)
                 accumulated_path = []
-        #weighted_path = new_weighted_path.copy()
-        #new_weighted_path.append(weighted_path[-1])
         binned_data = bin_data_by_nearest_node(X,new_weighted_path,version='3')
         weighted_path = get_cluster_centroids(X,binned_data)
         path_distances = []
@@ -203,49 +199,30 @@ def bin_data_by_nearest_node(X,nodes,version='1'):
         bins[bin].append(p)
     return bins
 
-def nearest_path_node(x,nodes,distances):
-    nn = []
-    nd = []
-    for val in x:
-        nn.append(-1)
-        nd.append(-1)
-        d = 1E30
-        for node in nodes:
-            A = tuple([val,x[node]])
-            D = squareform(pdist(A, 'minkowski', p=2.))
-            r = D[0][1]
-            if r < d:
-                d = r
-                nn[-1] = node
-                nd[-1] = distances[nodes.index(node)]
-    return nn, nd
+def nearest_path_node(x,nodes):
+    knn = NearestNeighbors(n_neighbors=1, algorithm='auto')
+    knn.fit(x[nodes])
+    distances, indices = knn.kneighbors(x)
+
+    return indices.flatten(), distances.flatten()
 
 def find_nearest_nodes(x,nodes,k=1):
-    if k >= len(nodes):
-        k = len(nodes)
-    nearest_ids = [-1]*k
-    distances = [0.0]*k
-    checked_indices = []
-    current_index = 0
-    while current_index < k:
-        min_dist = sys.float_info.max
-        for i,node in enumerate(nodes):
-             if i not in checked_indices:
-                d = distance.euclidean(x,node)
-                if d < min_dist and d > 0.0:
-                    min_dist = d
-                    nearest_ids[current_index] = i
-                    distances[current_index] = d
-        checked_indices.append(nearest_ids[current_index])
-        current_index += 1
-    return nearest_ids, distances
+    knn = NearestNeighbors(n_neighbors=k+1, algorithm='auto')
+    knn.fit(nodes)
+    distances, indices = knn.kneighbors(x)
+    return indices,distances
 
 def assign_gammas(ref_data,new_data,path_data,version='1',k=1,iterations=1,scale=1,cutoff=10.0):
     gammas = path_data['d']
 
     nodes = []
 
+    if iterations > 1:
+        new_ids = []
+        new_dists = []
+        new_ids, new_dists = find_nearest_nodes(new_data, new_data, k)
     reference = [path_data['weighted_path'][i] for i in range(len(path_data['weighted_path']))]
+    ref_ids, ref_dists = find_nearest_nodes(new_data, reference, k)
 
     iter = 0
     while iter < iterations:
@@ -254,7 +231,8 @@ def assign_gammas(ref_data,new_data,path_data,version='1',k=1,iterations=1,scale
             avg_gamma = 0.0
             weight = 0.0
             if iter == 0:
-                ids, dists = find_nearest_nodes(point,reference,k)
+                ids = ref_ids[i]
+                dists = ref_dists[i]
                 if version == '2':
                     for j in range(len(ids)):
                         if dists[j] > cutoff:
@@ -268,7 +246,8 @@ def assign_gammas(ref_data,new_data,path_data,version='1',k=1,iterations=1,scale
                 else:
                     avg_gamma += gammas[ids[0]]
             else:
-                ids, dists = find_nearest_nodes(point, new_data, k)
+                ids = new_ids[i]
+                dists = new_dists[i]
                 if version == '2':
                     for j in range(len(ids)):
                         if dists[j] > cutoff:
@@ -295,8 +274,6 @@ def manual_convolution(data,gammas,k=2,iterations=1,cutoff=10):
         for i in range(len(gammas)):
             if isinstance(gammas[i], float):
                 gammas[i] = [torch.tensor(gammas[i])]
-
-        #ids, dists = find_nearest_nodes(reference_point, data, k)
         for i, d in enumerate(data):
             for j in range(len(ids[i])):
                 if dists[i][j] > cutoff:

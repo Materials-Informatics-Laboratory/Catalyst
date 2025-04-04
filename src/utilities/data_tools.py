@@ -1,4 +1,8 @@
 
+def parallel_sort(X,Y):
+    # sort by values in y
+    return [x for _, x in sorted(zip(Y, X), key=lambda pair: pair[0])], sorted(Y)
+
 def make_pairs(list1, list2):
     return list(zip(list1, list2))
 
