@@ -152,17 +152,18 @@ def determine_global_gammas(ml,global_data):
     '''
     order projections in terms of y value
     '''
+    import matplotlib.colors as mcolors
     y_copy = [y.item() for y in global_data['y']]
     pp,yy = parallel_sort(global_data['projections'],y_copy)
     global_data['projections'] = np.array(pp)
     global_data['y'] = yy
 
-    path_data = generate_latent_space_path(global_data['projections'], boundaries=[75,-75], k=4,version='1')
-    assigned_gammas = assign_gammas(global_data['projections'], global_data['projections'], path_data, version='2',k=15,
-                                    iterations=2, scale=0.01, cutoff=10.0
+    fig, ax = plt.subplots(nrows=4, ncols=4, sharex=True, sharey=True)
+
+    path_data = generate_latent_space_path(global_data['projections'], boundaries=[75,-75], k=4,version='1',random_neighbors=False)
+    assigned_gammas = assign_gammas(global_data['projections'], global_data['projections'], path_data, smearing='sum',k=1,
+                                    iterations=1, cutoff=10.0
                                     )
-    #assigned_gammas = assign_gammas(global_data['projections'], global_data['projections'], path_data, k=1)
-    fig, ax = plt.subplots(nrows=2, ncols=4, sharex=True, sharey=True)
     ax[0][0].scatter(global_data['projections'][:, 0], global_data['projections'][:, 1], c=global_data['y'])
 
     ax[0][1].plot(path_data['weighted_path'][:, 0],
@@ -179,16 +180,19 @@ def determine_global_gammas(ml,global_data):
     for i in range(len(global_data['graphs'])):
         delta = global_data['y'][i] - assigned_gammas[i]
         deltas.append(delta)
+    norm = mcolors.Normalize(vmin=min(deltas), vmax=max(deltas))
+    mappable = cm.ScalarMappable(norm=norm, cmap='terrain')
+    fig.colorbar(mappable, ax=ax[0][3])
 
     ax[0][3].scatter(global_data['projections'][:, 0], global_data['projections'][:, 1], c=deltas,
-                     cmap='bwr', edgecolor='k')
+                     cmap='terrain', edgecolor='k')
     ax[0][3].set_title(np.average(np.array(deltas)))
 
-    path_data = generate_latent_space_path(global_data['projections'], boundaries=[50,-50], k=4,version='3',reduction=0.005)
-    assigned_gammas = assign_gammas(global_data['projections'], global_data['projections'], path_data,version='2',k=15,
-                                    iterations=2, scale=0.01,cutoff=10.0
+    assigned_gammas = assign_gammas(global_data['projections'], global_data['projections'], path_data, smearing='tanh',
+                                    k=1,
+                                    iterations=4, cutoff=10.0
                                     )
-
+    #fig, ax = plt.subplots(nrows=4, ncols=4, sharex=True, sharey=True)
     ax[1][0].scatter(global_data['projections'][:, 0], global_data['projections'][:, 1], c=global_data['y'])
 
     ax[1][1].plot(path_data['weighted_path'][:, 0],
@@ -205,22 +209,213 @@ def determine_global_gammas(ml,global_data):
     for i in range(len(global_data['graphs'])):
         delta = global_data['y'][i] - assigned_gammas[i]
         deltas.append(delta)
+    norm = mcolors.Normalize(vmin=min(deltas), vmax=max(deltas))
+    mappable = cm.ScalarMappable(norm=norm, cmap='terrain')
+    fig.colorbar(mappable, ax=ax[1][3])
 
     ax[1][3].scatter(global_data['projections'][:, 0], global_data['projections'][:, 1], c=deltas,
-                     cmap='bwr', edgecolor='k')
+                     cmap='terrain', edgecolor='k')
     ax[1][3].set_title(np.average(np.array(deltas)))
 
-    import matplotlib.colors as mcolors
+    path_data = generate_latent_space_path(global_data['projections'], boundaries=[75,-75], k=4,version='1',random_neighbors=True)
+
+    assigned_gammas = assign_gammas(global_data['projections'], global_data['projections'], path_data, smearing='sum',
+                                    k=1,
+                                    iterations=1, cutoff=10.0
+                                    )
+    #fig, ax = plt.subplots(nrows=4, ncols=4, sharex=True, sharey=True)
+    ax[2][0].scatter(global_data['projections'][:, 0], global_data['projections'][:, 1], c=global_data['y'])
+
+    ax[2][1].plot(path_data['weighted_path'][:, 0],
+                  path_data['weighted_path'][:, 1], color='k', markeredgecolor='r', marker='o',
+                  linestyle='-', markerfacecolor='w')
+    ax[2][1].scatter(path_data['weighted_path'][0][0],
+                     path_data['weighted_path'][0][1], c='b', s=250)
+    ax[2][1].scatter(path_data['weighted_path'][-1][0],
+                     path_data['weighted_path'][-1][1], c='k', s=250)
+
+    ax[2][2].scatter(global_data['projections'][:, 0], global_data['projections'][:, 1], c=assigned_gammas)
+
+    deltas = []
+    for i in range(len(global_data['graphs'])):
+        delta = global_data['y'][i] - assigned_gammas[i]
+        deltas.append(delta)
     norm = mcolors.Normalize(vmin=min(deltas), vmax=max(deltas))
-    mappable = cm.ScalarMappable(norm=norm, cmap='bwr')
-    fig.colorbar(mappable, ax=ax[0][3])
+    mappable = cm.ScalarMappable(norm=norm, cmap='terrain')
+    fig.colorbar(mappable, ax=ax[2][3])
+
+    ax[2][3].scatter(global_data['projections'][:, 0], global_data['projections'][:, 1], c=deltas,
+                     cmap='terrain', edgecolor='k')
+    ax[2][3].set_title(np.average(np.array(deltas)))
+
+    assigned_gammas = assign_gammas(global_data['projections'], global_data['projections'], path_data,smearing='tanh',k=10,
+                                    iterations=4,cutoff=10.0,scale=10.0
+                                    )
+
+    ax[3][0].scatter(global_data['projections'][:, 0], global_data['projections'][:, 1], c=global_data['y'])
+
+    ax[3][1].plot(path_data['weighted_path'][:, 0],
+                  path_data['weighted_path'][:, 1], color='k', markeredgecolor='r', marker='o',
+                  linestyle='-', markerfacecolor='w')
+    ax[3][1].scatter(path_data['weighted_path'][0][0],
+                     path_data['weighted_path'][0][1], c='b', s=250)
+    ax[3][1].scatter(path_data['weighted_path'][-1][0],
+                     path_data['weighted_path'][-1][1], c='k', s=250)
+
+    ax[3][2].scatter(global_data['projections'][:, 0], global_data['projections'][:, 1], c=assigned_gammas)
+
+    deltas = []
+    for i in range(len(global_data['graphs'])):
+        delta = global_data['y'][i] - assigned_gammas[i]
+        deltas.append(delta)
+    norm = mcolors.Normalize(vmin=min(deltas), vmax=max(deltas))
+    mappable = cm.ScalarMappable(norm=norm, cmap='terrain')
+    fig.colorbar(mappable, ax=ax[3][3])
+
+    ax[3][3].scatter(global_data['projections'][:, 0], global_data['projections'][:, 1], c=deltas,
+                     cmap='terrain', edgecolor='k')
+    ax[3][3].set_title(np.average(np.array(deltas)))
+
+    fig2, ax2 = plt.subplots(nrows=4, ncols=4, sharex=True, sharey=True)
+
+    path_data = generate_latent_space_path(global_data['projections'], boundaries=[75, -75], k=4, version='2',
+                                           random_neighbors=False,reduction=0.05)
+    assigned_gammas = assign_gammas(global_data['projections'], global_data['projections'], path_data, smearing='sum',
+                                    k=1,
+                                    iterations=1, cutoff=10.0
+                                    )
+    ax2[0][0].scatter(global_data['projections'][:, 0], global_data['projections'][:, 1], c=global_data['y'])
+
+    ax2[0][1].plot(path_data['weighted_path'][:, 0],
+                  path_data['weighted_path'][:, 1], color='k', markeredgecolor='r', marker='o',
+                  linestyle='-', markerfacecolor='w')
+    ax2[0][1].scatter(path_data['weighted_path'][0][0],
+                     path_data['weighted_path'][0][1], c='b', s=250)
+    ax2[0][1].scatter(path_data['weighted_path'][-1][0],
+                     path_data['weighted_path'][-1][1], c='k', s=250)
+
+    ax2[0][2].scatter(global_data['projections'][:, 0], global_data['projections'][:, 1], c=assigned_gammas)
+
+    deltas = []
+    for i in range(len(global_data['graphs'])):
+        delta = global_data['y'][i] - assigned_gammas[i]
+        deltas.append(delta)
+    norm = mcolors.Normalize(vmin=min(deltas), vmax=max(deltas))
+    mappable = cm.ScalarMappable(norm=norm, cmap='terrain')
+    fig2.colorbar(mappable, ax=ax2[0][3])
+
+    ax2[0][3].scatter(global_data['projections'][:, 0], global_data['projections'][:, 1], c=deltas,
+                     cmap='terrain', edgecolor='k')
+    ax2[0][3].set_title(np.average(np.array(deltas)))
+
+    assigned_gammas = assign_gammas(global_data['projections'], global_data['projections'], path_data, smearing='tanh',
+                                    k=1,
+                                    iterations=4, cutoff=10.0
+                                    )
+    # fig, ax = plt.subplots(nrows=4, ncols=4, sharex=True, sharey=True)
+    ax2[1][0].scatter(global_data['projections'][:, 0], global_data['projections'][:, 1], c=global_data['y'])
+
+    ax2[1][1].plot(path_data['weighted_path'][:, 0],
+                  path_data['weighted_path'][:, 1], color='k', markeredgecolor='r', marker='o',
+                  linestyle='-', markerfacecolor='w')
+    ax2[1][1].scatter(path_data['weighted_path'][0][0],
+                     path_data['weighted_path'][0][1], c='b', s=250)
+    ax2[1][1].scatter(path_data['weighted_path'][-1][0],
+                     path_data['weighted_path'][-1][1], c='k', s=250)
+
+    ax2[1][2].scatter(global_data['projections'][:, 0], global_data['projections'][:, 1], c=assigned_gammas)
+
+    deltas = []
+    for i in range(len(global_data['graphs'])):
+        delta = global_data['y'][i] - assigned_gammas[i]
+        deltas.append(delta)
+    norm = mcolors.Normalize(vmin=min(deltas), vmax=max(deltas))
+    mappable = cm.ScalarMappable(norm=norm, cmap='terrain')
+    fig2.colorbar(mappable, ax=ax2[1][3])
+
+    ax2[1][3].scatter(global_data['projections'][:, 0], global_data['projections'][:, 1], c=deltas,
+                     cmap='terrain', edgecolor='k')
+    ax2[1][3].set_title(np.average(np.array(deltas)))
+
+    path_data = generate_latent_space_path(global_data['projections'], boundaries=[75, -75], k=4, version='2',
+                                           random_neighbors=True,reduction=0.005)
+
+    assigned_gammas = assign_gammas(global_data['projections'], global_data['projections'], path_data, smearing='sum',
+                                    k=1,
+                                    iterations=1, cutoff=10.0
+                                    )
+    ax2[2][0].scatter(global_data['projections'][:, 0], global_data['projections'][:, 1], c=global_data['y'])
+
+    ax2[2][1].plot(path_data['weighted_path'][:, 0],
+                  path_data['weighted_path'][:, 1], color='k', markeredgecolor='r', marker='o',
+                  linestyle='-', markerfacecolor='w')
+    ax2[2][1].scatter(path_data['weighted_path'][0][0],
+                     path_data['weighted_path'][0][1], c='b', s=250)
+    ax2[2][1].scatter(path_data['weighted_path'][-1][0],
+                     path_data['weighted_path'][-1][1], c='k', s=250)
+
+    ax2[2][2].scatter(global_data['projections'][:, 0], global_data['projections'][:, 1], c=assigned_gammas)
+
+    deltas = []
+    for i in range(len(global_data['graphs'])):
+        delta = global_data['y'][i] - assigned_gammas[i]
+        deltas.append(delta)
+    norm = mcolors.Normalize(vmin=min(deltas), vmax=max(deltas))
+    mappable = cm.ScalarMappable(norm=norm, cmap='terrain')
+    fig2.colorbar(mappable, ax=ax2[2][3])
+
+    ax2[2][3].scatter(global_data['projections'][:, 0], global_data['projections'][:, 1], c=deltas,
+                     cmap='terrain', edgecolor='k')
+    ax2[2][3].set_title(np.average(np.array(deltas)))
+
+    # path_data = generate_latent_space_path(global_data['projections'], boundaries=[50,-50], k=4,version='2',reduction=0.01,random_neighbors=True)
+    assigned_gammas = assign_gammas(global_data['projections'], global_data['projections'], path_data, smearing='tanh',
+                                    k=10,
+                                    iterations=10, cutoff=10.0, scale=10.0
+                                    )
+
+    ax2[3][0].scatter(global_data['projections'][:, 0], global_data['projections'][:, 1], c=global_data['y'])
+
+    ax2[3][1].plot(path_data['weighted_path'][:, 0],
+                  path_data['weighted_path'][:, 1], color='k', markeredgecolor='r', marker='o',
+                  linestyle='-', markerfacecolor='w')
+    ax2[3][1].scatter(path_data['weighted_path'][0][0],
+                     path_data['weighted_path'][0][1], c='b', s=250)
+    ax2[3][1].scatter(path_data['weighted_path'][-1][0],
+                     path_data['weighted_path'][-1][1], c='k', s=250)
+
+    ax2[3][2].scatter(global_data['projections'][:, 0], global_data['projections'][:, 1], c=assigned_gammas)
+
+    deltas = []
+    for i in range(len(global_data['graphs'])):
+        delta = global_data['y'][i] - assigned_gammas[i]
+        deltas.append(delta)
+    norm = mcolors.Normalize(vmin=min(deltas), vmax=max(deltas))
+    mappable = cm.ScalarMappable(norm=norm, cmap='terrain')
+    fig2.colorbar(mappable, ax=ax2[3][3])
+
+    ax2[3][3].scatter(global_data['projections'][:, 0], global_data['projections'][:, 1], c=deltas,
+                     cmap='terrain', edgecolor='k')
+    ax2[3][3].set_title(np.average(np.array(deltas)))
+
     fig.colorbar(cm.ScalarMappable(cmap='viridis'), ax=ax[0][2])
     fig.colorbar(cm.ScalarMappable(cmap='viridis'), ax=ax[0][0])
-    norm = mcolors.Normalize(vmin=min(deltas), vmax=max(deltas))
-    mappable = cm.ScalarMappable(norm=norm, cmap='bwr')
-    fig.colorbar(mappable, ax=ax[1][3])
     fig.colorbar(cm.ScalarMappable(cmap='viridis'), ax=ax[1][2])
     fig.colorbar(cm.ScalarMappable(cmap='viridis'), ax=ax[1][0])
+    fig.colorbar(cm.ScalarMappable(cmap='viridis'), ax=ax[2][2])
+    fig.colorbar(cm.ScalarMappable(cmap='viridis'), ax=ax[2][0])
+    fig.colorbar(cm.ScalarMappable(cmap='viridis'), ax=ax[3][2])
+    fig.colorbar(cm.ScalarMappable(cmap='viridis'), ax=ax[3][0])
+
+    fig2.colorbar(cm.ScalarMappable(cmap='viridis'), ax=ax2[0][2])
+    fig2.colorbar(cm.ScalarMappable(cmap='viridis'), ax=ax2[0][0])
+    fig2.colorbar(cm.ScalarMappable(cmap='viridis'), ax=ax2[1][2])
+    fig2.colorbar(cm.ScalarMappable(cmap='viridis'), ax=ax2[1][0])
+    fig2.colorbar(cm.ScalarMappable(cmap='viridis'), ax=ax2[2][2])
+    fig2.colorbar(cm.ScalarMappable(cmap='viridis'), ax=ax2[2][0])
+    fig2.colorbar(cm.ScalarMappable(cmap='viridis'), ax=ax2[3][2])
+    fig2.colorbar(cm.ScalarMappable(cmap='viridis'), ax=ax2[3][0])
+
     plt.show()
 
 if __name__ == '__main__':
@@ -229,13 +424,13 @@ if __name__ == '__main__':
     projection_outdim = 100
     cutoff = 10.0
     n_convs = 3
-    n_data = 50000 # total number of samples
+    n_data = 30000 # total number of samples
     n_nodes = np.linspace(5, 50, n_data)  # number of data points per sample
     n_dim = 4  # number of dimensions in intial raw data
     parameters = dict(
         device_dict=dict(
             world_size=1,
-            device='cuda',
+            device='cpu',
             ddp_backend='gloo',
             run_ddp=False,
             pin_memory=False,
@@ -302,14 +497,14 @@ if __name__ == '__main__':
                             processor=Processor(num_convs=n_convs, dim=projection_indim, conv_type='mesh',act=nn.SiLU()),
                             decoder=Decoder(in_dim=projection_indim, out_dim=projection_outdim, act=nn.SiLU())
                         ),
-                        ls_mod=umap_.UMAP(n_neighbors=10, min_dist=0.1, n_components=2)
+                        ls_mod=umap_.UMAP(n_neighbors=50, min_dist=0.5, n_components=2)
                     )
 
     cat = Catalyst()
     cat.set_params(parameters)
 
-    gen_graphs = 1
-    proj_data = 1
+    gen_graphs = 0
+    proj_data = 0
     gen_samples = 0
     get_gammas = 1
 

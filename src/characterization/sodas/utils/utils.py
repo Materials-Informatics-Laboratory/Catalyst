@@ -5,6 +5,7 @@ from scipy.spatial import distance
 from scipy import stats
 import networkx as nx
 import numpy as np
+import random
 import torch
 import math
 import sys
@@ -14,7 +15,7 @@ __all__ = [
     'generate_latent_space_path',
 ]
 
-def generate_latent_space_path(X,k=7,boundaries=[0,-1],version='1',reduction=1.0):
+def generate_latent_space_path(X,k=7,boundaries=[0,-1],version='1',reduction=1.0,random_neighbors=False):
     XX = X.tolist()
     if boundaries[1] < -1:
         avg = [0.0]*len(XX[0])
@@ -40,42 +41,72 @@ def generate_latent_space_path(X,k=7,boundaries=[0,-1],version='1',reduction=1.0
     # select the kNN for each datapoint
     check = True
     while check:
-        try:
-            neighbors = np.sort(np.argsort(D, axis=1)[:, 0:k])
-            G = nx.Graph()
-            for i, x in enumerate(X):
-                G.add_node(i)
-            for i, row in enumerate(neighbors):
-                for column in row:
-                    if i != column:
-                        G.add_edge(i, column)
-                        G[i][column]['weight'] = D[i][column]
+        neighbors = np.sort(np.argsort(D, axis=1)[:, 0:k])
+        G = nx.Graph()
+        for i, x in enumerate(X):
+            G.add_node(i)
+        for i, row in enumerate(neighbors):
+            for column in row:
+                if i != column:
+                    G.add_edge(i, column)
+                    G[i][column]['weight'] = D[i][column]
 
-            current_node = 0
-            weighted_path = [current_node]
-            checked_nodes = [current_node]
-            while current_node != sink:
+        current_node = 0
+        weighted_path = [current_node]
+        checked_nodes = [current_node]
+        while current_node != sink:
+            tmp_k = k
+            while True:
                 nn = G.neighbors(current_node)
-
                 chosen_nn = -1
                 e_weight = 1E30
-                for neigh in nn:
-                    if neigh not in checked_nodes:
-                        if nx.has_path(G,neigh,sink):
-                            if G[current_node][neigh]['weight'] < e_weight:
-                                e_weight = G[current_node][neigh]['weight']
-                                chosen_nn = neigh
-                if chosen_nn < 0:
-                    weighted_path.pop()
-                    current_node = weighted_path[-1]
+                if random_neighbors:
+                    tmp_neighs = []
+                    xx = []
+                    for neigh in nn:
+                        if neigh not in checked_nodes:
+                            tmp_neighs.append(neigh)
+                        xx.append(neigh)
+                    if len(tmp_neighs) > 0:
+                        end_range = len(tmp_neighs)-1
+                        if len(tmp_neighs) == 1:
+                            end_range = 0
+                        chosen_nn = tmp_neighs[random.randint(0, end_range)]
+                        e_weight = G[current_node][chosen_nn]['weight']
+                    else:
+                        #print(current_node,' ',list(nn),' ',xx,' ',checked_nodes)
+                        print('Node has no neighbors...')
+                        pass
                 else:
-                    current_node = chosen_nn
-                    checked_nodes.append(current_node)
-                    weighted_path.append(current_node)
-            check = False
-        except:
-            print('Failed pathfinding...increasing k...')
-            k += 1
+                    for neigh in nn:
+                        if neigh not in checked_nodes:
+                            if nx.has_path(G,neigh,sink):
+                                if G[current_node][neigh]['weight'] < e_weight:
+                                    e_weight = G[current_node][neigh]['weight']
+                                    chosen_nn = neigh
+                if chosen_nn > -1:
+                    break
+                else:
+                    print('Failed pathfinding...increasing local k to ' + str(tmp_k) + '...')
+                    tmp_k += 1
+                    #print(neighbors[current_node], ' ',D[current_node])
+                    neighbors = np.sort(np.argsort(D[current_node], axis=0)[0:tmp_k]) # this can be improved later
+                    #for i, row in enumerate(neighbors):
+                    #print(neighbors,' ',D[current_node],' ',tmp_k)
+                    G.add_edge(current_node, neighbors[-1])
+                    G[current_node][neighbors[-1]]['weight'] = D[current_node][neighbors[-1]]
+
+            if chosen_nn < 0:
+                weighted_path.pop()
+                current_node = weighted_path[-1]
+            else:
+                current_node = chosen_nn
+                checked_nodes.append(current_node)
+                weighted_path.append(current_node)
+        check = False
+        #except:
+        #    print('Failed pathfinding...increasing k to ' + str(k) + '...')
+        #    k += 1
 
     if version == '1':
         path_edges = list(zip(weighted_path, weighted_path[1:]))
@@ -212,7 +243,7 @@ def find_nearest_nodes(x,nodes,k=1):
     distances, indices = knn.kneighbors(x)
     return indices,distances
 
-def assign_gammas(ref_data,new_data,path_data,version='1',k=1,iterations=1,scale=1,cutoff=10.0):
+def assign_gammas(ref_data,new_data,path_data,smearing='sum',k=1,iterations=1,cutoff=1000.0,scale=10.0):
     gammas = path_data['d']
 
     nodes = []
@@ -233,33 +264,29 @@ def assign_gammas(ref_data,new_data,path_data,version='1',k=1,iterations=1,scale
             if iter == 0:
                 ids = ref_ids[i]
                 dists = ref_dists[i]
-                if version == '2':
-                    for j in range(len(ids)):
-                        if dists[j] > cutoff:
-                            weight = 0.0
-                        else:
-                            weight = 0.5*math.fabs(math.cos((dists[j]*math.pi)/cutoff) + 1)
-                        avg_gamma += weight*gammas[ids[j]]
-                        if avg_gamma < 0.0:
-                            avg_gamma = 0.0
-                    avg_gamma /= float(len(ids))
-                else:
-                    avg_gamma += gammas[ids[0]]
             else:
                 ids = new_ids[i]
                 dists = new_dists[i]
-                if version == '2':
-                    for j in range(len(ids)):
-                        if dists[j] > cutoff:
-                            weight = 0.0
-                        else:
+            if smearing != 'sum':
+                for j in range(len(ids)):
+                    if dists[j] > cutoff:
+                        weight = 0.0
+                    else:
+                        if smearing == 'radial':
                             weight = 0.5 * math.fabs(math.cos((dists[j] * math.pi) / cutoff) + 1)
-                        avg_gamma += weight*gammas[ids[j]]
-                        if avg_gamma < 0.0:
-                            avg_gamma = 0.0
-                    avg_gamma /= float(len(ids))
-                else:
-                    avg_gamma += assigned_gammas[i]
+                        elif smearing == 'tanh':
+                            weight = math.tanh(scale/dists[j])
+                        elif smearing == 'sigmoid':
+                            weight = 1/0 / (1.0 + math.exp(dists[j]))
+                    avg_gamma += weight*gammas[ids[j]]
+                    if avg_gamma < 0.0:
+                        avg_gamma = 0.0
+                avg_gamma /= float(len(ids))
+            else:
+                for j in range(len(ids)):
+                    avg_gamma += gammas[ids[0]]
+                avg_gamma /= float(len(ids))
+
             assigned_gammas[i] = avg_gamma
         gammas = assigned_gammas
         iter += 1
