@@ -83,6 +83,7 @@ def alignnd(atoms,neighbor_params,dihedral=False, store_atoms=False, use_pt=Fals
 
     edge_index_G, x_bnd = atoms2graph(atoms,cutoff=neighbor_params[0],k=neighbor_params[1])
     edge_index_G, unique_edges = remove_duplicate_list_pairs(edge_index_G[0],edge_index_G[1])
+    edge_index_G = np.array(edge_index_G)
     x_bnd = x_bnd[unique_edges]
     if include_angs:
         edge_index_bnd_ang = line_graph(edge_index_G)
@@ -186,6 +187,7 @@ def realignnd(structures,neighbor_params,dihedral=False,store_atoms=False,use_pt
 
         edge_index_G, x_bnd = atoms2graph(atoms, cutoff=neighbor_params[0], k=neighbor_params[1])
         edge_index_G, unique_edges = remove_duplicate_list_pairs(edge_index_G[0], edge_index_G[1])
+        edge_index_G = np.array(edge_index_G)
         x_bnd = x_bnd[unique_edges]
         t_edge_index_G = []
         for i in range(len(edge_index_G)):
@@ -319,6 +321,7 @@ def atomic_alignnd(atoms,neighbor_params,dihedral=False,all_elements=[],store_at
 
     edge_index_G, x_bnd = atoms2graph(atoms, cutoff=neighbor_params[0], k=neighbor_params[1])
     edge_index_G, unique_edges = remove_duplicate_list_pairs(edge_index_G[0], edge_index_G[1])
+    edge_index_G = np.array(edge_index_G)
     x_bnd = x_bnd[unique_edges]
     data = []
 
