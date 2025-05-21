@@ -3,7 +3,7 @@ from numba import cuda
 from torch import nn
 import torch
 
-from ..io.io import read_training_data, setup_model, setup_dataloader, save_model, save_dictionary
+from ..io.data_management import read_training_data, setup_model, setup_dataloader, save_model, save_dictionary
 from .utils.distributed import ddp_destroy, ddp_setup, reduce_tensor
 from ..utilities.distributions import get_distribution
 from .utils.predict import accumulate_predictions

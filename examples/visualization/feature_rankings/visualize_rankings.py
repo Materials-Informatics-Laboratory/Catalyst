@@ -7,7 +7,7 @@ import numpy as np
 import torch
 
 from catalyst.src.properties.physics_database import Physics_data
-from catalyst.src.io.io import load_dictionary
+from catalyst.src.io.data_management import load_dictionary
 
 def get_top_nperc_rankings(data):
     data = sorted(data, key=float)

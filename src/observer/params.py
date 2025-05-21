@@ -1,5 +1,5 @@
 from ..ml.utils.distributed import set_spawn_method
-from ..io.io import save_dictionary, get_system_info
+from ..io.data_management import save_dictionary, get_system_info
 from ..ml.utils.memory import clear_torch_memory, change_model_device
 from torch import nn
 import numpy as np
@@ -91,7 +91,7 @@ class Catalyst():
         self.device_options = ['cuda','cpu']
         self.optimizer_options = ['AdamW','Adadelta','Adagrad','Adam','SparseAdam','Adamax','ASGD',
                                   'LBFGS','NAdam','RAdam','RMSprop','Rprop','SGD']
-        self.version = '1.0.7'
+        self.version = '1.0.71'
 
         '''
         graph clustering params

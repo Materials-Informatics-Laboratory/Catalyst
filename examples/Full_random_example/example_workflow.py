@@ -5,7 +5,7 @@ from catalyst.src.characterization.sodas.model.sodas import SODAS
 from catalyst.src.graph.generic_build import generic_graph_gen
 from catalyst.src.ml.utils.distributed import cuda_destroy
 import catalyst.src.utilities.sampling as sampling
-from catalyst.src.io.io import load_dictionary, save_dictionary
+from catalyst.src.io.data_management import load_dictionary, save_dictionary
 from catalyst.src.observer.params import Catalyst
 from catalyst.src.ml.utils.loss import MaxNpercent
 
@@ -547,13 +547,13 @@ if __name__ == '__main__':
     regression_outdim = 1
     cutoff = 10.0
     n_convs = 3
-    n_data = 1000 # total number of samples
+    n_data = 500 # total number of samples
     n_nodes = np.linspace(10, 100, n_data)  # number of data points per sample
     n_dim = 10  # number of dimensions in intial raw data
     parameters = dict(
         device_dict=dict(
             world_size=2,
-            device='cuda',
+            device='cpu',
             ddp_backend='gloo',
             run_ddp=False,
             pin_memory=False,
@@ -631,7 +631,7 @@ if __name__ == '__main__':
     cat = Catalyst()
     cat.set_params(parameters)
 
-    gen_graphs =0
+    gen_graphs =1
     project_graphs =1
     gen_samples = 1
     perform_train = 1

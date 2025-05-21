@@ -2,7 +2,7 @@ from ..utilities.rankings import organize_rankings_atomic, organize_rankings_gen
 from .utils.predict import accumulate_predictions
 from .utils.loss import loss_setup
 from .utils.distributed import reduce_tensor, combine_dicts_across_gpus, ddp_destroy, ddp_setup
-from ..io.io import read_training_data, setup_model, setup_dataloader, save_model, save_dictionary, load_dictionary
+from ..io.data_management import read_training_data, setup_model, setup_dataloader, save_model, save_dictionary, load_dictionary
 from torch import nn
 import torch
 

@@ -18,6 +18,7 @@ import gzip
 import math
 import sys
 import os
+import io
 
 import platform
 import psutil
@@ -207,8 +208,16 @@ def save_dictionary(fname,data):
         pickle.dump(data, fp,protocol=pickle.HIGHEST_PROTOCOL)
 
 def load_dictionary(fname):
+    # Define a custom unpickler
+    class CPU_Unpickler(pickle.Unpickler):
+        def find_class(self, module, name):
+            if module == 'torch.storage' and name == '_load_from_bytes':
+                return lambda b: torch.load(io.BytesIO(b), map_location='cpu')
+            else:
+                return super().find_class(module, name)
+
     with gzip.open(fname, "rb") as handle:
-        dictionary = pickle.load(handle)
+        dictionary = CPU_Unpickler(handle).load()
     return dictionary
 
 def write_labelled_extxyz(filename,labels,atoms,cutoff):
