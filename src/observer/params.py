@@ -72,6 +72,17 @@ class Catalyst():
 
                                         )
                                    ),
+                                   active_learning=False,
+                                   active_learning_params_group=dict(
+                                       sampling_params_group = {
+                                           'algorithm':'',
+                                           'exploration_weight':1.0,
+                                           'samples_per_iteration':1,
+                                           'exploitation_strategy':''
+                                       },
+                                       epochs_per_iteration = 10,
+                                       iterations = 10,
+                                   ),
                                    interpretable=False,
                                    pre_training=False,
                                    restart_training=False,

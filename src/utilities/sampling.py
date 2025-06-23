@@ -7,6 +7,9 @@ import networkx as nx
 import numpy as np
 import math
 
+'''
+Utility functions
+'''
 def check_clusters(data,labels):
     import matplotlib.pyplot as plt
     plt.scatter(np.array(data)[:, 0], np.array(data)[:, 1], c=labels)
@@ -25,6 +28,10 @@ def resample(data,delta,rng):
     non_samples = np.delete(X, sampled_data)
 
     return [data[index] for index in sampled_data],[data[index] for index in non_samples]
+
+'''
+Sampling methods for non-active learning routines
+'''
 def random(data,split,rng,cp=0):
     if cp > 0:
         npoints = cp
@@ -325,23 +332,62 @@ def grid(data,split,grids,rng):
 def run_sampling(data,sampling_type,split,rng,params_group,y=None):
     print('Performing',sampling_type,'sampling using a training ratio of',str(split*100.0),'%')
     if sampling_type == 'random':
-        sampled_data, remaining_data = random(data=data,split=split,rng=rng)
+        return random(data=data,split=split,rng=rng)
     elif sampling_type == 'kmeans':
-        sampled_data, remaining_data = kmeans(data=data,split=split,clusters=params_group['clusters'],rng=rng)
+        return kmeans(data=data,split=split,clusters=params_group['clusters'],rng=rng)
     elif sampling_type == 'y_bin':
-        sampled_data, remaining_data = property_binning(data=data,y=y,split=split,clusters=params_group['clusters'],rng=rng)
+        return property_binning(data=data,y=y,split=split,clusters=params_group['clusters'],rng=rng)
     elif sampling_type == 'gaussian_mixture':
-        sampled_data, remaining_data = gaussian_mixture(data=data,split=split,clusters=params_group['clusters'],rng=rng)
+        return gaussian_mixture(data=data,split=split,clusters=params_group['clusters'],rng=rng)
     elif sampling_type == 'spectral':
-        sampled_data, remaining_data = spectral(data=data,split=split,clusters=params_group['clusters'],rng=rng)
+        return spectral(data=data,split=split,clusters=params_group['clusters'],rng=rng)
     elif sampling_type == 'birch':
-        sampled_data, remaining_data = birch(data=data,split=split,clusters=params_group['clusters'],rng=rng)
+        return birch(data=data,split=split,clusters=params_group['clusters'],rng=rng)
     elif sampling_type == 'subgraph_clustering':
-        sampled_data, remaining_data = subgraph_clustering(data=data,split=split,leaf_size=params_group['leaf_size'],
+        return subgraph_clustering(data=data,split=split,leaf_size=params_group['leaf_size'],
                                             neighbors=params_group['neighbors'],metric=params_group['metric'],rng=rng)
     elif sampling_type == 'grid':
-        sampled_data, remaining_data = grid(data=data,split=split,grids=params_group['grids'],rng=rng)
-    return sampled_data, remaining_data
+        return grid(data=data,split=split,grids=params_group['grids'],rng=rng)
+    else:
+        return none
+
+'''
+Sampling methods for active learning routines
+'''
+
+def active_y_sampling(params_group):
+    data = params_group['data']
+    y = params_group['y']
+    training_y = params_group['training_y']
+    n = params_group['points_per_iteration']
+    exploration_weight = params_group['exploration_weight']
+
+    exploration_points = math.ceil(exploration_weight*n)
+    exploitation_points = math.fabs(n - exploration_points)
+
+    # exploitation first
+    if params_group['exploitation_strategy'] == 'greedy':
+        max_y = max(y)
+        exploitation_samples = np.array([])
+        iteration = 0
+        while len(exploitation_samples) < exploitation_points:
+            exploitation_samples = np.where(y >= ((1.0 - (0.05 + 0.05*iteration))*max_y))
+            #new_samples = np.sort(y[possible_sample_indices])[::-1][:exploitation_points]
+        y = np.delete(y, exploitation_samples)
+    # exploration second
+    max_dists = [np.max(np.abs(yy - training_y)) for yy in y]
+    exploration_samples = np.argsort(np.array(max_dists))[-exploration_points:][::-1]
+
+
+
+    return sampled_data, np.delete(y, sampled_data)
+def active_sampling(params_group):
+    if params_group['algorithm'] == 'property':
+        return active_y_sampling(params_group)
+    else:
+        return None
+
+
 
 
 

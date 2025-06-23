@@ -1,6 +1,6 @@
 from catalyst.src.ml.nn.gnn.models.alignn import Encoder_generic,Encoder_atomic, Processor, Decoder,PositiveScalarsDecoder, ALIGNN
 from catalyst.src.ml.inference import predict_external, test_non_intepretable_external, predict_interpretable
-from catalyst.src.ml.training import run_training, run_pre_training
+from catalyst.src.ml.training import run_training, run_pre_training, run_active_learning
 from catalyst.src.characterization.sodas.model.sodas import SODAS
 from catalyst.src.graph.generic_build import generic_graph_gen
 from catalyst.src.ml.utils.distributed import cuda_destroy
@@ -539,17 +539,72 @@ def predict(cat,interpret):
 
     return
 
+
+def improve_model(cat):
+    cat.parameters['io_dict']['data_dir'] = None
+    del cat.parameters['io_dict']['data_dir']
+    cat.parameters['io_dict']['data_dir'] = os.path.join(str(Path(__file__).parent), 'active_learning_data')
+    if os.path.isdir(cat.parameters['io_dict']['data_dir']):
+        shutil.rmtree(cat.parameters['io_dict']['data_dir'])
+    os.mkdir(cat.parameters['io_dict']['data_dir'])
+    n_nodes = np.linspace(10, 50, n_data)  # number of data points per sample
+    k = np.linspace(10, 50, n_data)  # number of neighbors per graph node
+    dataset = []
+    y = []
+    for i in range(regression_outdim):
+        y.append(np.linspace(0, 10, n_data))
+    for ds in range(n_data):
+        if ds % 10 == 0:
+            print('Generating graph ', ds)
+        data = np.random.uniform(-1, 1, size=(math.ceil(n_nodes[ds]), n_dim))  # randomly create raw data
+        g_node_labels = np.eye(n_types)[np.random.choice(n_types, len(data))]  # randomly assign G node labels
+        tree = KDTree(data, metric='euclidean', leaf_size=2)
+        dist, ind = tree.query(data, k=math.ceil(k[ds]))  # k+1 due to self-interaction, neighbor list
+        neighbor_data = {
+            'dist': dist,
+            'ind': ind,
+            'g_nodes': g_node_labels
+        }
+        graph_gen_data = {
+            'raw_data': data,
+            'params': neighbor_data,
+            'line_graph': True,
+            'type': 'generic_pairwise'
+        }
+        graph = generic_graph_gen(graph_gen_data)
+        graph.y = []
+        for i in range(regression_outdim):
+            graph.y.append(torch.tensor(y[i][ds], dtype=torch.float))
+        torch.save(graph, os.path.join(
+            os.path.join(cat.parameters['io_dict']['main_path'], cat.parameters['io_dict']['data_dir']),
+            graph.gid + '.pt'))
+
+    if cat.parameters['device_dict']['run_ddp']:
+        print('Performing model retraining on ', cat.parameters['io_dict']['loaded_model_name'])
+        processes = []
+        for rank in range(cat.parameters['device_dict']['world_size']):
+            p = mp.Process(target=run_active_learning, args=(rank,  cat,))
+            p.start()
+            processes.append(p)
+        for p in processes:
+            p.join()
+        cuda_destroy()
+    else:
+        run_active_learning(rank=0, cat=cat)
+    return
+
+
 if __name__ == '__main__':
-    n_types = 4  # number of ficticious types to label each node in G
+    n_types = 2 # number of ficticious types to label each node in G
     projection_indim = 100
     projection_outdim = 100
     regression_indim = 100
     regression_outdim = 1
-    cutoff = 10.0
+    cutoff = 50.0
     n_convs = 3
-    n_data = 500 # total number of samples
-    n_nodes = np.linspace(10, 100, n_data)  # number of data points per sample
-    n_dim = 10  # number of dimensions in intial raw data
+    n_data = 40 # total number of samples
+    n_nodes = np.linspace(5,50, n_data)  # number of data points per sample
+    n_dim = 3  # number of dimensions in intial raw data
     parameters = dict(
         device_dict=dict(
             world_size=2,
@@ -611,7 +666,18 @@ if __name__ == '__main__':
                 params_group={
                     'lr': 0.0001
                 }
-            )
+            ),
+            active_learning = True,
+            active_learning_params_group = dict(
+                sampling_params_group={
+                    'algorithm': 'property',
+                    'exploration_weight': 1.0,
+                    'samples_per_iteration': 1,
+                    'exploitation_strategy': 'greedy'
+                },
+                epochs_per_iteration=10,
+                iterations=10,
+            ),
         )
     )
     sodas_model = SODAS(
@@ -631,16 +697,17 @@ if __name__ == '__main__':
     cat = Catalyst()
     cat.set_params(parameters)
 
-    gen_graphs =1
-    project_graphs =1
-    gen_samples = 1
-    perform_train = 1
+    gen_graphs =0
+    project_graphs =0
+    gen_samples = 0
+    perform_train = 0
     perform_retrain = 0
-    perform_test = 1
-    plot_test = 1
+    perform_test = 0
+    plot_test = 0
     plot_training =0
     perform_ranking = 0
     perform_predictions = 0
+    perform_active_learning = 1
 
     if gen_graphs:
         generate_data(cat,visualize_final=True)
@@ -657,8 +724,8 @@ if __name__ == '__main__':
             cat.parameters['model_dict']['train_delta'] = 0.001
             cat.parameters['model_dict']['train_tolerance'] = 1.0
             train_model(cat,True)
-        cat.parameters['loader_dict']['batch_size'] = [100, 100]
-        cat.parameters['model_dict']['num_epochs'] = 5
+        cat.parameters['loader_dict']['batch_size'] = [10,10]
+        cat.parameters['model_dict']['num_epochs'] = 100
         cat.parameters['model_dict']['train_delta'] = 0.001
         cat.parameters['model_dict']['train_tolerance'] = 0.001
         train_model(cat, False)
@@ -682,7 +749,8 @@ if __name__ == '__main__':
         glob.glob(os.path.join(cat.parameters['io_dict']['main_path'], 'models',
                                    'training', '0', 'model*'))[0]
         retrain_model(cat)
-    if perform_test:
+    if perform_test and not perform_active_learning:
+        cat.parameters['loader_dict']['batch_size'] = [10, 10]
         cat.set_model(alignnd_model)
         test_model(cat)
     if plot_test:
@@ -690,6 +758,14 @@ if __name__ == '__main__':
     if perform_predictions:
         cat.set_model(alignnd_model)
         predict(cat,perform_ranking)
+    if perform_active_learning:
+        cat.set_model(alignnd_model)
+        cat.parameters['io_dict']['loaded_model_name'] = None
+        del cat.parameters['io_dict']['loaded_model_name']
+        cat.parameters['io_dict']['loaded_model_name'] = \
+            glob.glob(os.path.join(cat.parameters['io_dict']['main_path'], 'models',
+                                   'training', '0', 'model*'))[0]
+        improve_model(cat)
 
 
 

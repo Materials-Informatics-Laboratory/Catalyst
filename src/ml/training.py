@@ -8,9 +8,11 @@ from .utils.distributed import ddp_destroy, ddp_setup, reduce_tensor
 from ..utilities.distributions import get_distribution
 from .utils.predict import accumulate_predictions
 from .inference import test_non_intepretable_internal
+from ..utilities.sampling import active_sampling
 from .utils.optimizer import set_optimizer
 from .utils.memory import optimizer_to
 from .utils.loss import loss_setup
+
 
 import numpy as np
 import random
@@ -51,6 +53,53 @@ def train(loader,model,parameters,optimizer,pretrain=False):
     if parameters['device_dict']['run_ddp']:
         epoch_loss = reduce_tensor(torch.tensor(epoch_loss).to(parameters['device_dict']['device'])).item()
     return epoch_loss / (len(loader)*parameters['device_dict']['world_size'])
+
+def run_active_learning(rank,cat=None):
+    # set up run
+    epoch_times = []
+    running_valid_delta = []
+    L_train, L_valid = [], []
+    shuffle_counter = 0
+    met_tolerance = 0
+    min_loss_train = 1.0E30
+    min_loss_valid = 1.0E30
+    iteration = 0
+    parameters = cat.parameters
+    if parameters['device_dict']['run_ddp']:
+        ddp_setup(rank, parameters['device_dict']['world_size'], parameters['device_dict']['ddp_backend'])
+
+    parameters['io_dict']['model_dir'] = None
+    del parameters['io_dict']['model_dir']
+    parameters['io_dict']['model_dir'] = os.path.join(parameters['io_dict']['main_path'], 'models','active_learning')
+    if rank == 0:
+        if os.path.isdir(parameters['io_dict']['model_dir']):
+            shutil.rmtree(parameters['io_dict']['model_dir'])
+        os.makedirs(parameters['io_dict']['model_dir'], exist_ok=True)
+
+    model = setup_model(cat, rank=rank, load=True)
+
+    # retrain model for a few epochs with new data added
+    while iteration < parameters['model_dict']['active_learning_params_group']['iterations']:
+        # determine which point(s) to add to model
+        new_samples, remaining_data = active_sampling(
+            parameters['model_dict']['active_learning_params_group']['sampling_params_group'])
+        # add points to dataloader for model
+        '''
+        NEED TO PUT DATA IN CORRECT FORMAT
+        '''
+        loader_train, loader_valid = setup_dataloader(data=data,cat=cat,mode=1)
+
+        ep = 0
+        while ep < parameters['model_dict']['active_learning_params_group']['epochs_per_iteration']:
+
+            ep += 1
+        iteration += 1
+
+    # test model against added points
+
+    # determine if desired threshold has been met, if not, loop, if yes, exit
+
+    return 1
 
 def run_training(rank,iteration,cat=None):
     epoch_times = []
