@@ -3,7 +3,7 @@ from numba import cuda
 from torch import nn
 import torch
 
-from ..io.data_management import read_training_data, setup_model, setup_dataloader, save_model, save_dictionary
+from ..io.data_management import read_training_data, setup_model, setup_dataloader, save_model, save_dictionary, read_graphs_from_gids
 from .utils.distributed import ddp_destroy, ddp_setup, reduce_tensor
 from ..utilities.distributions import get_distribution
 from .utils.predict import accumulate_predictions
@@ -76,17 +76,32 @@ def run_active_learning(rank,cat=None):
             shutil.rmtree(parameters['io_dict']['model_dir'])
         os.makedirs(parameters['io_dict']['model_dir'], exist_ok=True)
 
-    model = setup_model(cat, rank=rank, load=True)
+    model, model_data = setup_model(cat, rank=rank, load=True)
+
+    if parameters['io_dict']['graph_read_format'] != 2:
+        training_graphs = read_graphs_from_gids(parameters['model_dict']['active_learning_params_group']['training_data_dir'],model_data['samples']['training_samples'])
+    else:
+        training_graphs = load_dictionary(glob.glob(os.path.join(parameters['model_dict']['active_learning_params_group']['training_data_dir'], 'graphs.data'))[0])['graphs']
+    new_graphs = read_graphs_from_gids(
+        parameters['io_dict']['data_dir'])
+
+    parameters['model_dict']['active_learning_params_group']['sampling_params_group']['data'] = new_graphs
+    parameters['model_dict']['active_learning_params_group']['sampling_params_group']['training_data'] = training_graphs
+    parameters['model_dict']['active_learning_params_group']['sampling_params_group']['y'] = [graph.y for graph in new_graphs]
+    parameters['model_dict']['active_learning_params_group']['sampling_params_group']['training_y'] = [graph.y for graph in training_graphs]
 
     # retrain model for a few epochs with new data added
     while iteration < parameters['model_dict']['active_learning_params_group']['iterations']:
         # determine which point(s) to add to model
         new_samples, remaining_data = active_sampling(
             parameters['model_dict']['active_learning_params_group']['sampling_params_group'])
+        print(new_samples,' ',remaining_data)
+        data = {
+            'training':[new_graphs[i] for i in new_samples],
+            'validation':[new_graphs[i] for i in remaining_data]
+        }
+        print(data)
         # add points to dataloader for model
-        '''
-        NEED TO PUT DATA IN CORRECT FORMAT
-        '''
         loader_train, loader_valid = setup_dataloader(data=data,cat=cat,mode=1)
 
         ep = 0
@@ -99,7 +114,6 @@ def run_active_learning(rank,cat=None):
 
     # determine if desired threshold has been met, if not, loop, if yes, exit
 
-    return 1
 
 def run_training(rank,iteration,cat=None):
     epoch_times = []

@@ -356,31 +356,38 @@ Sampling methods for active learning routines
 '''
 
 def active_y_sampling(params_group):
-    data = params_group['data']
-    y = params_group['y']
+    data = params_group['data'].copy()
+    y = params_group['y'].copy().copy()
+    y = np.array([ty[0].item() for ty in y])
     training_y = params_group['training_y']
-    n = params_group['points_per_iteration']
+    training_y = np.array([ty[0].item() for ty in training_y])
+    training_data = params_group['training_data'].copy()
+    n = params_group['samples_per_iteration']
     exploration_weight = params_group['exploration_weight']
+    rng = params_group['rng']
+    X = np.arange(len(y))
 
     exploration_points = math.ceil(exploration_weight*n)
     exploitation_points = math.fabs(n - exploration_points)
 
+    print('Selecting ',exploration_points, ' exploration and ', exploitation_points,' exploitation points')
+
     # exploitation first
-    if params_group['exploitation_strategy'] == 'greedy':
-        max_y = max(y)
-        exploitation_samples = np.array([])
-        iteration = 0
-        while len(exploitation_samples) < exploitation_points:
-            exploitation_samples = np.where(y >= ((1.0 - (0.05 + 0.05*iteration))*max_y))
-            #new_samples = np.sort(y[possible_sample_indices])[::-1][:exploitation_points]
-        y = np.delete(y, exploitation_samples)
+    if exploitation_points > 0:
+        if params_group['exploitation_strategy'] == 'greedy':
+            max_y = max(y)
+            exploitation_samples = np.array([])
+            iteration = 0.0
+            while len(exploitation_samples) < exploitation_points:
+                exploitation_samples = rng.choice(np.where(y >= ((1.0 - (0.05 + 0.05*iteration))*max_y))[0], int(exploitation_points), replace=False)
+                iteration += 1.0
+            y = np.delete(y, exploitation_samples)
     # exploration second
     max_dists = [np.max(np.abs(yy - training_y)) for yy in y]
     exploration_samples = np.argsort(np.array(max_dists))[-exploration_points:][::-1]
+    sampled_data = np.concatenate((exploration_samples,exploitation_samples))
 
-
-
-    return sampled_data, np.delete(y, sampled_data)
+    return sampled_data, np.delete(X, sampled_data)
 def active_sampling(params_group):
     if params_group['algorithm'] == 'property':
         return active_y_sampling(params_group)

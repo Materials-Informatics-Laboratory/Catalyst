@@ -602,13 +602,13 @@ if __name__ == '__main__':
     regression_outdim = 1
     cutoff = 50.0
     n_convs = 3
-    n_data = 40 # total number of samples
+    n_data = 50 # total number of samples
     n_nodes = np.linspace(5,50, n_data)  # number of data points per sample
     n_dim = 3  # number of dimensions in intial raw data
     parameters = dict(
         device_dict=dict(
-            world_size=2,
-            device='cpu',
+            world_size=1,
+            device='cuda',
             ddp_backend='gloo',
             run_ddp=False,
             pin_memory=False,
@@ -671,12 +671,13 @@ if __name__ == '__main__':
             active_learning_params_group = dict(
                 sampling_params_group={
                     'algorithm': 'property',
-                    'exploration_weight': 1.0,
-                    'samples_per_iteration': 1,
+                    'exploration_weight': 0.5,
+                    'samples_per_iteration': 2,
                     'exploitation_strategy': 'greedy'
                 },
                 epochs_per_iteration=10,
                 iterations=10,
+                training_data_dir=os.path.join(str(Path(__file__).parent), 'data')
             ),
         )
     )
@@ -765,6 +766,8 @@ if __name__ == '__main__':
         cat.parameters['io_dict']['loaded_model_name'] = \
             glob.glob(os.path.join(cat.parameters['io_dict']['main_path'], 'models',
                                    'training', '0', 'model*'))[0]
+        cat.parameters['model_dict']['active_learning_params_group']['sampling_params_group']['rng'] \
+            = np.random.default_rng(seed=cat.parameters['sampling_dict']['sampling_seed'])
         improve_model(cat)
 
 

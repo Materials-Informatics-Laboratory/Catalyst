@@ -149,11 +149,17 @@ def setup_model(cat,rank=0,data_only=False,load=False):
         if load:
             model_data = torch.load(cat.parameters['io_dict']['loaded_model_name'])
             model.load_state_dict(model_data['model'])
-        if cat.parameters['device_dict']['run_ddp']:
-            model = DDP(model, device_ids=[rank],
-                            find_unused_parameters=cat.parameters['device_dict']['find_unused_parameters'])
-            model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-        return model
+            if cat.parameters['device_dict']['run_ddp']:
+                model = DDP(model, device_ids=[rank],
+                                find_unused_parameters=cat.parameters['device_dict']['find_unused_parameters'])
+                model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+            return model, model_data
+        else:
+            if cat.parameters['device_dict']['run_ddp']:
+                model = DDP(model, device_ids=[rank],
+                                find_unused_parameters=cat.parameters['device_dict']['find_unused_parameters'])
+                model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+            return model
 
 def save_model(model,cat,model_params_group,remove_old_models=True,pretrain=False):
     print('Saving model...')
@@ -271,6 +277,12 @@ def get_system_info():
             gpu_memory=gpus[0].memoryTotal
         )
     return info
+
+def read_graphs_from_gids(path,gids=None):
+    if gids is not None:
+        return [torch.load(os.path.join(path,gid+'.pt')) for gid in gids]
+    else:
+        return [torch.load(graph) for graph in glob.glob(os.path.join(path, '*'))]
 
 def read_training_data(params,samples_file,pretrain=False,format=0, rank=0):
     training_graphs = None
