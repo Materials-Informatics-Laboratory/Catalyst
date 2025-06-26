@@ -360,19 +360,23 @@ def test_model(cat):
     cat.parameters['io_dict']['model_dir'] = os.path.join(cat.parameters['io_dict']['main_path'],'models','pretraining')
     cat.parameters['io_dict']['loaded_model_name'] = None
     del cat.parameters['io_dict']['loaded_model_name']
-    cat.parameters['io_dict']['loaded_model_name'] = glob.glob(os.path.join(cat.parameters['io_dict']['model_dir'], 'pre*'))[0]
 
-    if cat.parameters['device_dict']['run_ddp']:
-        processes = []
-        for rank in range(cat.parameters['device_dict']['world_size']):
-            p = mp.Process(target=test_non_intepretable_external, args=(cat,'all',rank,))
-            p.start()
-            processes.append(p)
-        for p in processes:
-            p.join()
-        cuda_destroy()
-    else:
-        test_non_intepretable_external(cat,'all', rank=0)
+    try:
+        cat.parameters['io_dict']['loaded_model_name'] = glob.glob(os.path.join(cat.parameters['io_dict']['model_dir'], 'pre*'))[0]
+
+        if cat.parameters['device_dict']['run_ddp']:
+            processes = []
+            for rank in range(cat.parameters['device_dict']['world_size']):
+                p = mp.Process(target=test_non_intepretable_external, args=(cat,'all',rank,))
+                p.start()
+                processes.append(p)
+            for p in processes:
+                p.join()
+            cuda_destroy()
+        else:
+            test_non_intepretable_external(cat,'all', rank=0)
+    except:
+        pass
 
     cat.parameters['io_dict']['results_dir'] = None
     del cat.parameters['io_dict']['results_dir']
@@ -402,60 +406,6 @@ def test_model(cat):
     return
 
 def plot_test_data(cat):
-    cat.parameters['io_dict']['results_dir'] = None
-    del cat.parameters['io_dict']['results_dir']
-    cat.parameters['io_dict']['results_dir'] = os.path.join(cat.parameters['io_dict']['main_path'],'testing','pretraining')
-    fname = os.path.join(cat.parameters['io_dict']['results_dir'],'all_indv_pred.data')
-    pred = [[],[]]
-    run_data = [load_dictionary(fname)]
-    for i in range(len(pred)):
-        for ny in range(regression_outdim):
-            pred[i].append([])
-    for data in run_data:
-        if data['vec']:
-            for data_y in data['y']:
-                if data['loss_fn'] == 'sum':
-                    for i, ty in enumerate(data_y):
-                        pred[0][i].append(ty)
-                else:
-                    for i, ty in enumerate(data_y):
-                        for item in ty:
-                            pred[0][i].append(item)
-            for data_y in data['pred']:
-                if data['loss_fn'] == 'sum':
-                    for i, ty in enumerate(data_y):
-                        pred[1][i].append(ty)
-                else:
-                    for i, ty in enumerate(data_y):
-                        for item in ty:
-                            pred[1][i].append(item)
-        else:
-            for data_y in data['y']:
-                if data['loss_fn'] == 'sum':
-                    pred[0][0].append(data_y)
-                else:
-                    for i, ty in enumerate(data_y):
-                        pred[0][0].append(ty)
-            for data_y in data['pred']:
-                if data['loss_fn'] == 'sum':
-                    pred[1][0].append(data_y)
-                else:
-                    for i, ty in enumerate(data_y):
-                        pred[1][0].append(ty)
-
-    if len(pred[0]) > 1:
-        fig, ax = plt.subplots(nrows=2, ncols=len(pred[0]), sharex=True, sharey=False)
-        for i in range(len(pred[0])):
-            ax[0][i].plot(pred[0][i],pred[1][i],linestyle='',color='dodgerblue',marker='o',markeredgecolor='k')
-            ax[0][i].plot(pred[0][i],pred[0][i],linestyle='-',color='r')
-            ax[0][i].set_xlabel('True values')
-            ax[0][i].set_ylabel('ML values')
-    else:
-        fig, ax = plt.subplots(nrows=1, ncols=2, sharex=True, sharey=False)
-        ax[0].plot(pred[0][0], pred[1][0], linestyle='', color='dodgerblue', marker='o', markeredgecolor='k')
-        ax[0].plot(pred[0][0], pred[0][0], linestyle='-', color='r')
-        ax[0].set_xlabel('True values')
-        ax[0].set_ylabel('ML values')
     cat.parameters['io_dict']['results_dir'] = None
     del cat.parameters['io_dict']['results_dir']
     cat.parameters['io_dict']['results_dir'] = os.path.join(cat.parameters['io_dict']['main_path'], 'testing',                                                     'training')
@@ -498,15 +448,17 @@ def plot_test_data(cat):
                         pred[1][0].append(ty)
     if len(pred[0]) > 1:
         for i in range(len(pred[0])):
-            ax[1][i].plot(pred[0][i], pred[1][i], linestyle='', color='dodgerblue', marker='o', markeredgecolor='k')
-            ax[1][i].plot(pred[0][i], pred[0][i], linestyle='-', color='r')
-            ax[1][i].set_xlabel('True values')
-            ax[1][i].set_ylabel('ML values')
+            fig, ax = plt.subplots(nrows=1, ncols=len(pred[0]), sharex=True, sharey=False)
+            ax[i].plot(pred[0][i], pred[1][i], linestyle='', color='dodgerblue', marker='o', markeredgecolor='k')
+            ax[i].plot(pred[0][i], pred[0][i], linestyle='-', color='r')
+            ax[i].set_xlabel('True values')
+            ax[i].set_ylabel('ML values')
     else:
-        ax[1].plot(pred[0][0], pred[1][0], linestyle='', color='dodgerblue', marker='o', markeredgecolor='k')
-        ax[1].plot(pred[0][0], pred[0][0], linestyle='-', color='r')
-        ax[1].set_xlabel('True values')
-        ax[1].set_ylabel('ML values')
+        fig, ax = plt.subplots(nrows=1, ncols=1, sharex=True, sharey=False)
+        ax.plot(pred[0][0], pred[1][0], linestyle='', color='dodgerblue', marker='o', markeredgecolor='k')
+        ax.plot(pred[0][0], pred[0][0], linestyle='-', color='r')
+        ax.set_xlabel('True values')
+        ax.set_ylabel('ML values')
     plt.show()
 
 def predict(cat,interpret):
@@ -602,13 +554,13 @@ if __name__ == '__main__':
     regression_outdim = 1
     cutoff = 50.0
     n_convs = 3
-    n_data = 50 # total number of samples
+    n_data = 5000 # total number of samples
     n_nodes = np.linspace(5,50, n_data)  # number of data points per sample
     n_dim = 3  # number of dimensions in intial raw data
     parameters = dict(
         device_dict=dict(
             world_size=1,
-            device='cpu',
+            device='cuda',
             ddp_backend='gloo',
             run_ddp=False,
             pin_memory=False,
@@ -664,8 +616,8 @@ if __name__ == '__main__':
                 dynamic_lr=False,
                 optimizer='AdamW',
                 params_group={
-                    'lr': 0.00001,
-                    'weight_decay':0.001
+                    'lr': 0.001,
+                    #'weight_decay':0.001
                 }
             ),
             active_learning = True,
@@ -673,18 +625,18 @@ if __name__ == '__main__':
                 sampling_params_group={
                     'algorithm': 'property',
                     'exploration_weight': 0.5,
-                    'samples_per_iteration': 8,
+                    'samples_per_iteration': 2,
                     'exploitation_strategy': 'greedy'
                 },
                 training_params_group= dict(
                     train_with_previous=True,
-                    percent_use_previous = 0.1,
-                    epochs_per_iteration = 5,
-                    iterations = 5,
-                    loss_regularization='EWC',
-                    regularization_params_group = {
-                        'lambda':1E-8
-                    }
+                    percent_use_previous = 0.01,
+                    epochs_per_iteration = 50,
+                    iterations = 10,
+                    #loss_regularization='EWC',
+                    #regularization_params_group = {
+                    #    'lambda':1E7
+                    #}
                 ),
                 training_data_dir=os.path.join(str(Path(__file__).parent), 'data')
             ),
@@ -704,16 +656,17 @@ if __name__ == '__main__':
                         decoder=PositiveScalarsDecoder(dim=regression_indim, act=nn.SiLU()),
                         #decoder=Decoder(in_dim=regression_indim, out_dim=regression_outdim, act=nn.SiLU(),combine=False)
                     )
+    #decoder=PositiveScalarsDecoder(dim=regression_indim, act=nn.SiLU()),
     cat = Catalyst()
     cat.set_params(parameters)
 
-    gen_graphs =0
-    project_graphs =0
-    gen_samples = 0
-    perform_train = 0
+    gen_graphs =1
+    project_graphs =1
+    gen_samples = 1
+    perform_train = 1
     perform_retrain = 0
-    perform_test = 0
-    plot_test = 0
+    perform_test = 1
+    plot_test = 1
     plot_training =0
     perform_ranking = 0
     perform_predictions = 0
