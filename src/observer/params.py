@@ -74,14 +74,23 @@ class Catalyst():
                                    ),
                                    active_learning=False,
                                    active_learning_params_group=dict(
-                                       sampling_params_group = {
-                                           'algorithm':'',
-                                           'exploration_weight':1.0,
-                                           'samples_per_iteration':1,
-                                           'exploitation_strategy':''
+                                       sampling_params_group={
+                                           'algorithm': 'property',
+                                           'exploration_weight': 0.5,
+                                           'samples_per_iteration': 2,
+                                           'exploitation_strategy': 'greedy'
                                        },
-                                       epochs_per_iteration = 10,
-                                       iterations = 10,
+                                       training_params_group=dict(
+                                           train_with_previous=False,
+                                           percent_use_previous=0.0,
+                                           epochs_per_iteration=1,
+                                           iterations=1,
+                                           loss_regularization='EWC',
+                                           regularization_params_group={
+                                               'lambda': 1E9
+                                           }
+                                       ),
+                                       training_data_dir=''
                                    ),
                                    interpretable=False,
                                    pre_training=False,

@@ -197,6 +197,7 @@ def save_model(model,cat,model_params_group,remove_old_models=True,pretrain=Fals
             model_type='train',
             model=model_state,
             samples=model_params_group['samples'],
+            data_loader=model_params_group['data_loader'],
             loss_info=dict(
                 training=model_params_group['L_train'],
                 validation=model_params_group['L_valid']

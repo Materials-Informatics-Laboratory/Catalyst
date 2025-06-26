@@ -32,7 +32,7 @@ def resample(data,delta,rng):
 '''
 Sampling methods for non-active learning routines
 '''
-def random(data,split,rng,cp=0):
+def random_(data,split,rng,cp=0):
     if cp > 0:
         npoints = cp
         if npoints > len(data):
@@ -332,7 +332,7 @@ def grid(data,split,grids,rng):
 def run_sampling(data,sampling_type,split,rng,params_group,y=None):
     print('Performing',sampling_type,'sampling using a training ratio of',str(split*100.0),'%')
     if sampling_type == 'random':
-        return random(data=data,split=split,rng=rng)
+        return random_(data=data,split=split,rng=rng)
     elif sampling_type == 'kmeans':
         return kmeans(data=data,split=split,clusters=params_group['clusters'],rng=rng)
     elif sampling_type == 'y_bin':
@@ -379,13 +379,19 @@ def active_y_sampling(params_group):
             exploitation_samples = np.array([])
             iteration = 0.0
             while len(exploitation_samples) < exploitation_points:
-                exploitation_samples = rng.choice(np.where(y >= ((1.0 - (0.05 + 0.05*iteration))*max_y))[0], int(exploitation_points), replace=False)
+                try:
+                    exploitation_samples = rng.choice(np.where(y >= ((1.0 - (0.05 + 0.05*iteration))*max_y))[0], int(exploitation_points), replace=False)
+                except:
+                    pass
                 iteration += 1.0
             y = np.delete(y, exploitation_samples)
     # exploration second
     max_dists = [np.max(np.abs(yy - training_y)) for yy in y]
     exploration_samples = np.argsort(np.array(max_dists))[-exploration_points:][::-1]
-    sampled_data = np.concatenate((exploration_samples,exploitation_samples))
+    if exploitation_points > 0:
+        sampled_data = np.concatenate((exploration_samples,exploitation_samples))
+    else:
+        sampled_data = exploration_samples
 
     return sampled_data, np.delete(X, sampled_data)
 def active_sampling(params_group):

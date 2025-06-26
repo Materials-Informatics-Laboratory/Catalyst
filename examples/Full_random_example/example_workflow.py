@@ -608,7 +608,7 @@ if __name__ == '__main__':
     parameters = dict(
         device_dict=dict(
             world_size=1,
-            device='cuda',
+            device='cpu',
             ddp_backend='gloo',
             run_ddp=False,
             pin_memory=False,
@@ -651,20 +651,21 @@ if __name__ == '__main__':
             train_tolerance=1.0,
             max_deltas=4,
             loss_params={
-                'function':'MaxNpercent',
-                'sub_function':torch.nn.L1Loss(),
-                'percent':0.1
+                'function':torch.nn.MSELoss(),
+                #'sub_function':torch.nn.L1Loss(),
+                #'percent':0.1
             },
             accumulate_loss='exact',
             model=None,
             interpretable=False,
-            pre_training=True,
+            pre_training=False,
             restart_training=False,
             optimizer_params=dict(
                 dynamic_lr=False,
                 optimizer='AdamW',
                 params_group={
-                    'lr': 0.0001
+                    'lr': 0.00001,
+                    'weight_decay':0.001
                 }
             ),
             active_learning = True,
@@ -672,11 +673,19 @@ if __name__ == '__main__':
                 sampling_params_group={
                     'algorithm': 'property',
                     'exploration_weight': 0.5,
-                    'samples_per_iteration': 2,
+                    'samples_per_iteration': 8,
                     'exploitation_strategy': 'greedy'
                 },
-                epochs_per_iteration=10,
-                iterations=10,
+                training_params_group= dict(
+                    train_with_previous=True,
+                    percent_use_previous = 0.1,
+                    epochs_per_iteration = 5,
+                    iterations = 5,
+                    loss_regularization='EWC',
+                    regularization_params_group = {
+                        'lambda':1E-8
+                    }
+                ),
                 training_data_dir=os.path.join(str(Path(__file__).parent), 'data')
             ),
         )
@@ -760,6 +769,7 @@ if __name__ == '__main__':
         cat.set_model(alignnd_model)
         predict(cat,perform_ranking)
     if perform_active_learning:
+        cat.parameters['loader_dict']['batch_size'] = [1, 1]
         cat.set_model(alignnd_model)
         cat.parameters['io_dict']['loaded_model_name'] = None
         del cat.parameters['io_dict']['loaded_model_name']

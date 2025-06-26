@@ -33,6 +33,6 @@ def change_model_device(model,device):
         try:
             model.model.to(device)
         except:
-            print('No model found...')
+            print('Failed to send model to device...')
             exit(0)
 

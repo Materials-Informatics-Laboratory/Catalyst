@@ -8,10 +8,10 @@ from .utils.distributed import ddp_destroy, ddp_setup, reduce_tensor
 from ..utilities.distributions import get_distribution
 from .utils.predict import accumulate_predictions
 from .inference import test_non_intepretable_internal
-from ..utilities.sampling import active_sampling
+from ..utilities.sampling import active_sampling, random_
 from .utils.optimizer import set_optimizer
 from .utils.memory import optimizer_to
-from .utils.loss import loss_setup
+from .utils.loss import loss_setup,active_learning_setup
 
 
 import numpy as np
@@ -23,7 +23,7 @@ import sys
 import os
 import gc
 
-def train(loader,model,parameters,optimizer,pretrain=False):
+def train(loader,model,parameters,optimizer,active_learning_dict=None):
     model.train()
     loss_accum = parameters['model_dict']['accumulate_loss']
     epoch_loss = 0.0
@@ -45,6 +45,10 @@ def train(loader,model,parameters,optimizer,pretrain=False):
             else:
                 batch_loss = loss_fn(preds,y)
             nonlocal epoch_loss
+            if active_learning_dict is not None:
+                batch_loss = active_learning_dict['loss_regularization'].get_loss(model, batch_loss,
+                                                                                  active_learning_dict['lambda'],
+                                                                                  )
             epoch_loss += batch_loss.item()
             batch_loss.backward()
             optimizer.step()
@@ -65,6 +69,7 @@ def run_active_learning(rank,cat=None):
     min_loss_valid = 1.0E30
     iteration = 0
     parameters = cat.parameters
+
     if parameters['device_dict']['run_ddp']:
         ddp_setup(rank, parameters['device_dict']['world_size'], parameters['device_dict']['ddp_backend'])
 
@@ -77,6 +82,7 @@ def run_active_learning(rank,cat=None):
         os.makedirs(parameters['io_dict']['model_dir'], exist_ok=True)
 
     model, model_data = setup_model(cat, rank=rank, load=True)
+    active_loss_dict = active_learning_setup(parameters,{'model':model,'metadata':model_data})
 
     if parameters['io_dict']['graph_read_format'] != 2:
         training_graphs = read_graphs_from_gids(parameters['model_dict']['active_learning_params_group']['training_data_dir'],model_data['samples']['training_samples'])
@@ -91,24 +97,98 @@ def run_active_learning(rank,cat=None):
     parameters['model_dict']['active_learning_params_group']['sampling_params_group']['training_y'] = [graph.y for graph in training_graphs]
 
     # retrain model for a few epochs with new data added
-    while iteration < parameters['model_dict']['active_learning_params_group']['iterations']:
+    data = {
+        'training': [],
+        'validation': []
+    }
+    if parameters['model_dict']['active_learning_params_group']['training_params_group']['train_with_previous']:
+        if isinstance(parameters['model_dict']['active_learning_params_group']['training_params_group']['percent_use_previous'],float):
+            samples, non_samples = random_(training_graphs.copy(),
+                                          parameters['model_dict']['active_learning_params_group']['training_params_group']['percent_use_previous'],
+                                          rng=parameters['model_dict']['active_learning_params_group']['sampling_params_group']['rng'])
+            data['training'] = [training_graphs[i] for i in samples]
+        else:
+            data['training'] = training_graphs.copy()
+
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(3, parameters['model_dict']['active_learning_params_group']['training_params_group']['iterations'] + 1, sharex=False,sharey=False)
+    loader_train = setup_dataloader({
+        'training': training_graphs,
+    }, cat=cat, mode=0)
+    loss_train, train_info = test_non_intepretable_internal(loader_train, model, parameters, rank=rank,
+                                                            return_test_info=True)
+    ax[2][0].plot([item for sublist in train_info['y'] for item in sublist],
+                  [item for sublist in train_info['pred'] for item in sublist], 'yo', markeredgecolor='k')
+    while iteration < parameters['model_dict']['active_learning_params_group']['training_params_group']['iterations']:
         # determine which point(s) to add to model
         new_samples, remaining_data = active_sampling(
             parameters['model_dict']['active_learning_params_group']['sampling_params_group'])
-        print(new_samples,' ',remaining_data)
-        data = {
-            'training':[new_graphs[i] for i in new_samples],
-            'validation':[new_graphs[i] for i in remaining_data]
-        }
-        print(data)
+        loader_train = setup_dataloader({'training': new_graphs, }, cat=cat, mode=0)
+        loss_train, train_info = test_non_intepretable_internal(loader_train, model, parameters, rank=rank,
+                                                               return_test_info=True)
+        ty = np.linspace(0,50,10)
+        for i in range(parameters['model_dict']['active_learning_params_group']['training_params_group']['iterations'] + 1):
+            ax[0][i].plot(ty,ty,'k')
+            ax[1][i].plot(ty, ty, 'k')
+            ax[2][i].plot(ty, ty, 'k')
+        ax[0][0].plot([item for sublist in train_info['y'] for item in sublist],
+                [item for sublist in train_info['pred'] for item in sublist],'co',markeredgecolor='k')
+
+        data['training'].extend([new_graphs[i] for i in new_samples])
+        data['validation'] = [new_graphs[i] for i in remaining_data]
         # add points to dataloader for model
-        loader_train, loader_valid = setup_dataloader(data=data,cat=cat,mode=1)
+        loader_train, loader_valid = setup_dataloader(data=data, cat=cat, mode=1)
 
         ep = 0
-        while ep < parameters['model_dict']['active_learning_params_group']['epochs_per_iteration']:
+        if parameters['model_dict']['optimizer_params']['dynamic_lr']:
+            dist_params = dict(
+                dist_type=parameters['model_dict']['optimizer_params']['dist_type'],
+                vars=parameters['model_dict']['optimizer_params']['lr_scale'],
+                size=parameters['model_dict']['num_epochs'],
+                floor=parameters['model_dict']['optimizer_params']['params_group']['lr']
+            )
+            lr_data = get_distribution(dist_params)
+        else:
+            lr_data = np.linspace(parameters['model_dict']['optimizer_params']['params_group']['lr'],
+                                  parameters['model_dict']['optimizer_params']['params_group']['lr'],
+                                  parameters['model_dict']['active_learning_params_group']['training_params_group']['epochs_per_iteration'])
 
+        while ep < parameters['model_dict']['active_learning_params_group']['training_params_group']['epochs_per_iteration']:
+            parameters['model_dict']['optimizer_params']['params_group']['lr'] = lr_data[ep]
+            if parameters['device_dict']['run_ddp']:
+                parameters['model_dict']['optimizer_params']['params_group'][
+                    'params'] = model.module.processor.parameters()
+            else:
+                parameters['model_dict']['optimizer_params']['params_group']['params'] = model.processor.parameters()
+            optimizer = set_optimizer(parameters)
+            optimizer_to(optimizer, parameters['device_dict']['device'])
+            loss_train = train(loader_train, model, parameters, optimizer,active_learning_dict=active_loss_dict);
             ep += 1
+
+        loss_valid, test_info = test_non_intepretable_internal(loader_valid, model, parameters, rank=rank,
+                                                               return_test_info=True)
+        loss_train, train_info = test_non_intepretable_internal(loader_train, model, parameters, rank=rank,
+                                                                return_test_info=True)
+        ax[0][iteration + 1].plot([item for sublist in test_info['y'] for item in sublist],
+                        [item for sublist in test_info['pred'] for item in sublist], 'go',markeredgecolor='k')
+        ax[1][iteration + 1].plot([item for sublist in train_info['y'] for item in sublist],
+                        [item for sublist in train_info['pred'] for item in sublist], 'ro',markeredgecolor='k')
+
+        new_graphs = [new_graphs[i] for i in remaining_data]
+        parameters['model_dict']['active_learning_params_group']['sampling_params_group']['data'] = new_graphs
+        parameters['model_dict']['active_learning_params_group']['sampling_params_group']['y'] = [graph.y for graph in
+                                                                                                  new_graphs]
+
+        loader_train = setup_dataloader({
+            'training': training_graphs,
+        }, cat=cat, mode=0)
+        loss_train, train_info = test_non_intepretable_internal(loader_train, model, parameters, rank=rank,
+                                                                return_test_info=True)
+        ax[2][iteration+1].plot([item for sublist in train_info['y'] for item in sublist],
+                      [item for sublist in train_info['pred'] for item in sublist], 'yo', markeredgecolor='k')
+
         iteration += 1
+    plt.show()
 
     # test model against added points
 
@@ -202,6 +282,7 @@ def run_training(rank,iteration,cat=None):
                 if rank == 0:
                     model_params_group = {
                         'samples':samples,
+                        'data_loader':loader_train,
                         'L_train':L_train[-1],
                         'L_valid':L_valid[-1]
                     }
