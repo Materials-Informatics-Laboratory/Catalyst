@@ -36,13 +36,18 @@ class GOP():
                         degrees[-1] += G[edge[0]][edge[1]]['weight']
             unique_degrees, counts = np.unique(degrees, return_counts=True)
             gini = lambda x: np.abs(np.subtract.outer(x, x)).sum() / (2 * len(x) * np.sum(x))
-            if self.params['with_gini']:
-                degree_gini = gini(np.array(unique_degrees))
-            else:
-                degree_gini = 0.0
+
             for ii, deg in enumerate(unique_degrees):
                 p_ii = counts[ii] / sum(counts)
-                sg_op += -1.0*p_ii * math.log(p_ii) + deg * p_ii + degree_gini
+                sg_op += -1.0*p_ii * math.log(p_ii)
+            if self.params['with_gini']:
+                sg_op += gini(np.array(unique_degrees))
+            else:
+                prob_sum = 0.0
+                for ii, deg in enumerate(unique_degrees):
+                    p_ii = counts[ii] / sum(counts)
+                    prob_sum += deg * p_ii
+                sg_op += prob_sum
             op += math.pow(sg_op, self.params['k'])
         return op
 

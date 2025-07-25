@@ -41,6 +41,16 @@ global n_data
 global n_nodes
 global n_dim
 
+
+def return_new_model():
+    model = ALIGNN(
+        encoder=Encoder_atomic(num_species=n_types, cutoff=cutoff, dim=regression_indim, act=nn.SiLU()),
+        processor=Processor(num_convs=n_convs, dim=regression_indim, conv_type='mesh', act=nn.SiLU()),
+        decoder=PositiveScalarsDecoder(dim=regression_indim, act=nn.SiLU()),
+        # decoder=Decoder(in_dim=regression_indim, out_dim=regression_outdim, act=nn.SiLU(),combine=False)
+    )
+    return model
+
 '''
 Function definitions
 '''
@@ -265,6 +275,7 @@ def train_model(cat,pretrain=False):
         del cat.parameters['io_dict']['samples_dir']
         cat.parameters['io_dict']['samples_dir'] = os.path.join(cat.parameters['io_dict']['main_path'], 'samples','model_samples')
         for iteration in range(cat.parameters['model_dict']['n_models']):
+            cat.set_model(return_new_model())
             if cat.parameters['device_dict']['run_ddp']:
                 print('Performing training on model ', iteration)
                 processes = []
@@ -560,7 +571,7 @@ if __name__ == '__main__':
     parameters = dict(
         device_dict=dict(
             world_size=1,
-            device='cuda',
+            device='cpu',
             ddp_backend='gloo',
             run_ddp=False,
             pin_memory=False,
@@ -597,7 +608,7 @@ if __name__ == '__main__':
             shuffle_steps=10
         ),
         model_dict=dict(
-            n_models=1,
+            n_models=3,
             num_epochs=5,
             train_delta=0.001,
             train_tolerance=1.0,
@@ -650,24 +661,19 @@ if __name__ == '__main__':
                         ),
                         ls_mod=umap_.UMAP(n_neighbors=10, min_dist=0.1, n_components=2)
                     )
-    alignnd_model = ALIGNN(
-                        encoder=Encoder_atomic(num_species=n_types, cutoff=cutoff, dim=regression_indim, act=nn.SiLU()),
-                        processor=Processor(num_convs=n_convs, dim=regression_indim, conv_type='mesh', act=nn.SiLU()),
-                        decoder=PositiveScalarsDecoder(dim=regression_indim, act=nn.SiLU()),
-                        #decoder=Decoder(in_dim=regression_indim, out_dim=regression_outdim, act=nn.SiLU(),combine=False)
-                    )
+
     #decoder=PositiveScalarsDecoder(dim=regression_indim, act=nn.SiLU()),
     cat = Catalyst()
     cat.set_params(parameters)
 
-    gen_graphs =1
-    project_graphs =1
-    gen_samples = 1
+    gen_graphs =0
+    project_graphs =0
+    gen_samples = 0
     perform_train = 1
     perform_retrain = 0
     perform_test = 1
     plot_test = 1
-    plot_training =0
+    plot_training =1
     perform_ranking = 0
     perform_predictions = 0
     perform_active_learning = 1
@@ -680,15 +686,15 @@ if __name__ == '__main__':
     if gen_samples:
         sample_data(cat,graph_data=raw_data,projected_data=projections)
     if perform_train:
-        cat.set_model(alignnd_model)
+        #cat.set_model(alignnd_model)
         if parameters['model_dict']['pre_training']:
             cat.parameters['loader_dict']['batch_size'] = [10,-1]
             cat.parameters['model_dict']['num_epochs'] = 5
             cat.parameters['model_dict']['train_delta'] = 0.001
             cat.parameters['model_dict']['train_tolerance'] = 1.0
             train_model(cat,True)
-        cat.parameters['loader_dict']['batch_size'] = [10,10]
-        cat.parameters['model_dict']['num_epochs'] = 100
+        cat.parameters['loader_dict']['batch_size'] = [100,100]
+        cat.parameters['model_dict']['num_epochs'] = 5
         cat.parameters['model_dict']['train_delta'] = 0.001
         cat.parameters['model_dict']['train_tolerance'] = 0.001
         train_model(cat, False)
