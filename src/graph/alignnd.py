@@ -210,29 +210,33 @@ def realignnd(structures,neighbor_params,dihedral=False,store_atoms=False,use_pt
                 edge_index_A = np.hstack([edge_index_bnd_ang])
                 x_ang = np.concatenate([x_bnd_ang])
                 mask_dih_ang = [False]
-            if len(data_amounts["x_ang"]) == 0:
-                data_amounts["x_ang"].append(len(x_ang) - 1)
-                if dihedral:
-                    data_amounts["x_dih_ang"].append(len(x_dih_ang) - 1)
-            else:
-                data_amounts["x_ang"].append(data_amounts["x_ang"][-1] + len(x_ang) - 1)
-                if dihedral:
-                    data_amounts["x_dih_ang"].append(data_amounts["x_dih_ang"][-1] + len(x_dih_ang) - 1)
 
-        if len(data_amounts["x_atm"]) == 0:
-            data_amounts["x_atm"].append(len(x_atm) - 1)
-            data_amounts["x_bnd"].append(len(x_bnd) - 1)
+        if scale == 0:
+            data_amounts["x_atm"].append(len(x_atm))
+            data_amounts["x_bnd"].append(len(x_bnd))
+            if include_angs:
+                data_amounts["x_ang"].append(len(x_ang))
+                if dihedral:
+                    data_amounts["x_dih_ang"].append(len(x_dih_ang))
         else:
-            data_amounts["x_atm"].append(data_amounts["x_atm"][-1] + len(x_atm) - 1)
-            data_amounts["x_bnd"].append(data_amounts["x_bnd"][-1] + len(x_bnd) - 1)
+            data_amounts["x_atm"].append(data_amounts["x_atm"][-1] + len(x_atm))
+            data_amounts["x_bnd"].append(data_amounts["x_bnd"][-1] + len(x_bnd))
+            if include_angs:
+                data_amounts["x_ang"].append(data_amounts["x_ang"][-1] + len(x_ang))
+                if dihedral:
+                    data_amounts["x_dih_ang"].append(data_amounts["x_dih_ang"][-1] + len(x_dih_ang))
 
         if scale > 0:
             if include_angs:
-                f_edge_index_A = np.hstack((f_edge_index_A, edge_index_A))
-                f_x_ang = np.append(f_x_ang, x_ang)
-                f_mask_dih_ang = np.append(f_mask_dih_ang, mask_dih_ang)
                 if dihedral:
                     f_x_dih_ang = np.append(f_x_dih_ang, x_dih_ang)
+                else:
+                    ang_scale = data_amounts["x_bnd"][-2]
+                    edge_index_A += ang_scale
+
+                    f_edge_index_A = np.hstack((f_edge_index_A, edge_index_A))
+                    f_x_ang = np.append(f_x_ang, x_ang)
+                    f_mask_dih_ang = np.append(f_mask_dih_ang, mask_dih_ang)
 
             f_edge_index_G = np.hstack((f_edge_index_G, t_edge_index_G))
             f_x_atm = np.concatenate((f_x_atm, x_atm), axis=0)
@@ -242,6 +246,7 @@ def realignnd(structures,neighbor_params,dihedral=False,store_atoms=False,use_pt
                 atms.append(atoms)
         else:
             if include_angs:
+
                 f_edge_index_A = edge_index_A
                 f_x_ang = x_ang
                 f_mask_dih_ang = mask_dih_ang
@@ -253,7 +258,8 @@ def realignnd(structures,neighbor_params,dihedral=False,store_atoms=False,use_pt
 
             if store_atoms:
                 atms = [atoms]
-        scale += len(atoms)
+        scale += len(x_atm)
+
 
     if include_angs:
         data = Atomic_Graph_Data(
@@ -501,7 +507,7 @@ def atomic_alignnd_from_global_graph(global_graph,dihedral=False, store_atoms=Fa
                 )
             )
         else:
-            unique_elements, indices = np.unique(tmp_edge_index_G[0], return_index=True)
+            unique_elements, indices = np.unique(edge_index_G[0], return_index=True)
             unique_elements_in_order = unique_elements[np.argsort(indices)]
             for m in range(len(edge_index_G[0])):
                 for n in range(len(unique_elements_in_order)):
