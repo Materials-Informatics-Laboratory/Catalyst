@@ -1,6 +1,6 @@
 from catalyst.src.ml.nn.gnn.models.alignn import Encoder_generic,Encoder_atomic, Processor, Decoder,PositiveScalarsDecoder, ALIGNN
 from catalyst.src.ml.inference import predict_external, test_non_intepretable_external, predict_interpretable
-from catalyst.src.ml.training import run_training, run_pre_training, run_active_learning
+from catalyst.src.ml.training import run_training,run_active_learning
 from catalyst.src.characterization.sodas.model.sodas import SODAS
 from catalyst.src.graph.generic_build import generic_graph_gen
 from catalyst.src.ml.utils.distributed import cuda_destroy
@@ -248,46 +248,23 @@ def train_model(cat,pretrain=False):
     '''
     PERFORM MODEL TRAINING
     '''
-    if pretrain:
-        cat.parameters['io_dict']['samples_dir'] = None
-        del cat.parameters['io_dict']['samples_dir']
-        cat.parameters['io_dict']['samples_dir'] = os.path.join(cat.parameters['io_dict']['main_path'], 'samples',
-                                                               'pretrain')
-        print('Performing pretraining...')
+    cat.parameters['io_dict']['samples_dir'] = None
+    del cat.parameters['io_dict']['samples_dir']
+    cat.parameters['io_dict']['samples_dir'] = os.path.join(cat.parameters['io_dict']['main_path'], 'samples','model_samples')
+    for iteration in range(cat.parameters['model_dict']['n_models']):
+        cat.set_model(return_new_model())
         if cat.parameters['device_dict']['run_ddp']:
+            print('Performing training on model ', iteration)
             processes = []
             for rank in range(cat.parameters['device_dict']['world_size']):
-                p = mp.Process(target=run_pre_training, args=(rank, cat,))
+                p = mp.Process(target=run_training, args=(rank, iteration, cat,))
                 p.start()
                 processes.append(p)
             for p in processes:
                 p.join()
             cuda_destroy()
         else:
-            run_pre_training(rank=0, cat=cat)
-        cat.parameters['model_dict']['restart_training'] = True
-        cat.parameters['io_dict']['loaded_model_name'] = None
-        del cat.parameters['io_dict']['loaded_model_name']
-        cat.parameters['io_dict']['loaded_model_name'] = glob.glob(os.path.join(cat.parameters['io_dict']['main_path'], 'models',
-                               'pretraining', 'pre*'))[0]
-    else:
-        cat.parameters['io_dict']['samples_dir'] = None
-        del cat.parameters['io_dict']['samples_dir']
-        cat.parameters['io_dict']['samples_dir'] = os.path.join(cat.parameters['io_dict']['main_path'], 'samples','model_samples')
-        for iteration in range(cat.parameters['model_dict']['n_models']):
-            cat.set_model(return_new_model())
-            if cat.parameters['device_dict']['run_ddp']:
-                print('Performing training on model ', iteration)
-                processes = []
-                for rank in range(cat.parameters['device_dict']['world_size']):
-                    p = mp.Process(target=run_training, args=(rank, iteration, cat,))
-                    p.start()
-                    processes.append(p)
-                for p in processes:
-                    p.join()
-                cuda_destroy()
-            else:
-                run_training(rank=0, iteration=iteration, cat=cat)
+            run_training(rank=0, iteration=iteration, cat=cat)
     return
 
 def retrain_model(cat):
@@ -310,23 +287,10 @@ def retrain_model(cat):
     return
 
 def plot_training_results(cat,retrain=False):
-    if retrain:
-        fig, ax = plt.subplots(nrows=1, ncols=3, sharex=True, sharey=True)
-        ax[2].set_title('Retraining loss')
-    else:
-        fig, ax = plt.subplots(nrows=1, ncols=2,sharex=True,sharey=True)
-    ax[0].set_title('Pretraining loss')
-    ax[1].set_title('Training loss')
 
-    if cat.parameters['model_dict']['pre_training']:
-        cat.parameters['io_dict']['model_dir'] = None
-        del cat.parameters['io_dict']['model_dir']
-        cat.parameters['io_dict']['model_dir'] = os.path.join(cat.parameters['io_dict']['main_path'], 'models',
-                                                             'pretraining')
-        run_data = load_dictionary(os.path.join(cat.parameters['io_dict']['model_dir'], 'run_information.npy'))
-        loss = run_data['training_loss']
-        x=np.linspace(1,len(loss),len(loss))
-        ax[0].plot(x,loss,color='b',marker='o')
+    fig, ax = plt.subplots(nrows=1, ncols=1,sharex=True,sharey=True)
+    ax.set_title('Training loss')
+
     loss = [[],[]]
     cat.parameters['io_dict']['model_dir'] = None
     del cat.parameters['io_dict']['model_dir']
@@ -335,27 +299,10 @@ def plot_training_results(cat,retrain=False):
     loss[0] = run_data['training_loss']
     loss[1] = run_data['validation_loss']
     x=np.linspace(1,len(loss[0]),len(loss[0]))
-    ax[1].set_yscale('log')
-    ax[1].plot(x,loss[0],color='b',marker='o',label='Training loss')
-    ax[1].plot(x,loss[1],color='r',marker='o',label='Validation loss')
-    ax[1].legend(loc="upper right")
-
-    if retrain:
-        loss = [[], []]
-        cat.parameters['io_dict']['model_dir'] = None
-        del cat.parameters['io_dict']['model_dir']
-        cat.parameters['io_dict']['model_dir'] = os.path.join(cat.parameters['io_dict']['main_path'], 'models',
-                                                             'training', 'restart')
-        run_data = load_dictionary(os.path.join(cat.parameters['io_dict']['model_dir'], 'run_information.npy'))
-        loss[0] = run_data['training_loss']
-        loss[1] = run_data['validation_loss']
-        x = np.linspace(1, len(loss[0]), len(loss[0]))
-        ax[2].set_yscale('log')
-        ax[2].plot(x, loss[0], color='b', marker='o', label='Training loss')
-        ax[2].plot(x, loss[1], color='r', marker='o', label='Validation loss')
-        ax[2].legend(loc="upper right")
-    plt.show()
-
+    ax.set_yscale('log')
+    ax.plot(x,loss[0],color='b',marker='o',label='Training loss')
+    ax.plot(x,loss[1],color='r',marker='o',label='Validation loss')
+    ax.legend(loc="upper right")
 
 def test_model(cat):
     '''
@@ -565,7 +512,7 @@ if __name__ == '__main__':
     regression_outdim = 1
     cutoff = 50.0
     n_convs = 3
-    n_data = 5000 # total number of samples
+    n_data = 100 # total number of samples
     n_nodes = np.linspace(5,50, n_data)  # number of data points per sample
     n_dim = 3  # number of dimensions in intial raw data
     parameters = dict(
@@ -608,10 +555,11 @@ if __name__ == '__main__':
             shuffle_steps=10
         ),
         model_dict=dict(
-            n_models=3,
+            n_models=1,
             num_epochs=5,
             train_delta=0.001,
             train_tolerance=1.0,
+            worsen_tolerance=0.05,
             max_deltas=4,
             loss_params={
                 'function':torch.nn.MSELoss(),
@@ -620,15 +568,15 @@ if __name__ == '__main__':
             },
             accumulate_loss='exact',
             model=None,
+            strict_loss_policy = True,
             interpretable=False,
-            pre_training=False,
             restart_training=False,
             optimizer_params=dict(
-                dynamic_lr=False,
+                dynamic_lr=True,
                 optimizer='AdamW',
                 params_group={
                     'lr': 0.001,
-                    #'weight_decay':0.001
+                    'lr_decay_factor':0.5
                 }
             ),
             active_learning = True,
@@ -666,14 +614,14 @@ if __name__ == '__main__':
     cat = Catalyst()
     cat.set_params(parameters)
 
-    gen_graphs =0
+    gen_graphs = 0
     project_graphs =0
     gen_samples = 0
     perform_train = 1
     perform_retrain = 0
-    perform_test = 1
-    plot_test = 1
-    plot_training =1
+    perform_test = 0
+    plot_test = 0
+    plot_training =0
     perform_ranking = 0
     perform_predictions = 0
     perform_active_learning = 1
@@ -686,18 +634,12 @@ if __name__ == '__main__':
     if gen_samples:
         sample_data(cat,graph_data=raw_data,projected_data=projections)
     if perform_train:
-        #cat.set_model(alignnd_model)
-        if parameters['model_dict']['pre_training']:
-            cat.parameters['loader_dict']['batch_size'] = [10,-1]
-            cat.parameters['model_dict']['num_epochs'] = 5
-            cat.parameters['model_dict']['train_delta'] = 0.001
-            cat.parameters['model_dict']['train_tolerance'] = 1.0
-            train_model(cat,True)
         cat.parameters['loader_dict']['batch_size'] = [100,100]
         cat.parameters['model_dict']['num_epochs'] = 5
         cat.parameters['model_dict']['train_delta'] = 0.001
         cat.parameters['model_dict']['train_tolerance'] = 0.001
         train_model(cat, False)
+
 
         if perform_retrain:
             cat.parameters['model_dict']['restart_training'] = True
@@ -729,7 +671,7 @@ if __name__ == '__main__':
         predict(cat,perform_ranking)
     if perform_active_learning:
         cat.parameters['loader_dict']['batch_size'] = [1, 1]
-        cat.set_model(alignnd_model)
+        cat.set_model(return_new_model())
         cat.parameters['io_dict']['loaded_model_name'] = None
         del cat.parameters['io_dict']['loaded_model_name']
         cat.parameters['io_dict']['loaded_model_name'] = \

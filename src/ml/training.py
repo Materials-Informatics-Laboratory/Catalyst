@@ -63,10 +63,11 @@ def run_active_learning(rank,cat=None):
     epoch_times = []
     running_valid_delta = []
     L_train, L_valid = [], []
-    shuffle_counter = 0
-    met_tolerance = 0
+    total_active_samples = []
     min_loss_train = 1.0E30
     min_loss_valid = 1.0E30
+    shuffle_counter = 0
+    met_tolerance = 0
     iteration = 0
     parameters = cat.parameters
 
@@ -85,7 +86,8 @@ def run_active_learning(rank,cat=None):
     active_loss_dict = active_learning_setup(parameters,{'model':model,'metadata':model_data})
 
     if parameters['io_dict']['graph_read_format'] != 2:
-        training_graphs = read_graphs_from_gids(parameters['model_dict']['active_learning_params_group']['training_data_dir'],model_data['samples']['training_samples'])
+        training_graphs = read_graphs_from_gids(parameters['model_dict']['active_learning_params_group']['training_data_dir'],
+                                                model_data['run_information']['samples']['training_samples'])
     else:
         training_graphs = load_dictionary(glob.glob(os.path.join(parameters['model_dict']['active_learning_params_group']['training_data_dir'], 'graphs.data'))[0])['graphs']
     new_graphs = read_graphs_from_gids(
@@ -111,28 +113,26 @@ def run_active_learning(rank,cat=None):
             data['training'] = training_graphs.copy()
 
     import matplotlib.pyplot as plt
-    fig, ax = plt.subplots(3, parameters['model_dict']['active_learning_params_group']['training_params_group']['iterations'] + 1, sharex=False,sharey=False)
     loader_train = setup_dataloader({
         'training': training_graphs,
     }, cat=cat, mode=0)
     loss_train, train_info = test_non_intepretable_internal(loader_train, model, parameters, rank=rank,
                                                             return_test_info=True)
-    ax[2][0].plot([item for sublist in train_info['y'] for item in sublist],
-                  [item for sublist in train_info['pred'] for item in sublist], 'yo', markeredgecolor='k')
+
+    print('Initial training loss: ',loss_train)
+
     while iteration < parameters['model_dict']['active_learning_params_group']['training_params_group']['iterations']:
+
+        L_train.append([])
+        L_valid.append([])
+        print('Active learning iteration: ',iteration)
         # determine which point(s) to add to model
         new_samples, remaining_data = active_sampling(
             parameters['model_dict']['active_learning_params_group']['sampling_params_group'])
+        total_active_samples.append(new_samples)
         loader_train = setup_dataloader({'training': new_graphs, }, cat=cat, mode=0)
         loss_train, train_info = test_non_intepretable_internal(loader_train, model, parameters, rank=rank,
                                                                return_test_info=True)
-        ty = np.linspace(0,50,10)
-        for i in range(parameters['model_dict']['active_learning_params_group']['training_params_group']['iterations'] + 1):
-            ax[0][i].plot(ty,ty,'k')
-            ax[1][i].plot(ty, ty, 'k')
-            ax[2][i].plot(ty, ty, 'k')
-        ax[0][0].plot([item for sublist in train_info['y'] for item in sublist],
-                [item for sublist in train_info['pred'] for item in sublist],'co',markeredgecolor='k')
 
         data['training'].extend([new_graphs[i] for i in new_samples])
         data['validation'] = [new_graphs[i] for i in remaining_data]
@@ -140,55 +140,105 @@ def run_active_learning(rank,cat=None):
         loader_train, loader_valid = setup_dataloader(data=data, cat=cat, mode=1)
 
         ep = 0
-        if parameters['model_dict']['optimizer_params']['dynamic_lr']:
-            dist_params = dict(
-                dist_type=parameters['model_dict']['optimizer_params']['dist_type'],
-                vars=parameters['model_dict']['optimizer_params']['lr_scale'],
-                size=parameters['model_dict']['num_epochs'],
-                floor=parameters['model_dict']['optimizer_params']['params_group']['lr']
-            )
-            lr_data = get_distribution(dist_params)
+        patience_counter = 0
+        patience = parameters['model_dict'].get('patience', 10)  # epochs to wait before LR reduction
+        if parameters['model_dict']['optimizer_params'].get('dynamic_lr'):
+            lr_decay_factor = parameters['model_dict']['optimizer_params']['params_group'].get('lr_decay_factor', 0.5)
         else:
-            lr_data = np.linspace(parameters['model_dict']['optimizer_params']['params_group']['lr'],
-                                  parameters['model_dict']['optimizer_params']['params_group']['lr'],
-                                  parameters['model_dict']['active_learning_params_group']['training_params_group']['epochs_per_iteration'])
-
+            lr_decay_factor = 0.0
+        worsen_tolerance = parameters['model_dict'].get('worsen_tolerance', 0.05)  # 5% allowed
         while ep < parameters['model_dict']['active_learning_params_group']['training_params_group']['epochs_per_iteration']:
-            parameters['model_dict']['optimizer_params']['params_group']['lr'] = lr_data[ep]
+            if rank == 0:
+                if ep > 0:
+                    start_time = time.time()
+                print('Epoch ', ep + 1, ' of ', parameters['model_dict']['num_epochs'])
+                sys.stdout.flush()
+
             if parameters['device_dict']['run_ddp']:
                 parameters['model_dict']['optimizer_params']['params_group'][
                     'params'] = model.module.processor.parameters()
             else:
                 parameters['model_dict']['optimizer_params']['params_group']['params'] = model.processor.parameters()
+
+            # --- Data reshuffle ---
+            if parameters['loader_dict']['shuffle_loader'] == True:
+                if ep % parameters['loader_dict']['shuffle_steps'] == 0 and ep > 0:
+                    if rank == 0:
+                        print('Shuffling training data...')
+                    loader_train, loader_valid = setup_dataloader(data=data, cat=cat, epoch=ep, reshuffle=True,
+                                                                      mode=1)
+                    shuffle_counter += 1
+
+            # --- Optimizer setup ---
+            if parameters['device_dict']['run_ddp']:
+                parameters['model_dict']['optimizer_params']['params_group'][
+                    'params'] = model.module.processor.parameters()
+            else:
+                parameters['model_dict']['optimizer_params']['params_group'][
+                    'params'] = model.processor.parameters()
+
             optimizer = set_optimizer(parameters)
             optimizer_to(optimizer, parameters['device_dict']['device'])
-            loss_train = train(loader_train, model, parameters, optimizer,active_learning_dict=active_loss_dict);
+
+            # --- Train & Validate ---
+            loss_train = train(loader_train, model, parameters, optimizer,active_learning_dict=active_loss_dict)
+            loss_valid = test_non_intepretable_internal(loader_valid, model, parameters, rank=rank)
+            L_train[-1].append(loss_train)
+            L_valid[-1].append(loss_valid)
+            if rank == 0:
+                if ep > 0:
+                    epoch_times.append(time.time() - start_time)
+                    print('epoch_time = ', time.time() - start_time, ' seconds',
+                          ' Average epoch time = ', sum(epoch_times) / float(len(epoch_times)), ' seconds')
+                print('Train loss = ', loss_train, ' Validation loss = ', loss_valid)
+
+                # --- Save best model by validation only ---
+                if loss_valid < min_loss_valid:
+                    min_loss_valid = loss_valid
+                    check = 0
+                    if parameters['model_dict'].get('strict_loss_policy'):
+                        if loss_train < min_loss_train:
+                            min_loss_train = loss_train
+                            check = 1
+                    else:
+                        check = 1
+                        min_loss_train = loss_train
+                    if check:
+                        if rank == 0:
+                            model_params_group = {
+                                'previous_samples_added': samples,
+                                'new_samples':new_samples,
+                                'all_actie_samples':total_active_samples,
+                                'data_loader': loader_train,
+                                'L_train': L_train[-1][-1],
+                                'L_valid': L_valid[-1][-1],
+                                'iteration':iteration,
+                            }
+                            save_model(model=model, cat=cat, model_params_group=model_params_group,
+                                       remove_old_models=parameters['io_dict']['remove_old_model'])
+                        patience_counter = 0
+                else:
+                    patience_counter += 1
+
+
+
+
+
             ep += 1
 
         loss_valid, test_info = test_non_intepretable_internal(loader_valid, model, parameters, rank=rank,
                                                                return_test_info=True)
         loss_train, train_info = test_non_intepretable_internal(loader_train, model, parameters, rank=rank,
                                                                 return_test_info=True)
-        ax[0][iteration + 1].plot([item for sublist in test_info['y'] for item in sublist],
-                        [item for sublist in test_info['pred'] for item in sublist], 'go',markeredgecolor='k')
-        ax[1][iteration + 1].plot([item for sublist in train_info['y'] for item in sublist],
-                        [item for sublist in train_info['pred'] for item in sublist], 'ro',markeredgecolor='k')
+        print('Final losses for iteration ',iteration,' training loss: ',loss_train,' validation loss: ',loss_valid)
 
         new_graphs = [new_graphs[i] for i in remaining_data]
         parameters['model_dict']['active_learning_params_group']['sampling_params_group']['data'] = new_graphs
         parameters['model_dict']['active_learning_params_group']['sampling_params_group']['y'] = [graph.y for graph in
                                                                                                   new_graphs]
 
-        loader_train = setup_dataloader({
-            'training': training_graphs,
-        }, cat=cat, mode=0)
-        loss_train, train_info = test_non_intepretable_internal(loader_train, model, parameters, rank=rank,
-                                                                return_test_info=True)
-        ax[2][iteration+1].plot([item for sublist in train_info['y'] for item in sublist],
-                      [item for sublist in train_info['pred'] for item in sublist], 'yo', markeredgecolor='k')
 
         iteration += 1
-    plt.show()
 
     # test model against added points
 
@@ -222,84 +272,116 @@ def run_training(rank,iteration,cat=None):
                               os.path.join(parameters['io_dict']['samples_dir'], str(iteration), 'train_valid_split.npy'),
                                        format=parameters['io_dict']['graph_read_format'],rank=rank)
     load_model = False
-    if parameters['model_dict']['pre_training'] or parameters['model_dict']['restart_training']:
+    if parameters['model_dict']['restart_training']:
         load_model=True
     model = setup_model(cat,rank=rank,load=load_model)
     loader_train, loader_valid = setup_dataloader(data=data,cat=cat,mode=1)
 
-    if parameters['model_dict']['optimizer_params']['dynamic_lr']:
-        dist_params = dict(
-                dist_type=parameters['model_dict']['optimizer_params']['dist_type'],
-                vars=parameters['model_dict']['optimizer_params']['lr_scale'],
-                size=parameters['model_dict']['num_epochs'],
-                floor=parameters['model_dict']['optimizer_params']['params_group']['lr']
-            )
-        lr_data = get_distribution(dist_params)
-    else:
-        lr_data = np.linspace(parameters['model_dict']['optimizer_params']['params_group']['lr'],
-                                  parameters['model_dict']['optimizer_params']['params_group']['lr'],parameters['model_dict']['num_epochs'])
     if rank == 0:
         print('Training model ',iteration,' using ',len(data['training']), ' training points and ',len(data['validation']),' validation points...')
+    patience_counter = 0
+    patience = parameters['model_dict'].get('patience', 10)  # epochs to wait before LR reduction
+    if parameters['model_dict']['optimizer_params'].get('dynamic_lr'):
+        lr_decay_factor = parameters['model_dict']['optimizer_params']['params_group'].get('lr_decay_factor', 0.5)
+    else:
+        lr_decay_factor = 0.0
+    worsen_tolerance = parameters['model_dict'].get('worsen_tolerance', 0.05)  # 5% allowed
     while ep < parameters['model_dict']['num_epochs']:
         if rank == 0:
             if ep > 0:
                 start_time = time.time()
-            print('Epoch ',ep+1,' of ',parameters['model_dict']['num_epochs'],  ' lr_rate: ',lr_data[ep], 'loss_accum: ',parameters['model_dict']['accumulate_loss'])
+            print('Epoch ', ep + 1, ' of ', parameters['model_dict']['num_epochs'])
             sys.stdout.flush()
 
-        if parameters['loader_dict']['shuffle_loader'] == True: #reshuffle training data to avoid overfitting
+        # --- Data reshuffle ---
+        if parameters['loader_dict']['shuffle_loader'] == True:
             if ep % parameters['loader_dict']['shuffle_steps'] == 0 and ep > 0:
                 if rank == 0:
                     print('Shuffling training data...')
-                loader_train, loader_valid = setup_dataloader(data=data,cat=cat,epoch=ep,reshuffle=True,mode=1)
+                loader_train, loader_valid = setup_dataloader(data=data, cat=cat, epoch=ep, reshuffle=True, mode=1)
                 shuffle_counter += 1
 
-        parameters['model_dict']['optimizer_params']['params_group']['lr'] = lr_data[ep]
+        # --- Optimizer setup ---
         if parameters['device_dict']['run_ddp']:
-            parameters['model_dict']['optimizer_params']['params_group'][
-                    'params'] = model.module.processor.parameters()
+            parameters['model_dict']['optimizer_params']['params_group']['params'] = model.module.processor.parameters()
         else:
             parameters['model_dict']['optimizer_params']['params_group']['params'] = model.processor.parameters()
 
         optimizer = set_optimizer(parameters)
-        optimizer_to(optimizer,parameters['device_dict']['device'])
+        optimizer_to(optimizer, parameters['device_dict']['device'])
 
-        loss_train = train(loader_train, model, parameters, optimizer);
-        loss_valid = test_non_intepretable_internal(loader_valid, model, parameters,rank=rank)
+        # --- Train & Validate ---
+        loss_train = train(loader_train, model, parameters, optimizer)
+        loss_valid = test_non_intepretable_internal(loader_valid, model, parameters, rank=rank)
 
         if rank == 0:
             if ep > 0:
                 epoch_times.append(time.time() - start_time)
-                print('epoch_time = ', time.time() - start_time, ' seconds Average epoch time = ', sum(epoch_times) / float(len(epoch_times)), ' seconds')
-            print('Train loss = ',loss_train,' Validation loss = ',loss_valid)
+                print('epoch_time = ', time.time() - start_time, ' seconds',
+                      ' Average epoch time = ', sum(epoch_times) / float(len(epoch_times)), ' seconds')
+            print('Train loss = ', loss_train, ' Validation loss = ', loss_valid)
 
         L_train.append(loss_train)
         L_valid.append(loss_valid)
-        if loss_train < min_loss_train:
-            min_loss_train = loss_train
-            if loss_valid < min_loss_valid:
-                min_loss_valid = loss_valid
+
+        # --- Save best model by validation only ---
+        if loss_valid < min_loss_valid:
+            min_loss_valid = loss_valid
+            if parameters['model_dict'].get('strict_loss_policy'):
+                if loss_train < min_loss_train:
+                    min_loss_train = loss_train
+                    check = 1
+            else:
+                check = 1
+                min_loss_train = loss_train
+            if check:
                 if rank == 0:
+                    #best_model_state = {k: v.cpu() for k, v in model.state_dict().items()}
                     model_params_group = {
-                        'samples':samples,
-                        'data_loader':loader_train,
-                        'L_train':L_train[-1],
-                        'L_valid':L_valid[-1]
+                        'samples': samples,
+                        'data_loader': loader_train,
+                        'L_train': L_train[-1],
+                        'L_valid': L_valid[-1]
                     }
-                    save_model(model=model, cat=cat, model_params_group=model_params_group,remove_old_models=parameters['io_dict']['remove_old_model'])
+                    save_model(model=model, cat=cat, model_params_group=model_params_group,
+                               remove_old_models=parameters['io_dict']['remove_old_model'])
+                patience_counter = 0  # reset patience
+        else:
+            patience_counter += 1
+
+            # --- Revert if validation worsens too much ---
+            if loss_valid > min_loss_valid * (1 + worsen_tolerance) and best_model_state is not None:
+                if rank == 0:
+                    print(f"Validation worsened by more than {100 * worsen_tolerance:.1f}%. Reverting to best model.")
+                model.load_state_dict(best_model_state)
+
+        # --- Learning rate scheduling on plateau ---
+        if patience_counter >= patience:
+            if rank == 0:
+                print(f"No improvement for {patience} epochs. Reducing LR by factor {lr_decay_factor}.")
+            if lr_decay_factor > 0.0:
+                for g in optimizer.param_groups:
+                    g['lr'] = g['lr'] * lr_decay_factor
+            patience_counter = 0
+
+        # --- Convergence check using deltas ---
         if ep > 1:
             delta_val = loss_valid - L_valid[-2]
             running_valid_delta.append(abs(delta_val))
             if len(running_valid_delta) > parameters['model_dict']['max_deltas']:
                 running_valid_delta.pop(0)
                 if rank == 0:
-                    print('Running validation delta = ',sum(running_valid_delta)/len(running_valid_delta))
+                    print('Running validation delta = ',
+                          sum(running_valid_delta) / len(running_valid_delta))
             if len(running_valid_delta) == parameters['model_dict']['max_deltas']:
-                if sum(running_valid_delta)/len(running_valid_delta)< parameters['model_dict']['train_delta'] and (sum(L_valid[-parameters['model_dict']['max_deltas']:])/parameters['model_dict']['max_deltas']) < parameters['model_dict']['train_tolerance']:
+                if (sum(running_valid_delta) / len(running_valid_delta) < parameters['model_dict']['train_delta']
+                        and (sum(L_valid[-parameters['model_dict']['max_deltas']:]) / parameters['model_dict'][
+                            'max_deltas']) < parameters['model_dict']['train_tolerance']):
                     if rank == 0:
                         print('Validation delta satisfies set tolerance...exiting training loop...')
                     ep = parameters['model_dict']['num_epochs']
                     met_tolerance = 1
+
         ep += 1
     if rank == 0:
         run_data = {
@@ -308,114 +390,6 @@ def run_training(rank,iteration,cat=None):
             'met_tolerance':met_tolerance,
             'training_loss':L_train,
             'validation_loss': L_valid,
-        }
-        save_dictionary(fname=os.path.join(cat.parameters['io_dict']['model_dir'],'run_information.npy'),data=run_data)
-    if parameters['device_dict']['run_ddp']:
-        ddp_destroy()
-
-def run_pre_training(rank,cat=None):
-    epoch_times = []
-    running_train_delta = []
-    L_train = []
-    shuffle_counter = 0
-    met_tolerance = 0
-    min_loss_train = 1.0E30
-    ep = 0
-    parameters = cat.parameters
-
-    if parameters['device_dict']['run_ddp']:
-        ddp_setup(rank, parameters['device_dict']['world_size'],parameters['device_dict']['ddp_backend'])
-
-    parameters['io_dict']['model_dir'] = None
-    del parameters['io_dict']['model_dir']
-    parameters['io_dict']['model_dir'] = os.path.join(parameters['io_dict']['main_path'],'models','pretraining')
-    if rank == 0:
-        if os.path.isdir(parameters['io_dict']['model_dir']):
-            shutil.rmtree(parameters['io_dict']['model_dir'])
-        os.makedirs(parameters['io_dict']['model_dir'], exist_ok=True)
-        print('Reading graphs...')
-
-    data, samples = read_training_data(parameters,
-                                       os.path.join(parameters['io_dict']['samples_dir'], 'train_valid_split.npy'),
-                                       pretrain=True,format=parameters['io_dict']['graph_read_format'],rank=rank)
-    model = setup_model(cat,rank=rank)
-    loader_train = setup_dataloader(data=data, cat=cat,mode=0)
-
-    if parameters['model_dict']['optimizer_params']['dynamic_lr']:
-        dist_params = dict(
-            dist_type=parameters['model_dict']['optimizer_params']['dist_type'],
-            vars=parameters['model_dict']['optimizer_params']['lr_scale'],
-            size=parameters['model_dict']['num_epochs'],
-            floor=parameters['model_dict']['optimizer_params']['params_group']['lr']
-        )
-        lr_data = get_distribution(dist_params)
-    else:
-        lr_data = np.linspace(parameters['model_dict']['optimizer_params']['params_group']['lr'],
-                              parameters['model_dict']['optimizer_params']['params_group']['lr'],
-                              parameters['model_dict']['num_epochs'])
-    if rank == 0:
-        print('Training using ', len(data['training']), ' training points')
-    while ep < parameters['model_dict']['num_epochs']:
-        if rank == 0:
-            if ep > 0:
-                start_time = time.time()
-            print('Epoch ', ep+1, ' of ', parameters['model_dict']['num_epochs'], ' lr_rate: ',lr_data[ep])
-            sys.stdout.flush()
-
-        if parameters['loader_dict']['shuffle_loader'] == True and ep > 0:  # reshuffle training data to avoid overfitting
-            if ep % parameters['loader_dict']['shuffle_steps'] == 0:
-                if rank == 0:
-                    print('Shuffling training data...')
-                loader_train = setup_dataloader(data=data, cat=cat,epoch=ep,reshuffle=True,mode=0)
-                shuffle_counter += 1
-
-        parameters['model_dict']['optimizer_params']['params_group']['lr'] = lr_data[ep]
-        if parameters['device_dict']['run_ddp']:
-            parameters['model_dict']['optimizer_params']['params_group'][
-                'params'] = model.module.processor.parameters()
-        else:
-            parameters['model_dict']['optimizer_params']['params_group']['params'] = model.processor.parameters()
-
-        optimizer = set_optimizer(parameters)
-        optimizer_to(optimizer, parameters['device_dict']['device'])
-
-        loss_train = train(loader_train, model, parameters,optimizer,pretrain=True);
-        if rank == 0:
-            if ep > 0:
-                epoch_times.append(time.time() - start_time)
-                print('epoch_time = ', time.time() - start_time, ' seconds Average epoch time = ',
-                  sum(epoch_times) / float(len(epoch_times)), ' seconds')
-            print('Train loss = ', loss_train)
-
-        L_train.append(loss_train)
-        if loss_train < min_loss_train:
-            min_loss_train = loss_train
-            if rank == 0:
-                model_params_group = {
-                    'samples': samples,
-                    'L_train': L_train[-1],
-                }
-                save_model(model=model, cat=cat, model_params_group=model_params_group,pretrain=True)
-        if ep > 1:
-            delta_train = loss_train - L_train[-2]
-            running_train_delta.append(abs(delta_train))
-            if len(running_train_delta) > parameters['model_dict']['max_deltas']:
-                running_train_delta.pop(0)
-                if rank == 0:
-                    print('Running training delta = ', sum(running_train_delta) / len(running_train_delta))
-            if len(running_train_delta) == parameters['model_dict']['max_deltas']:
-                if sum(running_train_delta) / len(running_train_delta) < parameters['model_dict']['train_delta'] and (sum(L_train[-parameters['model_dict']['max_deltas']:])/parameters['model_dict']['max_deltas']) < parameters['model_dict']['train_tolerance']:
-                    if rank == 0:
-                        print('Training delta satisfies set tolerance...exiting training loop...')
-                    ep = parameters['model_dict']['num_epochs']
-                    met_tolerance = 1
-        ep += 1
-    if rank == 0:
-        run_data = {
-            'epoch_timings':epoch_times,
-            'times_loader_shuffled':shuffle_counter,
-            'met_tolerance':met_tolerance,
-            'training_loss': L_train
         }
         save_dictionary(fname=os.path.join(cat.parameters['io_dict']['model_dir'],'run_information.npy'),data=run_data)
     if parameters['device_dict']['run_ddp']:

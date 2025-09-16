@@ -161,7 +161,7 @@ def setup_model(cat,rank=0,data_only=False,load=False):
                 model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
             return model
 
-def save_model(model,cat,model_params_group,remove_old_models=True,pretrain=False):
+def save_model(model,cat,model_params_group,remove_old_models=True):
     print('Saving model...')
     id = secrets.token_hex(32)
     now = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
@@ -170,45 +170,22 @@ def save_model(model,cat,model_params_group,remove_old_models=True,pretrain=Fals
     else:
         model_state = model.state_dict()
     if remove_old_models:
-        if pretrain:
-            model_names = glob.glob(os.path.join(cat.parameters['io_dict']['model_dir'], 'pre*'))
-        else:
-            model_names = glob.glob(os.path.join(cat.parameters['io_dict']['model_dir'], 'model_*'))
+        model_names = glob.glob(os.path.join(cat.parameters['io_dict']['model_dir'], 'model_*'))
         if len(model_names) > 0:
             for model_name in model_names:
                 os.remove(model_name)
-    if pretrain:
-        model_data = dict(
-            model_type='pretrain',
-            model=model_state,
-            samples=model_params_group['samples'],
-            loss_info=dict(
-                training=model_params_group['L_train'],
-                validation=None
-            ),
-            id=id,
-            time=str(now),
-            parameters=cat.parameters,
-            system_info=cat.parameters['device_dict']['system_info']
-        )
-        torch.save(model_data, os.path.join(cat.parameters['io_dict']['model_dir'], 'pre_' + str(id) + '_' + str(now)))
-    else:
-        model_data = dict(
+
+    model_data = dict(
             model_type='train',
             model=model_state,
-            samples=model_params_group['samples'],
-            data_loader=model_params_group['data_loader'],
-            loss_info=dict(
-                training=model_params_group['L_train'],
-                validation=model_params_group['L_valid']
-            ),
+            run_information=model_params_group,
             id=id,
             time=str(now),
             parameters=cat.parameters,
             system_info=cat.parameters['device_dict']['system_info']
-        )
-        torch.save(model_data,
-                   os.path.join(cat.parameters['io_dict']['model_dir'], 'model_' + str(id) + '_' + str(now)))
+    )
+    torch.save(model_data,
+                os.path.join(cat.parameters['io_dict']['model_dir'], 'model_' + str(id) + '_' + str(now)))
 
 def save_dictionary(fname,data):
     with gzip.open(fname, "wb") as fp:
@@ -285,7 +262,7 @@ def read_graphs_from_gids(path,gids=None):
     else:
         return [torch.load(graph) for graph in glob.glob(os.path.join(path, '*'))]
 
-def read_training_data(params,samples_file,pretrain=False,format=0, rank=0):
+def read_training_data(params,samples_file,format=0, rank=0):
     training_graphs = None
     training_samples = None
     validation_graphs = None
@@ -295,8 +272,7 @@ def read_training_data(params,samples_file,pretrain=False,format=0, rank=0):
         graph_files = glob.glob(os.path.join(params['io_dict']['data_dir'],'*'))
         samples = load_dictionary(samples_file)
         training_samples = samples['training']
-        if pretrain == False:
-            validation_samples = samples['validation']
+        validation_samples = samples['validation']
 
         if format == 0:
             gids = [PurePath(graph).parts[-1].split('.')[0] for graph in graph_files]
@@ -316,29 +292,26 @@ def read_training_data(params,samples_file,pretrain=False,format=0, rank=0):
             training_graphs = [None] * len(selected_graphs)
             for i in range(len(selected_graphs)):
                 training_graphs[i] = selected_graphs[i]
-        if pretrain == False:
-            a,b,c = np.intersect1d(validation_samples,gids,return_indices=True)
-            selected_graphs = [graph_files[cc] for cc in c]
-            if format == 0:
-                validation_graphs = [None] * len(selected_graphs)
-                for i in range(len(selected_graphs)):
-                    validation_graphs[i] = torch.load(selected_graphs[i])
-            else:
-                validation_graphs = [None] * len(selected_graphs)
-                for i in range(len(selected_graphs)):
-                    validation_graphs[i] = selected_graphs[i]
+        a,b,c = np.intersect1d(validation_samples,gids,return_indices=True)
+        selected_graphs = [graph_files[cc] for cc in c]
+        if format == 0:
+            validation_graphs = [None] * len(selected_graphs)
+            for i in range(len(selected_graphs)):
+                validation_graphs[i] = torch.load(selected_graphs[i])
+        else:
+            validation_graphs = [None] * len(selected_graphs)
+            for i in range(len(selected_graphs)):
+                validation_graphs[i] = selected_graphs[i]
     else:
         graph_file = load_dictionary(glob.glob(os.path.join(params['io_dict']['data_dir'], 'graphs.data'))[0])
         samples = load_dictionary(samples_file)
         training_samples = samples['training']
-        if pretrain == False:
-            validation_samples = samples['validation']
+        validation_samples = samples['validation']
         gids = [graph.gid for graph in graph_file['graphs']]
         a,b,c = np.intersect1d(training_samples,gids,return_indices=True)
         training_graphs = [graph_file['graphs'][cc] for cc in c]
-        if pretrain == False:
-            a, b, c = np.intersect1d(validation_samples, gids, return_indices=True)
-            validation_graphs = [graph_file['graphs'][cc] for cc in c]
+        a, b, c = np.intersect1d(validation_samples, gids, return_indices=True)
+        validation_graphs = [graph_file['graphs'][cc] for cc in c]
 
     graph_dict = dict(training=training_graphs, validation=validation_graphs)
     samples_dict = dict(training_samples=training_samples,validation_samples=validation_samples)
