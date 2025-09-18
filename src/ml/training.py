@@ -70,6 +70,9 @@ def run_active_learning(rank,cat=None):
     met_tolerance = 0
     iteration = 0
     parameters = cat.parameters
+    best_model_state = None
+    best_optimizer_state = None
+    reset_optimizer = False
 
     if parameters['device_dict']['run_ddp']:
         ddp_setup(rank, parameters['device_dict']['world_size'], parameters['device_dict']['ddp_backend'])
@@ -141,17 +144,17 @@ def run_active_learning(rank,cat=None):
 
         ep = 0
         patience_counter = 0
-        patience = parameters['model_dict'].get('patience', 10)  # epochs to wait before LR reduction
+        patience = parameters['model_dict']['patience'] # epochs to wait before LR reduction
         if parameters['model_dict']['optimizer_params'].get('dynamic_lr'):
-            lr_decay_factor = parameters['model_dict']['optimizer_params']['params_group'].get('lr_decay_factor', 0.5)
+            lr_decay_factor = parameters['model_dict']['optimizer_params']['params_group']['lr_decay_factor']
         else:
             lr_decay_factor = 0.0
-        worsen_tolerance = parameters['model_dict'].get('worsen_tolerance', 0.05)  # 5% allowed
+        worsen_tolerance = parameters['model_dict']['worsen_tolerance']  # 5% allowed
         while ep < parameters['model_dict']['active_learning_params_group']['training_params_group']['epochs_per_iteration']:
             if rank == 0:
                 if ep > 0:
                     start_time = time.time()
-                print('Epoch ', ep + 1, ' of ', parameters['model_dict']['num_epochs'])
+                print('Epoch ', ep + 1, ' of ', parameters['model_dict']['active_learning_params_group']['training_params_group']['epochs_per_iteration'])
                 sys.stdout.flush()
 
             if parameters['device_dict']['run_ddp']:
@@ -177,8 +180,20 @@ def run_active_learning(rank,cat=None):
                 parameters['model_dict']['optimizer_params']['params_group'][
                     'params'] = model.processor.parameters()
 
-            optimizer = set_optimizer(parameters)
+            if reset_optimizer:
+                optimizer.load_state_dict(best_optimizer_state)
+                reset_optimizer = False
+            else:
+                optimizer = set_optimizer(parameters)
             optimizer_to(optimizer, parameters['device_dict']['device'])
+            # --- Learning rate scheduling on plateau ---
+            if patience_counter >= patience:
+                if rank == 0:
+                    print(f"No improvement for {patience} epochs. Reducing LR by factor {lr_decay_factor}.")
+                if lr_decay_factor > 0.0:
+                    for g in optimizer.param_groups:
+                        g['lr'] = g['lr'] * lr_decay_factor
+                patience_counter = 0
 
             # --- Train & Validate ---
             loss_train = train(loader_train, model, parameters, optimizer,active_learning_dict=active_loss_dict)
@@ -202,9 +217,10 @@ def run_active_learning(rank,cat=None):
                             check = 1
                     else:
                         check = 1
-                        min_loss_train = loss_train
                     if check:
                         if rank == 0:
+                            best_model_state = {k: v.cpu() for k, v in model.state_dict().items()}
+                            best_optimizer_state = optimizer.state_dict()
                             model_params_group = {
                                 'previous_samples_added': samples,
                                 'new_samples':new_samples,
@@ -220,9 +236,27 @@ def run_active_learning(rank,cat=None):
                 else:
                     patience_counter += 1
 
+                    # --- Revert if validation worsens too much ---
+                    if loss_valid > min_loss_valid * worsen_tolerance and best_model_state is not None:
+                        if rank == 0:
+                            print(
+                                f"Validation worsened by more than {100 * worsen_tolerance:.1f}%. Reverting to best model.")
+                        model.load_state_dict(best_model_state)
+                        model.to(parameters['device_dict']['device'])
+                        reset_optimizer = True
 
-
-
+            if ep > 0:
+                if rank == 0 and parameters['io_dict']['training_info_nwrite_steps'] % ep == 0:
+                    print('Writing run information...')
+                    run_data = {
+                        'epoch_timings': epoch_times,
+                        'times_loader_shuffled': shuffle_counter,
+                        'met_tolerance': met_tolerance,
+                        'training_loss': L_train,
+                        'validation_loss': L_valid,
+                    }
+                    save_dictionary(fname=os.path.join(cat.parameters['io_dict']['model_dir'], 'run_information.npy'),
+                                    data=run_data)
 
             ep += 1
 
@@ -253,7 +287,10 @@ def run_training(rank,iteration,cat=None):
     met_tolerance = 0
     min_loss_train = 1.0E30
     min_loss_valid = 1.0E30
+    best_model_state = None
+    best_optimizer_state = None
     ep = 0
+    reset_optimizer = False
     parameters = cat.parameters
     if parameters['device_dict']['run_ddp']:
         ddp_setup(rank, parameters['device_dict']['world_size'], parameters['device_dict']['ddp_backend'])
@@ -280,12 +317,12 @@ def run_training(rank,iteration,cat=None):
     if rank == 0:
         print('Training model ',iteration,' using ',len(data['training']), ' training points and ',len(data['validation']),' validation points...')
     patience_counter = 0
-    patience = parameters['model_dict'].get('patience', 10)  # epochs to wait before LR reduction
+    patience = parameters['model_dict']['patience']  # epochs to wait before LR reduction
     if parameters['model_dict']['optimizer_params'].get('dynamic_lr'):
-        lr_decay_factor = parameters['model_dict']['optimizer_params']['params_group'].get('lr_decay_factor', 0.5)
+        lr_decay_factor = parameters['model_dict']['optimizer_params']['params_group']['lr_decay_factor']
     else:
         lr_decay_factor = 0.0
-    worsen_tolerance = parameters['model_dict'].get('worsen_tolerance', 0.05)  # 5% allowed
+    worsen_tolerance = parameters['model_dict']['worsen_tolerance']  # 5% allowed
     while ep < parameters['model_dict']['num_epochs']:
         if rank == 0:
             if ep > 0:
@@ -307,8 +344,19 @@ def run_training(rank,iteration,cat=None):
         else:
             parameters['model_dict']['optimizer_params']['params_group']['params'] = model.processor.parameters()
 
-        optimizer = set_optimizer(parameters)
+        if reset_optimizer:
+            optimizer.load_state_dict(best_optimizer_state)
+        else:
+            optimizer = set_optimizer(parameters)
         optimizer_to(optimizer, parameters['device_dict']['device'])
+        # --- Learning rate scheduling on plateau ---
+        if patience_counter >= patience:
+            if rank == 0:
+                print(f"No improvement for {patience} epochs. Reducing LR by factor {lr_decay_factor}.")
+            if lr_decay_factor > 0.0:
+                for g in optimizer.param_groups:
+                    g['lr'] = g['lr'] * lr_decay_factor
+            patience_counter = 0
 
         # --- Train & Validate ---
         loss_train = train(loader_train, model, parameters, optimizer)
@@ -336,7 +384,8 @@ def run_training(rank,iteration,cat=None):
                 min_loss_train = loss_train
             if check:
                 if rank == 0:
-                    #best_model_state = {k: v.cpu() for k, v in model.state_dict().items()}
+                    best_model_state = {k: v.cpu() for k, v in model.state_dict().items()}
+                    best_optimizer_state = optimizer.state_dict()
                     model_params_group = {
                         'samples': samples,
                         'data_loader': loader_train,
@@ -350,19 +399,11 @@ def run_training(rank,iteration,cat=None):
             patience_counter += 1
 
             # --- Revert if validation worsens too much ---
-            if loss_valid > min_loss_valid * (1 + worsen_tolerance) and best_model_state is not None:
+            if loss_valid > min_loss_valid * worsen_tolerance and best_model_state is not None:
                 if rank == 0:
                     print(f"Validation worsened by more than {100 * worsen_tolerance:.1f}%. Reverting to best model.")
                 model.load_state_dict(best_model_state)
-
-        # --- Learning rate scheduling on plateau ---
-        if patience_counter >= patience:
-            if rank == 0:
-                print(f"No improvement for {patience} epochs. Reducing LR by factor {lr_decay_factor}.")
-            if lr_decay_factor > 0.0:
-                for g in optimizer.param_groups:
-                    g['lr'] = g['lr'] * lr_decay_factor
-            patience_counter = 0
+                model.to(parameters['device_dict']['device'])
 
         # --- Convergence check using deltas ---
         if ep > 1:
@@ -382,16 +423,20 @@ def run_training(rank,iteration,cat=None):
                     ep = parameters['model_dict']['num_epochs']
                     met_tolerance = 1
 
+        if ep > 0:
+            if rank == 0 and parameters['io_dict']['training_info_nwrite_steps'] % ep == 0:
+                print('Writing run information...')
+                run_data = {
+                    'epoch_timings': epoch_times,
+                    'times_loader_shuffled': shuffle_counter,
+                    'met_tolerance': met_tolerance,
+                    'training_loss': L_train,
+                    'validation_loss': L_valid,
+                }
+                save_dictionary(fname=os.path.join(cat.parameters['io_dict']['model_dir'], 'run_information.npy'),
+                                data=run_data)
         ep += 1
-    if rank == 0:
-        run_data = {
-            'epoch_timings':epoch_times,
-            'times_loader_shuffled':shuffle_counter,
-            'met_tolerance':met_tolerance,
-            'training_loss':L_train,
-            'validation_loss': L_valid,
-        }
-        save_dictionary(fname=os.path.join(cat.parameters['io_dict']['model_dir'],'run_information.npy'),data=run_data)
+
     if parameters['device_dict']['run_ddp']:
         ddp_destroy()
 

@@ -511,7 +511,8 @@ if __name__ == '__main__':
             projection_dir=None,
             remove_old_model=True,
             write_indv_pred=False,
-            graph_read_format=0
+            graph_read_format=0,
+            training_info_nwrite_steps=1,
         ),
         sampling_dict=dict(
             sampling_types=['kmeans', 'kmeans',],
@@ -534,7 +535,8 @@ if __name__ == '__main__':
             num_epochs=5,
             train_delta=0.001,
             train_tolerance=1.0,
-            worsen_tolerance=0.05,
+            worsen_tolerance=2.0,
+            patience=5,
             max_deltas=4,
             loss_params={
                 'function':torch.nn.MSELoss(),
@@ -543,7 +545,7 @@ if __name__ == '__main__':
             },
             accumulate_loss='exact',
             model=None,
-            strict_loss_policy = True,
+            strict_loss_policy = False,
             interpretable=False,
             restart_training=False,
             optimizer_params=dict(
@@ -551,7 +553,7 @@ if __name__ == '__main__':
                 optimizer='AdamW',
                 params_group={
                     'lr': 0.001,
-                    'lr_decay_factor':0.5
+                    'lr_decay_factor':0.95
                 }
             ),
             active_learning = True,
@@ -559,7 +561,7 @@ if __name__ == '__main__':
                 sampling_params_group={
                     'algorithm': 'property',
                     'exploration_weight': 0.5,
-                    'samples_per_iteration': 2,
+                    'samples_per_iteration': 10,
                     'exploitation_strategy': 'greedy'
                 },
                 training_params_group= dict(
@@ -591,8 +593,8 @@ if __name__ == '__main__':
     cat.set_params(parameters)
 
     gen_graphs = 0
-    project_graphs =1
-    gen_samples = 1
+    project_graphs =0
+    gen_samples = 0
     perform_train = 0
     perform_retrain = 0
     perform_test = 0
@@ -600,7 +602,7 @@ if __name__ == '__main__':
     plot_training =0
     perform_ranking = 0
     perform_predictions = 0
-    perform_active_learning = 0
+    perform_active_learning = 1
 
     if gen_graphs:
         generate_data(cat,visualize_final=True)
@@ -646,7 +648,7 @@ if __name__ == '__main__':
         cat.set_model(alignnd_model)
         predict(cat,perform_ranking)
     if perform_active_learning:
-        cat.parameters['loader_dict']['batch_size'] = [1, 1]
+        cat.parameters['loader_dict']['batch_size'] = [1,1]
         cat.set_model(return_new_model())
         cat.parameters['io_dict']['loaded_model_name'] = None
         del cat.parameters['io_dict']['loaded_model_name']

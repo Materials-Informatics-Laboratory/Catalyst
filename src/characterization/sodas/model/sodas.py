@@ -2,8 +2,6 @@ import torch.nn as nn
 import numpy as np
 import torch
 
-#from torch_geometric.utils import scatter
-
 from ....graph.graph import Generic_Graph_Data, Atomic_Graph_Data
 from ....ml.utils.predict import accumulate_predictions
 from ....ml.utils.pooling_algorithms import scatter_
