@@ -2,7 +2,7 @@ from catalyst.src.ml.nn.gnn.models.alignn import Encoder_generic,Encoder_atomic,
 from catalyst.src.characterization.sodas.model.sodas import SODAS
 from catalyst.src.graph.generic_build import generic_graph_gen
 import catalyst.src.utilities.sampling as sampling
-from catalyst.src.io.io import load_dictionary, save_dictionary
+from catalyst.src.io.data_management import load_dictionary, save_dictionary
 from catalyst.src.observer.params import Catalyst
 from catalyst.src.characterization.sodas.utils.utils import generate_latent_space_path, assign_gammas
 from catalyst.src.utilities.data_tools import parallel_sort
@@ -424,7 +424,7 @@ if __name__ == '__main__':
     projection_outdim = 100
     cutoff = 10.0
     n_convs = 3
-    n_data = 30000 # total number of samples
+    n_data = 1000 # total number of samples
     n_nodes = np.linspace(5, 50, n_data)  # number of data points per sample
     n_dim = 4  # number of dimensions in intial raw data
     parameters = dict(
@@ -497,15 +497,15 @@ if __name__ == '__main__':
                             processor=Processor(num_convs=n_convs, dim=projection_indim, conv_type='mesh',act=nn.SiLU()),
                             decoder=Decoder(in_dim=projection_indim, out_dim=projection_outdim, act=nn.SiLU())
                         ),
-                        ls_mod=umap_.UMAP(n_neighbors=50, min_dist=0.5, n_components=2)
+                        ls_mod=umap_.UMAP(n_neighbors=50, min_dist=0.5, n_components=2),
+                        pooling='softmax'
                     )
 
     cat = Catalyst()
     cat.set_params(parameters)
 
-    gen_graphs = 0
-    proj_data = 0
-    gen_samples = 0
+    gen_graphs = 1
+    proj_data = 1
     get_gammas = 1
 
     if gen_graphs:
@@ -520,8 +520,6 @@ if __name__ == '__main__':
     if get_gammas:
         projections = load_dictionary(os.path.join(cat.parameters['io_dict']['projection_dir'],'projections.data'))
         determine_global_gammas(cat,projections)
-    if gen_samples:
-        sample_data(cat,graph_data=raw_data,projected_data=projections)
 
 
 

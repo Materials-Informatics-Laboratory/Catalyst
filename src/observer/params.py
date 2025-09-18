@@ -33,12 +33,10 @@ class Catalyst():
                                    write_indv_pred=False,
                                    graph_read_format=0
                                ),
-                               sampling_dict = dict(sampling_types=['random','random','random'],
-                                                    split=[0.5,0.5,0.5],
+                               sampling_dict = dict(sampling_types=['random','random'],
+                                                    split=[0.5,0.5],
                                                     sampling_seed=112358,
                                                     params_groups = [{
-                                                        'clusters':1,
-                                                    },{
                                                         'clusters':1,
                                                     },{
                                                         'clusters':1,
@@ -46,21 +44,23 @@ class Catalyst():
                                 ),
                                 loader_dict=dict(
                                     shuffle_loader=False,
-                                    batch_size=[1,1,1],
+                                    batch_size=[1,1],
                                     shuffle_steps=10,
                                     num_workers=0
                                 ),
                                model_dict = dict(
                                    n_models=1,
-                                   num_epochs=[1, 1],
-                                   train_delta = [1.0,1.0],
-                                   train_tolerance =[1.0,1.0],
+                                   num_epochs=1,
+                                   train_delta=0.001,
+                                   train_tolerance=1.0,
+                                   worsen_tolerance=0.05,
                                    max_deltas=4,
-                                   accumulate_loss=['sum', 'sum', 'sum'],
+                                   accumulate_loss='exact',
                                    loss_params={
                                        'function':None
                                    },
                                    model = None,
+                                   strict_loss_policy=True,
                                    model_params_group=dict(
                                         encoder=dict(
 
@@ -93,15 +93,14 @@ class Catalyst():
                                        training_data_dir=''
                                    ),
                                    interpretable=False,
-                                   pre_training=False,
                                    restart_training=False,
                                    optimizer_params=dict(
                                        lr_scale=[1.0, 0.1],
                                        dynamic_lr=False,
-                                       dist_type='',
                                        optimizer='',
                                        params_group={
-                                           'lr': 0.001
+                                           'lr': 0.001,
+                                           'lr_decay_factor': 0.5
                                        }
                                    )
                                )
@@ -111,7 +110,7 @@ class Catalyst():
         self.device_options = ['cuda','cpu']
         self.optimizer_options = ['AdamW','Adadelta','Adagrad','Adam','SparseAdam','Adamax','ASGD',
                                   'LBFGS','NAdam','RAdam','RMSprop','Rprop','SGD']
-        self.version = '1.0.71'
+        self.version = '1.1'
 
         '''
         graph clustering params

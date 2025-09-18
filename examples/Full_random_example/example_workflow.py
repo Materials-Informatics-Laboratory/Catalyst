@@ -168,7 +168,7 @@ def sample_data(cat,graph_data,projected_data):
     '''
     SAMPLE DATA
     '''
-    fig, ax = plt.subplots(nrows=1, ncols=4, sharex=True, sharey=True)
+    fig, ax = plt.subplots(nrows=1, ncols=3, sharex=True, sharey=True)
     ax[0].plot(projected_data[:, 0], projected_data[:, 1], linestyle='', marker='o', color='w', markeredgecolor='k')
     ax[0].set_title('All data')
     #start sampling
@@ -187,30 +187,7 @@ def sample_data(cat,graph_data,projected_data):
     save_dictionary(os.path.join(cat.parameters['io_dict']['samples_dir'], 'test_data.npy'), stored_test_data)
     ax[1].plot(np.array(stored_test_data['projections'])[:, 0], np.array(stored_test_data['projections'])[:, 1], linestyle='', marker='o', color='r', markeredgecolor='k')
     ax[1].set_title('Test data')
-    # REMOVE PRETRAIN DATA
-    if cat.parameters['model_dict']['pre_training']:
-        pretraining_data = None
-        # perform pretraining
-        cat.parameters['io_dict']['pretrain_dir'] = os.path.join(cat.parameters['io_dict']['samples_dir'],'pretrain')
-        if os.path.isdir(cat.parameters['io_dict']['pretrain_dir']):
-            shutil.rmtree(cat.parameters['io_dict']['pretrain_dir'])
-        os.mkdir(cat.parameters['io_dict']['pretrain_dir'])
-        # remove pretrain data
-        pretrain_idx, nonpretrain_idx = sampling.run_sampling(projected_data, sampling_type=
-        cat.parameters['sampling_dict']['sampling_types'][1], split=cat.parameters['sampling_dict']['split'][1], rng=rng,
-                                                                  params_group=cat.parameters['sampling_dict']['params_groups'][1])
-        stored_pretrain_data = dict(
-                training_projections=[projected_data[index] for index in pretrain_idx],
-                validation_projections=None,
-                training=[graph_data[index].gid for index in pretrain_idx],
-                validation=None
-        )
-        projected_data = [projected_data[index] for index in nonpretrain_idx]
-        graph_data = [graph_data[index] for index in nonpretrain_idx]
-        save_dictionary(os.path.join(cat.parameters['io_dict']['pretrain_dir'], 'train_valid_split.npy'), stored_pretrain_data)
-        ax[2].plot(np.array(stored_pretrain_data['training_projections'])[:, 0], np.array(stored_pretrain_data['training_projections'])[:, 1], linestyle='',
-                       marker='o', color='c', markeredgecolor='k')
-        ax[2].set_title('Pretrain data')
+
     # REMOVE TRAINING DATA
     cat.parameters['io_dict']['model_dir'] = os.path.join(cat.parameters['io_dict']['samples_dir'], 'model_samples')
     if os.path.isdir(cat.parameters['io_dict']['model_dir']):
@@ -225,9 +202,9 @@ def sample_data(cat,graph_data,projected_data):
         os.makedirs(cat.parameters['io_dict']['model_dir'], exist_ok=True)
         # sample data and train model
         train_idx, valid_idx = sampling.run_sampling(projected_data,
-                                                         sampling_type=cat.parameters['sampling_dict']['sampling_types'][2],
-                                                         split=cat.parameters['sampling_dict']['split'][2], rng=rng,
-                                                         params_group=cat.parameters['sampling_dict']['params_groups'][2])
+                                                         sampling_type=cat.parameters['sampling_dict']['sampling_types'][1],
+                                                         split=cat.parameters['sampling_dict']['split'][1], rng=rng,
+                                                         params_group=cat.parameters['sampling_dict']['params_groups'][1])
         train_data = [graph_data[index].gid for index in train_idx]
         valid_data = [graph_data[index].gid for index in valid_idx]
         print('Using the remaining ', len(valid_data), ' for validation')
@@ -238,9 +215,9 @@ def sample_data(cat,graph_data,projected_data):
                 validation=valid_data
         )
         save_dictionary(os.path.join(cat.parameters['io_dict']['model_dir'], 'train_valid_split.npy'), partitioned_data)
-        ax[3].plot(np.array(partitioned_data ['training_projections'])[:, 0], np.array(partitioned_data['training_projections'])[:, 1],
+        ax[2].plot(np.array(partitioned_data ['training_projections'])[:, 0], np.array(partitioned_data['training_projections'])[:, 1],
                        linestyle='',marker='o', color='y', markeredgecolor='k')
-        ax[3].set_title('Training data')
+        ax[2].set_title('Training data')
     del graph_data
     plt.show()
 
@@ -537,12 +514,10 @@ if __name__ == '__main__':
             graph_read_format=0
         ),
         sampling_dict=dict(
-            sampling_types=['kmeans', 'kmeans', 'kmeans'],
-            split=[0.2, 0.25, 0.75],
+            sampling_types=['kmeans', 'kmeans',],
+            split=[0.2, 0.75],
             sampling_seed=112358,
             params_groups=[{
-                'clusters': 5,
-            }, {
                 'clusters': 5,
             }, {
                 'clusters': 5,
@@ -607,7 +582,8 @@ if __name__ == '__main__':
                             processor=Processor(num_convs=n_convs, dim=projection_indim, conv_type='mesh',act=nn.SiLU()),
                             decoder=Decoder(in_dim=projection_indim, out_dim=projection_outdim, act=nn.SiLU())
                         ),
-                        ls_mod=umap_.UMAP(n_neighbors=10, min_dist=0.1, n_components=2)
+                        ls_mod=umap_.UMAP(n_neighbors=10, min_dist=0.1, n_components=2),
+                        pooling='sum'
                     )
 
     #decoder=PositiveScalarsDecoder(dim=regression_indim, act=nn.SiLU()),
@@ -615,16 +591,16 @@ if __name__ == '__main__':
     cat.set_params(parameters)
 
     gen_graphs = 0
-    project_graphs =0
-    gen_samples = 0
-    perform_train = 1
+    project_graphs =1
+    gen_samples = 1
+    perform_train = 0
     perform_retrain = 0
     perform_test = 0
     plot_test = 0
     plot_training =0
     perform_ranking = 0
     perform_predictions = 0
-    perform_active_learning = 1
+    perform_active_learning = 0
 
     if gen_graphs:
         generate_data(cat,visualize_final=True)
