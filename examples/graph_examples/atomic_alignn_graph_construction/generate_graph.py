@@ -40,24 +40,35 @@ def visualize_graph(data,atomic=False):
     plt.draw()
     plt.show()
 
-structures = read(os.path.join(path,'OUTCAR_Al_FCC'),index=':',format='vasp-out')
+#structures = read(os.path.join(path,'OUTCAR_Al_FCC'),index=':',format='vasp-out')
+structures = read(os.path.join(path,r'D:\data\Al_nano\0.poscar'),index=':')
 dataset = []
+import time
+start_time = time.time()
 for i,structure in enumerate(structures):
     print('Generating graph for structure ',i,' of ',len(structures))
     data = {
         'type': 'atomic_alignnd',
-        'neighbor_params': [3.0, -1],
+        'neighbor_params': [6.0, -1],
         'raw_data': structure,
         'is_dihedral': False,
         'store_raw_data': False,
         'use_pt': False,
-        'include_angs': True,
+        'include_angs': False,
         'node_labels': None,
         'element_list': ['Al'],
-        'store_atoms_type': 'ase-atoms'
+        'store_atoms_type': 'ase-atoms',
+        #'cpu_cores':4
     }
     graph_data = alignn_gen(data=data)
-    torch.save(graph_data, os.path.join(path, 'graph_data-' + str(i) + '.pt'))
+    end_time = time.time()  # record the end time
+    elapsed_time = end_time - start_time
+
+    print(f"Elapsed time: {elapsed_time:.2f} seconds")
+    for gd in graph_data:
+        print(gd)
+    visualize_graph(graph_data[0],atomic=True)
+    #torch.save(graph_data, os.path.join(path, 'graph_data-' + str(i) + '.pt'))
 
 
 

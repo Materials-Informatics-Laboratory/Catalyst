@@ -1,3 +1,4 @@
+import numpy as np
 
 def parallel_sort(X,Y):
     # sort by values in y
@@ -53,12 +54,36 @@ def unique_lists_2d(lst,return_indices=1,sorted_search=1):
                 unique_sublists.append(sublist_tuple)
         return [list(sublist) for sublist in unique_sublists]
 
-def remove_duplicate_list_pairs(list1,list2,stack=False):
-    # create pairs
-    pairs = make_pairs(list1,list2)
-    new_pairs, unique_ids = remove_duplicate_tuples(pairs)
-    if len(pairs) == len(new_pairs):
-        return [list1,list2], unique_ids
+def remove_duplicate_list_pairs(list1, list2, stack=False):
+    """
+    Efficiently remove duplicate pairs (list1[i], list2[i]) from two parallel lists.
+    Returns pair lists without duplicates and indices of unique pairs.
+
+    Args:
+        list1, list2: arrays or list of same length representing edges/pairs.
+        stack: if True, returns np.vstack of the unique pairs; else returns lists.
+
+    Returns:
+        unique_pairs: tuple of lists or numpy arrays (unique edges)
+        unique_ids: indices of unique pairs w.r.t original input
+    """
+    # Convert inputs to numpy arrays if not already
+    arr1 = np.asarray(list1)
+    arr2 = np.asarray(list2)
+
+    # Stack pairs into 2D array
+    pairs = np.stack((arr1, arr2), axis=-1)
+
+    # Use np.unique with return_index to get unique pairs and their first occurrence indices
+    unique_pairs, unique_ids = np.unique(pairs, axis=0, return_index=True)
+
+    # Sort unique_ids to keep order consistent with input
+    sorted_idx = np.argsort(unique_ids)
+    unique_ids = unique_ids[sorted_idx]
+    unique_pairs = unique_pairs[sorted_idx]
+
+    if stack:
+        return unique_pairs, unique_ids
     else:
-        return tuples_to_2d_lists(new_pairs), unique_ids
+        return unique_pairs[:, 0].tolist(), unique_pairs[:, 1].tolist(), unique_ids.tolist()
 
