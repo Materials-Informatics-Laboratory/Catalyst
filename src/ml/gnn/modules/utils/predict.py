@@ -1,4 +1,4 @@
-from ...graph.graph import Atomic_Graph_Data, Generic_Graph_Data
+from graph.graph import Atomic_Graph_Data, Generic_Graph_Data
 
 import torch
 
@@ -154,6 +154,7 @@ def accumulate_predictions(pred,data,loss_tag,return_y=True):
                         if hasattr(data, 'edge_A_batch'):
                             preds.append(sorted_nodes_G[i].sum() + sorted_nodes_A[i].sum() + sorted_edges_A[i].sum())
                         else:
+
                             preds.append(sorted_nodes_G[i].sum() + sorted_nodes_A[i].sum())
                     preds = torch.stack(preds)
                 if return_y:

@@ -4,9 +4,9 @@ import torch
 import copy
 
 from ..conv import MeshGraphNetsConv
-from ...utils.basis import gaussian, bessel, scalar2basis
+from ..utils.basis import gaussian, bessel, scalar2basis
 from ..conv import GatedGCN
-from ...mlp import MLP
+from ....nn.mlp import MLP
 
 from .....graph.graph import Generic_Graph_Data, Atomic_Graph_Data
 

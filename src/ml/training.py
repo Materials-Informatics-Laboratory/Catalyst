@@ -1,62 +1,58 @@
-import torch.distributed as dist
-from numba import cuda
-from torch import nn
 import torch
 
-from ..io.data_management import read_training_data, setup_model, setup_dataloader, save_model, save_dictionary, read_graphs_from_gids
+from .gnn.modules.utils.data_manager import setup_dataloader
+from ..data.utils import save_dictionary
+from ..data.model_data import save_model
+
+
 from .utils.distributed import ddp_destroy, ddp_setup, reduce_tensor
-from ..utilities.distributions import get_distribution
-from .utils.predict import accumulate_predictions
-from .inference import test_non_intepretable_internal
+from ml.gnn.modules.utils.predict import accumulate_predictions
 from ..utilities.sampling import active_sampling, random_
 from .utils.optimizer import set_optimizer
 from .utils.memory import optimizer_to
 from .utils.loss import loss_setup,active_learning_setup
 
-
-import numpy as np
-import random
 import shutil
 import glob
 import time
 import sys
 import os
-import gc
 
-def train(loader,model,parameters,optimizer,active_learning_dict=None):
-    model.train()
-    loss_accum = parameters['model_dict']['accumulate_loss']
-    epoch_loss = 0.0
-    if parameters['device_dict']['run_ddp'] == False:
-        model.to(parameters['device_dict']['device'])
-    loss_fn = loss_setup(params=parameters['model_dict']['loss_params'])
-    for data in loader:
-        def closure():
-            data.to(parameters['device_dict']['device'], non_blocking=True)
-            optimizer.zero_grad(set_to_none=True)
-            pred = model(data)
-            preds, y, vec = accumulate_predictions(pred,data,loss_accum)
-            preds = preds.to(y.device)
-            if vec:
-                loss_list = [0.0]*len(preds)
-                for i in range(len(preds)):
-                    loss_list[i] = loss_fn(preds[i],y[i])
-                batch_loss = torch.sum(torch.stack(loss_list))
-            else:
-                batch_loss = loss_fn(preds,y)
-            nonlocal epoch_loss
-            if active_learning_dict is not None:
-                batch_loss = active_learning_dict['loss_regularization'].get_loss(model, batch_loss,
-                                                                                  active_learning_dict['lambda'],
-                                                                                  )
-            epoch_loss += batch_loss.item()
-            batch_loss.backward()
-            optimizer.step()
-            return batch_loss
-        optimizer.step(closure)
+
+def setup_training(rank,cat=None):
+    parameters = cat.parameters
+
+    parameters['io_dict']['model_dir'] = None
+    del parameters['io_dict']['model_dir']
+    parameters['io_dict']['model_dir'] = os.path.join(parameters['io_dict']['main_path'], 'models',
+                                                      'training')
+
+    #instead of having the training code hard-coded for iterations, it would be better to simply scan the directory here and just autoamtically add a counter and corresponding string
+    if rank == 0:
+        if os.path.isdir(parameters['io_dict']['model_dir']):
+            shutil.rmtree(parameters['io_dict']['model_dir'])
+        os.makedirs(parameters['io_dict']['model_dir'], exist_ok=True)
+
+    parameters['model_dict']['model'].load_training_data(parameters,
+                                                         os.path.join(parameters['io_dict']['samples_dir'],'train_valid_split.npy'),
+                                                         format=parameters['io_dict']['graph_read_format'], rank=rank)
+
     if parameters['device_dict']['run_ddp']:
-        epoch_loss = reduce_tensor(torch.tensor(epoch_loss).to(parameters['device_dict']['device'])).item()
-    return epoch_loss / (len(loader)*parameters['device_dict']['world_size'])
+        ddp_setup(rank, parameters['device_dict']['world_size'], parameters['device_dict']['ddp_backend'])
+        parameters['model_dict']['model'].setup_ddp(cat, rank=rank)
+
+    parameters['model_dict']['model'].set_dataloader(cat=cat)
+    if parameters['device_dict']['run_ddp']:
+        parameters['model_dict']['optimizer_params']['params_group']['params'] = parameters['model_dict']['model'].model.module.processor.parameters()
+    else:
+        parameters['model_dict']['optimizer_params']['params_group']['params'] = parameters['model_dict']['model'].model.processor.parameters()
+    parameters['model_dict']['model'].set_optimizer(parameters=parameters)
+    #parameters['model_dict']['model'].print_debug()
+
+
+
+
+
 
 def run_active_learning(rank,cat=None):
     # set up run
@@ -115,7 +111,6 @@ def run_active_learning(rank,cat=None):
         else:
             data['training'] = training_graphs.copy()
 
-    import matplotlib.pyplot as plt
     loader_train = setup_dataloader({
         'training': training_graphs,
     }, cat=cat, mode=0)
@@ -196,7 +191,10 @@ def run_active_learning(rank,cat=None):
                 patience_counter = 0
 
             # --- Train & Validate ---
-            loss_train = train(loader_train, model, parameters, optimizer,active_learning_dict=active_loss_dict)
+            training_dict = {
+                'params':parameters,
+            }
+            loss_train = train(model,optimizer,loader,training_dict)
             loss_valid = test_non_intepretable_internal(loader_valid, model, parameters, rank=rank)
             L_train[-1].append(loss_train)
             L_valid[-1].append(loss_valid)
@@ -271,15 +269,9 @@ def run_active_learning(rank,cat=None):
         parameters['model_dict']['active_learning_params_group']['sampling_params_group']['y'] = [graph.y for graph in
                                                                                                   new_graphs]
 
-
         iteration += 1
 
-    # test model against added points
-
-    # determine if desired threshold has been met, if not, loop, if yes, exit
-
-
-def run_training(rank,iteration,cat=None):
+def run_training(rank,cat=None):
     epoch_times = []
     running_valid_delta = []
     L_train, L_valid = [], []
@@ -292,30 +284,11 @@ def run_training(rank,iteration,cat=None):
     ep = 0
     reset_optimizer = False
     parameters = cat.parameters
-    if parameters['device_dict']['run_ddp']:
-        ddp_setup(rank, parameters['device_dict']['world_size'], parameters['device_dict']['ddp_backend'])
 
-    parameters['io_dict']['model_dir'] = None
-    del parameters['io_dict']['model_dir']
-    parameters['io_dict']['model_dir'] = os.path.join(parameters['io_dict']['main_path'],'models',
-                                                      'training', str(iteration))
-    if rank == 0:
-        if os.path.isdir(parameters['io_dict']['model_dir']):
-            shutil.rmtree(parameters['io_dict']['model_dir'])
-        os.makedirs(parameters['io_dict']['model_dir'], exist_ok=True)
-        print('Reading data...')
-
-    data, samples = read_training_data(parameters,
-                              os.path.join(parameters['io_dict']['samples_dir'], str(iteration), 'train_valid_split.npy'),
-                                       format=parameters['io_dict']['graph_read_format'],rank=rank)
-    load_model = False
-    if parameters['model_dict']['restart_training']:
-        load_model=True
-    model = setup_model(cat,rank=rank,load=load_model)
-    loader_train, loader_valid = setup_dataloader(data=data,cat=cat,mode=1)
+    setup_training(rank=rank,cat=cat)
 
     if rank == 0:
-        print('Training model ',iteration,' using ',len(data['training']), ' training points and ',len(data['validation']),' validation points...')
+        print('Training model...')
     patience_counter = 0
     patience = parameters['model_dict']['patience']  # epochs to wait before LR reduction
     if parameters['model_dict']['optimizer_params'].get('dynamic_lr'):
@@ -330,37 +303,13 @@ def run_training(rank,iteration,cat=None):
             print('Epoch ', ep + 1, ' of ', parameters['model_dict']['num_epochs'])
             sys.stdout.flush()
 
-        # --- Data reshuffle ---
-        if parameters['loader_dict']['shuffle_loader'] == True:
-            if ep % parameters['loader_dict']['shuffle_steps'] == 0 and ep > 0:
-                if rank == 0:
-                    print('Shuffling training data...')
-                loader_train, loader_valid = setup_dataloader(data=data, cat=cat, epoch=ep, reshuffle=True, mode=1)
-                shuffle_counter += 1
-
-        # --- Optimizer setup ---
-        if parameters['device_dict']['run_ddp']:
-            parameters['model_dict']['optimizer_params']['params_group']['params'] = model.module.processor.parameters()
-        else:
-            parameters['model_dict']['optimizer_params']['params_group']['params'] = model.processor.parameters()
-
-        if reset_optimizer:
-            optimizer.load_state_dict(best_optimizer_state)
-        else:
-            optimizer = set_optimizer(parameters)
-        optimizer_to(optimizer, parameters['device_dict']['device'])
-        # --- Learning rate scheduling on plateau ---
-        if patience_counter >= patience:
-            if rank == 0:
-                print(f"No improvement for {patience} epochs. Reducing LR by factor {lr_decay_factor}.")
-            if lr_decay_factor > 0.0:
-                for g in optimizer.param_groups:
-                    g['lr'] = g['lr'] * lr_decay_factor
-            patience_counter = 0
 
         # --- Train & Validate ---
-        loss_train = train(loader_train, model, parameters, optimizer)
-        loss_valid = test_non_intepretable_internal(loader_valid, model, parameters, rank=rank)
+        training_dict = {
+            'params':parameters,
+        }
+        loss_train = parameters['model_dict']['model'].train(training_dict=training_dict)
+        loss_valid = parameters['model_dict']['model'].validate(parameters=parameters,rank=rank)
 
         if rank == 0:
             if ep > 0:
@@ -371,6 +320,7 @@ def run_training(rank,iteration,cat=None):
 
         L_train.append(loss_train)
         L_valid.append(loss_valid)
+
 
         # --- Save best model by validation only ---
         if loss_valid < min_loss_valid:
@@ -384,16 +334,14 @@ def run_training(rank,iteration,cat=None):
                 min_loss_train = loss_train
             if check:
                 if rank == 0:
-                    best_model_state = {k: v.cpu() for k, v in model.state_dict().items()}
-                    best_optimizer_state = optimizer.state_dict()
+                    parameters['model_dict']['model'].set_model_state({k: v.cpu() for k, v in parameters['model_dict']['model'].model.state_dict().items()})
+                    parameters['model_dict']['model'].set_model_state(parameters['model_dict']['model'].optimizer.state_dict())
                     model_params_group = {
-                        'samples': samples,
-                        'data_loader': loader_train,
                         'L_train': L_train[-1],
                         'L_valid': L_valid[-1]
                     }
-                    save_model(model=model, cat=cat, model_params_group=model_params_group,
-                               remove_old_models=parameters['io_dict']['remove_old_model'])
+                    save_model(parameters=parameters,model_params_group=model_params_group)
+
                 patience_counter = 0  # reset patience
         else:
             patience_counter += 1
@@ -402,8 +350,7 @@ def run_training(rank,iteration,cat=None):
             if loss_valid > min_loss_valid * worsen_tolerance and best_model_state is not None:
                 if rank == 0:
                     print(f"Validation worsened by more than {100 * worsen_tolerance:.1f}%. Reverting to best model.")
-                model.load_state_dict(best_model_state)
-                model.to(parameters['device_dict']['device'])
+                parameters['model_dict']['model'].load_model_state()
 
         # --- Convergence check using deltas ---
         if ep > 1:
@@ -435,6 +382,7 @@ def run_training(rank,iteration,cat=None):
                 }
                 save_dictionary(fname=os.path.join(cat.parameters['io_dict']['model_dir'], 'run_information.npy'),
                                 data=run_data)
+
         ep += 1
 
     if parameters['device_dict']['run_ddp']:
