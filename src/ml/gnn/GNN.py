@@ -2,7 +2,7 @@ from ..utils.loss import loss_setup
 from ..utils.distributed import reduce_tensor, combine_dicts_across_gpus
 from ..utils.memory import optimizer_to
 from .modules.utils.predict import accumulate_predictions
-from ...data.utils import load_dictionary
+from ...data.utils import load_dictionary, save_dictionary
 from .modules.utils.data_manager import setup_dataloader
 from ..utils.optimizer import set_optimizer
 

@@ -1,6 +1,7 @@
 import pickle
 import gzip
 import torch
+import io
 
 def write_labelled_extxyz(filename,labels,atoms,cutoff):
     of = open(filename, 'w')
