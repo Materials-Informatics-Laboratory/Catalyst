@@ -1,4 +1,4 @@
-from graph.graph import Atomic_Graph_Data, Generic_Graph_Data
+from .....graph.graph import Atomic_Graph_Data, Generic_Graph_Data
 
 import torch
 

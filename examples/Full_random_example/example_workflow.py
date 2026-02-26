@@ -1,7 +1,7 @@
 from catalyst.src.ml.gnn.modules.models.alignn import Encoder_generic,Encoder_atomic, Processor, Decoder,PositiveScalarsDecoder, ALIGNN
 from catalyst.src.ml.gnn.GNN import GNN
 
-from catalyst.src.ml.inference import predict_external, test_non_intepretable_external, predict_interpretable
+from catalyst.src.ml.inference import test_non_intepretable_external
 from catalyst.src.ml.training import run_training,run_active_learning
 from catalyst.src.characterization.sodas.model.sodas import SODAS
 from catalyst.src.graph.generic_build import generic_graph_gen
@@ -595,9 +595,9 @@ if __name__ == '__main__':
     cat = Catalyst()
     cat.set_params(parameters)
 
-    gen_graphs = 0
-    project_graphs =0
-    gen_samples = 0
+    gen_graphs = 1
+    project_graphs =1
+    gen_samples = 1
     perform_train = 1
     perform_retrain = 0
     perform_test = 0

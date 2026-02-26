@@ -1,7 +1,7 @@
 import torch.nn as nn
 import torch
 import math
-from ml.gnn.modules.utils.predict import accumulate_predictions
+from ..gnn.modules.utils.predict import accumulate_predictions
 def loss_setup(params):
     if isinstance(params['function'],str):
         if params['function'] == 'MaxNpercent':

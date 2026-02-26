@@ -6,7 +6,6 @@ from ..data.model_data import save_model
 
 
 from .utils.distributed import ddp_destroy, ddp_setup, reduce_tensor
-from ml.gnn.modules.utils.predict import accumulate_predictions
 from ..utilities.sampling import active_sampling, random_
 from .utils.optimizer import set_optimizer
 from .utils.memory import optimizer_to
