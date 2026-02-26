@@ -1,11 +1,13 @@
-from catalyst.src.ml.nn.gnn.models.alignn import Encoder_generic,Encoder_atomic, Processor, Decoder,PositiveScalarsDecoder, ALIGNN
+from catalyst.src.ml.gnn.modules.models.alignn import Encoder_generic,Encoder_atomic, Processor, Decoder,PositiveScalarsDecoder, ALIGNN
+from catalyst.src.ml.gnn.GNN import GNN
+
 from catalyst.src.ml.inference import predict_external, test_non_intepretable_external, predict_interpretable
 from catalyst.src.ml.training import run_training,run_active_learning
 from catalyst.src.characterization.sodas.model.sodas import SODAS
 from catalyst.src.graph.generic_build import generic_graph_gen
 from catalyst.src.ml.utils.distributed import cuda_destroy
 import catalyst.src.utilities.sampling as sampling
-from catalyst.src.io.data_management import load_dictionary, save_dictionary
+from catalyst.src.data.utils import load_dictionary, save_dictionary
 from catalyst.src.observer.params import Catalyst
 from catalyst.src.ml.utils.loss import MaxNpercent
 
@@ -42,14 +44,14 @@ global n_nodes
 global n_dim
 
 
-def return_new_model():
+def return_new_model(device):
     model = ALIGNN(
         encoder=Encoder_atomic(num_species=n_types, cutoff=cutoff, dim=regression_indim, act=nn.SiLU()),
         processor=Processor(num_convs=n_convs, dim=regression_indim, conv_type='mesh', act=nn.SiLU()),
         decoder=PositiveScalarsDecoder(dim=regression_indim, act=nn.SiLU()),
         # decoder=Decoder(in_dim=regression_indim, out_dim=regression_outdim, act=nn.SiLU(),combine=False)
     )
-    return model
+    return GNN(model=model,device=device)
 
 '''
 Function definitions
@@ -109,7 +111,8 @@ def generate_data(cat,visualize_final=False):
         neighbor_data = {
             'dist':dist,
             'ind':ind,
-            'g_nodes':g_node_labels
+            'g_nodes':g_node_labels,
+
         }
         graph_gen_data = {
             'raw_data':data,
@@ -193,31 +196,33 @@ def sample_data(cat,graph_data,projected_data):
     if os.path.isdir(cat.parameters['io_dict']['model_dir']):
         shutil.rmtree(cat.parameters['io_dict']['model_dir'])
     os.mkdir(cat.parameters['io_dict']['model_dir'])
-    for iteration in range(cat.parameters['model_dict']['n_models']):
-        cat.parameters['io_dict']['model_dir'] = None
-        del cat.parameters['io_dict']['model_dir']
-        cat.parameters['io_dict']['model_dir'] = os.path.join(cat.parameters['io_dict']['samples_dir'], 'model_samples', str(iteration))
-        if os.path.isdir(cat.parameters['io_dict']['model_dir']):
-            shutil.rmtree(cat.parameters['io_dict']['model_dir'])
-        os.makedirs(cat.parameters['io_dict']['model_dir'], exist_ok=True)
-        # sample data and train model
-        train_idx, valid_idx = sampling.run_sampling(projected_data,
+
+
+
+    cat.parameters['io_dict']['model_dir'] = None
+    del cat.parameters['io_dict']['model_dir']
+    cat.parameters['io_dict']['model_dir'] = os.path.join(cat.parameters['io_dict']['samples_dir'], 'model_samples')
+    if os.path.isdir(cat.parameters['io_dict']['model_dir']):
+        shutil.rmtree(cat.parameters['io_dict']['model_dir'])
+    os.makedirs(cat.parameters['io_dict']['model_dir'], exist_ok=True)
+    # sample data and train model
+    train_idx, valid_idx = sampling.run_sampling(projected_data,
                                                          sampling_type=cat.parameters['sampling_dict']['sampling_types'][1],
                                                          split=cat.parameters['sampling_dict']['split'][1], rng=rng,
                                                          params_group=cat.parameters['sampling_dict']['params_groups'][1])
-        train_data = [graph_data[index].gid for index in train_idx]
-        valid_data = [graph_data[index].gid for index in valid_idx]
-        print('Using the remaining ', len(valid_data), ' for validation')
-        partitioned_data = dict(
+    train_data = [graph_data[index].gid for index in train_idx]
+    valid_data = [graph_data[index].gid for index in valid_idx]
+    print('Using the remaining ', len(valid_data), ' for validation')
+    partitioned_data = dict(
                 training_projections=[projected_data[index] for index in train_idx],
                 validation_projections=[projected_data[index] for index in valid_idx],
                 training=train_data,
                 validation=valid_data
-        )
-        save_dictionary(os.path.join(cat.parameters['io_dict']['model_dir'], 'train_valid_split.npy'), partitioned_data)
-        ax[2].plot(np.array(partitioned_data ['training_projections'])[:, 0], np.array(partitioned_data['training_projections'])[:, 1],
+    )
+    save_dictionary(os.path.join(cat.parameters['io_dict']['model_dir'], 'train_valid_split.npy'), partitioned_data)
+    ax[2].plot(np.array(partitioned_data ['training_projections'])[:, 0], np.array(partitioned_data['training_projections'])[:, 1],
                        linestyle='',marker='o', color='y', markeredgecolor='k')
-        ax[2].set_title('Training data')
+    ax[2].set_title('Training data')
     del graph_data
     plt.show()
 
@@ -228,20 +233,19 @@ def train_model(cat,pretrain=False):
     cat.parameters['io_dict']['samples_dir'] = None
     del cat.parameters['io_dict']['samples_dir']
     cat.parameters['io_dict']['samples_dir'] = os.path.join(cat.parameters['io_dict']['main_path'], 'samples','model_samples')
-    for iteration in range(cat.parameters['model_dict']['n_models']):
-        cat.set_model(return_new_model())
-        if cat.parameters['device_dict']['run_ddp']:
-            print('Performing training on model ', iteration)
-            processes = []
-            for rank in range(cat.parameters['device_dict']['world_size']):
-                p = mp.Process(target=run_training, args=(rank, iteration, cat,))
-                p.start()
-                processes.append(p)
-            for p in processes:
-                p.join()
-            cuda_destroy()
-        else:
-            run_training(rank=0, iteration=iteration, cat=cat)
+    cat.set_model(return_new_model(cat.parameters['device_dict']['device']))
+    if cat.parameters['device_dict']['run_ddp']:
+        print('Performing training on model...')
+        processes = []
+        for rank in range(cat.parameters['device_dict']['world_size']):
+            p = mp.Process(target=run_training, args=(rank,cat,))
+            p.start()
+            processes.append(p)
+        for p in processes:
+            p.join()
+        cuda_destroy()
+    else:
+        run_training(rank=0,cat=cat)
     return
 
 def retrain_model(cat):
@@ -482,14 +486,14 @@ def improve_model(cat):
 
 
 if __name__ == '__main__':
-    n_types = 2 # number of ficticious types to label each node in G
+    n_types = 4 # number of ficticious types to label each node in G
     projection_indim = 100
     projection_outdim = 100
     regression_indim = 100
     regression_outdim = 1
     cutoff = 50.0
     n_convs = 3
-    n_data = 100 # total number of samples
+    n_data = 1000 # total number of samples
     n_nodes = np.linspace(5,50, n_data)  # number of data points per sample
     n_dim = 3  # number of dimensions in intial raw data
     parameters = dict(
@@ -509,7 +513,7 @@ if __name__ == '__main__':
             results_dir=None,
             samples_dir=None,
             projection_dir=None,
-            remove_old_model=True,
+            remove_old_model=False,
             write_indv_pred=False,
             graph_read_format=0,
             training_info_nwrite_steps=1,
@@ -588,21 +592,20 @@ if __name__ == '__main__':
                         pooling='sum'
                     )
 
-    #decoder=PositiveScalarsDecoder(dim=regression_indim, act=nn.SiLU()),
     cat = Catalyst()
     cat.set_params(parameters)
 
     gen_graphs = 0
     project_graphs =0
     gen_samples = 0
-    perform_train = 0
+    perform_train = 1
     perform_retrain = 0
     perform_test = 0
     plot_test = 0
     plot_training =0
     perform_ranking = 0
     perform_predictions = 0
-    perform_active_learning = 1
+    perform_active_learning = 0
 
     if gen_graphs:
         generate_data(cat,visualize_final=True)
@@ -613,11 +616,10 @@ if __name__ == '__main__':
         sample_data(cat,graph_data=raw_data,projected_data=projections)
     if perform_train:
         cat.parameters['loader_dict']['batch_size'] = [100,100]
-        cat.parameters['model_dict']['num_epochs'] = 5
+        cat.parameters['model_dict']['num_epochs'] = 100
         cat.parameters['model_dict']['train_delta'] = 0.001
         cat.parameters['model_dict']['train_tolerance'] = 0.001
         train_model(cat, False)
-
 
         if perform_retrain:
             cat.parameters['model_dict']['restart_training'] = True
