@@ -7,6 +7,7 @@ from .modules.utils.data_manager import setup_dataloader
 from ..utils.optimizer import set_optimizer
 
 import torch
+import torch._dynamo
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from datetime import datetime
@@ -43,11 +44,24 @@ class GNN():
         self.validation_graphs = None
         self.validation_samples = None
         self.checkpoint = None
+        self.scaler = torch.cuda.amp.GradScaler(enabled=False)
 
     def print_debug(self):
         print(self.model)
         print(self.training_graphs)
         print(self.validation_graphs)
+
+    def compile_model(self):
+        torch._dynamo.config.suppress_errors = True
+        self.model = torch.compile(
+            self.model,
+            mode="default",  # or "max-autotune"
+            backend="eager",
+            dynamic=False  # True if your input shapes vary
+        )
+    def send_model(self,device):
+        self.model.to(device)
+        self.device = device
 
     def is_ddp(self):
         return isinstance(self.model, DDP)
@@ -79,6 +93,9 @@ class GNN():
                         if subparam._grad is not None:
                             subparam._grad.data = subparam._grad.data.to(self.device)
 
+        use_amp = parameters['device_dict'].get('use_amp', False)
+        self.scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+
     def save_checkpoint(self, parameters, epoch, rank=0, fname=None):
         """Save model/optimizer state (rank 0 only)."""
         if rank != 0:
@@ -96,6 +113,7 @@ class GNN():
             "model_state": core.state_dict(),
             "optimizer_state": self.optimizer.state_dict() if self.optimizer is not None else None,
             "parameters": parameters,  # optional
+            "scaler_state": scaler.state_dict(),
         }
         self.checkpoint = checkpoint
         torch.save(checkpoint, fname)
@@ -117,6 +135,9 @@ class GNN():
 
         if self.optimizer is not None and checkpoint.get("optimizer_state") is not None:
             self.optimizer.load_state_dict(checkpoint["optimizer_state"])
+
+        if self.scalar is not None and checkpoint.get("scalar_state") is not None:
+            self.scalar.load_state_dict(checkpoint["scalar_state"])
 
         return checkpoint.get("epoch", None)
 
@@ -186,37 +207,62 @@ class GNN():
             }
             self.validation_loader = setup_dataloader(data=self.validation_graphs, cat=cat, loader_params=loader_params)
 
-    def train(self,training_dict):
+    def train(self, training_dict):
+        """
+        Modular training loop with optional AMP.
+
+        training_dict:
+          'params'   : full parameter dict
+          'loss_fn'  : optional custom loss function with signature
+                       loss_fn(preds, y, vec, data, loss_params) -> scalar loss tensor
+        """
         self.model.train()
         parameters = training_dict['params']
         loss_accum = parameters['model_dict']['accumulate_loss']
+        loss_params = parameters['model_dict']['loss_params']
+        use_amp = parameters['device_dict'].get('use_amp', False)
+
+        # Choose loss function: custom if provided, else your default
+        if 'loss_fn' in training_dict and training_dict['loss_fn'] is not None:
+            loss_fn = training_dict['loss_fn']
+            # expected signature: loss_fn(preds, y, vec, data, loss_params)
+        else:
+            base_loss = loss_setup(params=loss_params)
+
+            # wrap to match the modular signature
+            def loss_fn(preds, y, vec, data, loss_params=loss_params):
+                if vec:
+                    loss_list = [base_loss(preds[i], y[i]) for i in range(len(preds))]
+                    return torch.sum(torch.stack(loss_list))
+                else:
+                    return base_loss(preds, y)
+
         epoch_loss = 0.0
 
-        loss_fn = loss_setup(params=parameters['model_dict']['loss_params'])
         for data in self.training_loader:
-            def closure():
-                data.to(self.device, non_blocking=True)
-                self.optimizer.zero_grad(set_to_none=True)
+            # move batch to device
+            data = data.to(self.device, non_blocking=True)
+
+            self.optimizer.zero_grad(set_to_none=True)
+
+            # forward + loss under autocast
+            with torch.cuda.amp.autocast(enabled=use_amp):
                 pred = self.model(data)
                 preds, y, vec = accumulate_predictions(pred, data, loss_accum)
                 preds = preds.to(y.device)
-                if vec:
-                    loss_list = [0.0] * len(preds)
-                    for i in range(len(preds)):
-                        loss_list[i] = loss_fn(preds[i], y[i])
-                    batch_loss = torch.sum(torch.stack(loss_list))
-                else:
-                    batch_loss = loss_fn(preds, y)
-                nonlocal epoch_loss
 
-                epoch_loss += batch_loss.item()
-                batch_loss.backward()
-                self.optimizer.step()
-                return batch_loss
+                batch_loss = loss_fn(preds, y, vec, data, loss_params)
 
-            self.optimizer.step(closure)
+            epoch_loss += batch_loss.item()
+
+            # backward with mixed precision
+            self.scaler.scale(batch_loss).backward()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+
+        # DDP: average loss across ranks
         if parameters['device_dict']['run_ddp']:
-            epoch_loss = reduce_tensor(torch.tensor(epoch_loss).to(parameters['device_dict']['device'])).item()
+            epoch_loss = reduce_tensor(torch.tensor(epoch_loss, device=self.device)).item()
 
         return epoch_loss / (len(self.training_loader) * parameters['device_dict']['world_size'])
 

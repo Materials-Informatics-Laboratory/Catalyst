@@ -502,7 +502,8 @@ if __name__ == '__main__':
             ddp_backend='gloo',
             run_ddp=True,
             pin_memory=False,
-            find_unused_parameters=False
+            find_unused_parameters=False,
+            use_amp=False
         ),
         io_dict=dict(
             main_path=str(Path(__file__).parent),

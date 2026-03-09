@@ -28,8 +28,6 @@ def setup_training(rank,cat=None):
     del parameters['io_dict']['model_dir']
     parameters['io_dict']['model_dir'] = os.path.join(parameters['io_dict']['main_path'], 'models',
                                                       'training')
-
-    #instead of having the training code hard-coded for iterations, it would be better to simply scan the directory here and just autoamtically add a counter and corresponding string
     if rank == 0:
         if os.path.isdir(parameters['io_dict']['model_dir']):
             shutil.rmtree(parameters['io_dict']['model_dir'])
@@ -41,12 +39,6 @@ def setup_training(rank,cat=None):
 
     if parameters['device_dict']['run_ddp']:
         ddp_setup(rank, parameters['device_dict']['world_size'], parameters['device_dict']['ddp_backend'])
-
-    #parameters['model_dict']['model'].set_dataloader(cat=cat)
-    #if parameters['device_dict']['run_ddp']:
-    #    parameters['model_dict']['optimizer_params']['params_group']['params'] = parameters['model_dict']['model'].model.module.processor.parameters()
-    #else:
-    #    parameters['model_dict']['optimizer_params']['params_group']['params'] = parameters['model_dict']['model'].model.processor.parameters()
 
 def run_active_learning(rank,cat=None):
     # set up run
@@ -272,15 +264,16 @@ def run_training(rank,cat=None):
     L_train, L_valid = [], []
     shuffle_counter = 0
     met_tolerance = 0
+    patience_counter = 0
+    ep = 0
     min_loss_train = 1.0E30
     min_loss_valid = 1.0E30
     best_model_state = None
     best_optimizer_state = None
-    ep = 0
     reset_optimizer = False
-    patience_counter = 0
-    patience = parameters['model_dict']['patience']  # epochs to wait before LR reduction
-    worsen_tolerance = parameters['model_dict']['worsen_tolerance']  # 5% allowed
+
+    patience = parameters['model_dict']['patience']
+    worsen_tolerance = parameters['model_dict']['worsen_tolerance']
 
     setup_training(rank=rank,cat=cat)
 
@@ -290,6 +283,8 @@ def run_training(rank,cat=None):
         model.model = ddp_model(model=model.model,
                       find_unused_parameters=parameters['device_dict']['find_unused_parameters'],
                       rank=rank, batchnorm=parameters['model_dict']['batchnorm'])
+    else:
+        model.compile_model()
     model.set_optimizer_(parameters=parameters)
     model.load_training_data(parameters, os.path.join(parameters['io_dict']['samples_dir'], 'train_valid_split.npy'),
                              format=parameters['io_dict']['graph_read_format'], rank=rank)

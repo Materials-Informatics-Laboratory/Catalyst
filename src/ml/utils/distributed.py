@@ -37,6 +37,7 @@ def ddp_model(model, find_unused_parameters, rank, batchnorm):
     )
     return model
 
+
 def cuda_destroy():
     # collect memory via garbage collection
     gc.collect()
