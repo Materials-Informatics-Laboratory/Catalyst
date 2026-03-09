@@ -5,7 +5,7 @@ from ..data.utils import save_dictionary
 from ..data.model_data import save_model
 
 
-from .utils.distributed import ddp_destroy, ddp_setup, reduce_tensor
+from .utils.distributed import ddp_destroy, ddp_setup, reduce_tensor, ddp_model
 from ..utilities.sampling import active_sampling, random_
 from .utils.optimizer import set_optimizer
 from .utils.memory import optimizer_to
@@ -19,6 +19,9 @@ import os
 
 
 def setup_training(rank,cat=None):
+    if rank == 0:
+        print('Training model...')
+
     parameters = cat.parameters
 
     parameters['io_dict']['model_dir'] = None
@@ -38,20 +41,12 @@ def setup_training(rank,cat=None):
 
     if parameters['device_dict']['run_ddp']:
         ddp_setup(rank, parameters['device_dict']['world_size'], parameters['device_dict']['ddp_backend'])
-        parameters['model_dict']['model'].setup_ddp(cat, rank=rank)
 
-    parameters['model_dict']['model'].set_dataloader(cat=cat)
-    if parameters['device_dict']['run_ddp']:
-        parameters['model_dict']['optimizer_params']['params_group']['params'] = parameters['model_dict']['model'].model.module.processor.parameters()
-    else:
-        parameters['model_dict']['optimizer_params']['params_group']['params'] = parameters['model_dict']['model'].model.processor.parameters()
-    parameters['model_dict']['model'].set_optimizer(parameters=parameters)
-    #parameters['model_dict']['model'].print_debug()
-
-
-
-
-
+    #parameters['model_dict']['model'].set_dataloader(cat=cat)
+    #if parameters['device_dict']['run_ddp']:
+    #    parameters['model_dict']['optimizer_params']['params_group']['params'] = parameters['model_dict']['model'].model.module.processor.parameters()
+    #else:
+    #    parameters['model_dict']['optimizer_params']['params_group']['params'] = parameters['model_dict']['model'].model.processor.parameters()
 
 def run_active_learning(rank,cat=None):
     # set up run
@@ -271,6 +266,7 @@ def run_active_learning(rank,cat=None):
         iteration += 1
 
 def run_training(rank,cat=None):
+    parameters = cat.parameters
     epoch_times = []
     running_valid_delta = []
     L_train, L_valid = [], []
@@ -282,33 +278,41 @@ def run_training(rank,cat=None):
     best_optimizer_state = None
     ep = 0
     reset_optimizer = False
-    parameters = cat.parameters
+    patience_counter = 0
+    patience = parameters['model_dict']['patience']  # epochs to wait before LR reduction
+    worsen_tolerance = parameters['model_dict']['worsen_tolerance']  # 5% allowed
 
     setup_training(rank=rank,cat=cat)
 
-    if rank == 0:
-        print('Training model...')
-    patience_counter = 0
-    patience = parameters['model_dict']['patience']  # epochs to wait before LR reduction
-    if parameters['model_dict']['optimizer_params'].get('dynamic_lr'):
-        lr_decay_factor = parameters['model_dict']['optimizer_params']['params_group']['lr_decay_factor']
-    else:
-        lr_decay_factor = 0.0
-    worsen_tolerance = parameters['model_dict']['worsen_tolerance']  # 5% allowed
+    model = parameters['model_dict']['model']
+    model.device = parameters['device_dict']['device']
+    if parameters['device_dict']['run_ddp']:
+        model.model = ddp_model(model=model.model,
+                      find_unused_parameters=parameters['device_dict']['find_unused_parameters'],
+                      rank=rank, batchnorm=parameters['model_dict']['batchnorm'])
+    model.set_optimizer_(parameters=parameters)
+    model.load_training_data(parameters, os.path.join(parameters['io_dict']['samples_dir'], 'train_valid_split.npy'),
+                             format=parameters['io_dict']['graph_read_format'], rank=rank)
+    model.set_dataloader(cat=cat, epoch=ep)
+
+
     while ep < parameters['model_dict']['num_epochs']:
         if rank == 0:
             if ep > 0:
                 start_time = time.time()
             print('Epoch ', ep + 1, ' of ', parameters['model_dict']['num_epochs'])
             sys.stdout.flush()
+        if parameters['device_dict']['run_ddp']:
+            model.training_loader.sampler.set_epoch(ep)
+            model.validation_loader.sampler.set_epoch(ep)
 
 
         # --- Train & Validate ---
         training_dict = {
             'params':parameters,
         }
-        loss_train = parameters['model_dict']['model'].train(training_dict=training_dict)
-        loss_valid = parameters['model_dict']['model'].validate(parameters=parameters,rank=rank)
+        loss_train = model.train(training_dict=training_dict)
+        loss_valid = model.validate(parameters=parameters,rank=rank)
 
         if rank == 0:
             if ep > 0:
@@ -316,10 +320,8 @@ def run_training(rank,cat=None):
                 print('epoch_time = ', time.time() - start_time, ' seconds',
                       ' Average epoch time = ', sum(epoch_times) / float(len(epoch_times)), ' seconds')
             print('Train loss = ', loss_train, ' Validation loss = ', loss_valid)
-
         L_train.append(loss_train)
         L_valid.append(loss_valid)
-
 
         # --- Save best model by validation only ---
         if loss_valid < min_loss_valid:
@@ -333,14 +335,8 @@ def run_training(rank,cat=None):
                 min_loss_train = loss_train
             if check:
                 if rank == 0:
-                    parameters['model_dict']['model'].set_model_state({k: v.cpu() for k, v in parameters['model_dict']['model'].model.state_dict().items()})
-                    parameters['model_dict']['model'].set_model_state(parameters['model_dict']['model'].optimizer.state_dict())
-                    model_params_group = {
-                        'L_train': L_train[-1],
-                        'L_valid': L_valid[-1]
-                    }
-                    save_model(parameters=parameters,model_params_group=model_params_group)
-
+                    print('Saving model checkpoint...')
+                    model.save_checkpoint(parameters, ep, rank=rank)
                 patience_counter = 0  # reset patience
         else:
             patience_counter += 1
@@ -349,7 +345,7 @@ def run_training(rank,cat=None):
             if loss_valid > min_loss_valid * worsen_tolerance and best_model_state is not None:
                 if rank == 0:
                     print(f"Validation worsened by more than {100 * worsen_tolerance:.1f}%. Reverting to best model.")
-                parameters['model_dict']['model'].load_model_state()
+                ep = trainer.load_checkpoint()
 
         # --- Convergence check using deltas ---
         if ep > 1:
@@ -381,7 +377,6 @@ def run_training(rank,cat=None):
                 }
                 save_dictionary(fname=os.path.join(cat.parameters['io_dict']['model_dir'], 'run_information.npy'),
                                 data=run_data)
-
         ep += 1
 
     if parameters['device_dict']['run_ddp']:

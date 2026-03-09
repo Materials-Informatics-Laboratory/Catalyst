@@ -7,7 +7,7 @@ from .modules.utils.data_manager import setup_dataloader
 from ..utils.optimizer import set_optimizer
 
 import torch
-
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 from datetime import datetime
 from pathlib import PurePath
@@ -42,11 +42,21 @@ class GNN():
         self.training_samples = None
         self.validation_graphs = None
         self.validation_samples = None
+        self.checkpoint = None
 
     def print_debug(self):
         print(self.model)
         print(self.training_graphs)
         print(self.validation_graphs)
+
+    def is_ddp(self):
+        return isinstance(self.model, DDP)
+
+    def _core_model(self):
+        """Return underlying nn.Module (unwrap DDP if needed)."""
+        if self.is_ddp():
+            return self.model.module
+        return self.model
 
     def set_model_state(self,model_state):
         self.model_state = model_state
@@ -54,59 +64,61 @@ class GNN():
     def set_optimizer_state(self,optimizer_state):
         self.optimizer_state = optimizer_state
 
-    def set_optimizer(self,parameters):
+    def set_optimizer_(self, parameters):
+        parameters['model_dict']['optimizer_params']['params_group']['params'] = self.model.parameters()
         self.optimizer = set_optimizer(parameters)
-        optimizer_to(self.optimizer,self.device)
+        for param in self.optimizer.state.values():
+            if isinstance(param, torch.Tensor):
+                param.data = param.data.to(self.device)
+                if param._grad is not None:
+                    param._grad.data = param._grad.data.to(self.device)
+            elif isinstance(param, dict):
+                for subparam in param.values():
+                    if isinstance(subparam, torch.Tensor):
+                        subparam.data = subparam.data.to(self.device)
+                        if subparam._grad is not None:
+                            subparam._grad.data = subparam._grad.data.to(self.device)
 
-    def load_model_state(self,state):
-        self.model.load_state_dict(self.model_state)
-        self.model.to(self.device)
+    def save_checkpoint(self, parameters, epoch, rank=0, fname=None):
+        """Save model/optimizer state (rank 0 only)."""
+        if rank != 0:
+            return
 
-    def train(self,training_dict):
-        self.model.train()
-        parameters = training_dict['params']
-        loss_accum = parameters['model_dict']['accumulate_loss']
-        epoch_loss = 0.0
+        if fname is None:
+            fname = os.path.join(
+                parameters['io_dict']['model_dir'],
+                f"checkpoint_epoch_{epoch}.pt"
+            )
 
-        loss_fn = loss_setup(params=parameters['model_dict']['loss_params'])
-        for data in self.training_loader:
-            def closure():
-                data.to(self.device, non_blocking=True)
-                self.optimizer.zero_grad(set_to_none=True)
-                pred = self.model(data)
-                preds, y, vec = accumulate_predictions(pred, data, loss_accum)
-                preds = preds.to(y.device)
-                if vec:
-                    loss_list = [0.0] * len(preds)
-                    for i in range(len(preds)):
-                        loss_list[i] = loss_fn(preds[i], y[i])
-                    batch_loss = torch.sum(torch.stack(loss_list))
-                else:
-                    batch_loss = loss_fn(preds, y)
-                nonlocal epoch_loss
+        core = self._core_model()
+        checkpoint = {
+            "epoch": epoch,
+            "model_state": core.state_dict(),
+            "optimizer_state": self.optimizer.state_dict() if self.optimizer is not None else None,
+            "parameters": parameters,  # optional
+        }
+        self.checkpoint = checkpoint
+        torch.save(checkpoint, fname)
 
-                epoch_loss += batch_loss.item()
-                batch_loss.backward()
-                self.optimizer.step()
-                return batch_loss
+    def load_checkpoint(self, fname=None, map_location=None):
+        """
+        Load model/optimizer state into this GNN.
+        Call after self.model has been constructed (and wrapped in DDP if used).
+        """
+        if map_location is None:
+            map_location = self.device if hasattr(self, "device") else "cpu"
 
-            self.optimizer.step(closure)
-        if parameters['device_dict']['run_ddp']:
-            epoch_loss = reduce_tensor(torch.tensor(epoch_loss).to(parameters['device_dict']['device'])).item()
-
-        return epoch_loss / (len(self.training_loader) * parameters['device_dict']['world_size'])
-
-    def load_model(self,parameters, data_only=False):
-        if data_only:
-            return torch.load(parameters['io_dict']['loaded_model_name'])
+        if fname is None:
+            checkpoint = self.checkpoint
         else:
-            model_data = torch.load(parameters['io_dict']['loaded_model_name'])
-            self.model.load_state_dict(model_data['model'])
+            checkpoint = torch.load(fname, map_location=map_location)
+        core = self._core_model()
+        core.load_state_dict(checkpoint["model_state"])
 
-    def setup_ddp(self, parameters,rank):
-        ddp_model = DDP(self.model, device_ids=[rank],
-                        find_unused_parameters=parameters['device_dict']['find_unused_parameters'])
-        self.model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(ddp_model)
+        if self.optimizer is not None and checkpoint.get("optimizer_state") is not None:
+            self.optimizer.load_state_dict(checkpoint["optimizer_state"])
+
+        return checkpoint.get("epoch", None)
 
     def load_training_data(self,params, samples_file, format=0, rank=0):
         if format != 2 and format != -1:
@@ -173,6 +185,40 @@ class GNN():
                 'batch_size': cat.parameters['loader_dict']['batch_size'][1]
             }
             self.validation_loader = setup_dataloader(data=self.validation_graphs, cat=cat, loader_params=loader_params)
+
+    def train(self,training_dict):
+        self.model.train()
+        parameters = training_dict['params']
+        loss_accum = parameters['model_dict']['accumulate_loss']
+        epoch_loss = 0.0
+
+        loss_fn = loss_setup(params=parameters['model_dict']['loss_params'])
+        for data in self.training_loader:
+            def closure():
+                data.to(self.device, non_blocking=True)
+                self.optimizer.zero_grad(set_to_none=True)
+                pred = self.model(data)
+                preds, y, vec = accumulate_predictions(pred, data, loss_accum)
+                preds = preds.to(y.device)
+                if vec:
+                    loss_list = [0.0] * len(preds)
+                    for i in range(len(preds)):
+                        loss_list[i] = loss_fn(preds[i], y[i])
+                    batch_loss = torch.sum(torch.stack(loss_list))
+                else:
+                    batch_loss = loss_fn(preds, y)
+                nonlocal epoch_loss
+
+                epoch_loss += batch_loss.item()
+                batch_loss.backward()
+                self.optimizer.step()
+                return batch_loss
+
+            self.optimizer.step(closure)
+        if parameters['device_dict']['run_ddp']:
+            epoch_loss = reduce_tensor(torch.tensor(epoch_loss).to(parameters['device_dict']['device'])).item()
+
+        return epoch_loss / (len(self.training_loader) * parameters['device_dict']['world_size'])
 
     @torch.no_grad()
     def validate(self,parameters,rank=0):

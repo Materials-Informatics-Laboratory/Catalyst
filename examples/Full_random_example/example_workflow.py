@@ -233,7 +233,7 @@ def train_model(cat,pretrain=False):
     cat.parameters['io_dict']['samples_dir'] = None
     del cat.parameters['io_dict']['samples_dir']
     cat.parameters['io_dict']['samples_dir'] = os.path.join(cat.parameters['io_dict']['main_path'], 'samples','model_samples')
-    cat.set_model(return_new_model(cat.parameters['device_dict']['device']))
+    cat.set_model(return_new_model('cpu'))
     if cat.parameters['device_dict']['run_ddp']:
         print('Performing training on model...')
         processes = []
@@ -243,7 +243,6 @@ def train_model(cat,pretrain=False):
             processes.append(p)
         for p in processes:
             p.join()
-        cuda_destroy()
     else:
         run_training(rank=0,cat=cat)
     return
@@ -498,10 +497,10 @@ if __name__ == '__main__':
     n_dim = 3  # number of dimensions in intial raw data
     parameters = dict(
         device_dict=dict(
-            world_size=1,
-            device='cpu',
+            world_size=2,
+            device='cuda',
             ddp_backend='gloo',
-            run_ddp=False,
+            run_ddp=True,
             pin_memory=False,
             find_unused_parameters=False
         ),
@@ -537,7 +536,7 @@ if __name__ == '__main__':
         model_dict=dict(
             n_models=1,
             num_epochs=5,
-            train_delta=0.001,
+            train_delta=0.1,
             train_tolerance=1.0,
             worsen_tolerance=2.0,
             patience=5,
@@ -550,6 +549,7 @@ if __name__ == '__main__':
             accumulate_loss='exact',
             model=None,
             strict_loss_policy = False,
+            batchnorm=False,
             interpretable=False,
             restart_training=False,
             optimizer_params=dict(
@@ -595,9 +595,9 @@ if __name__ == '__main__':
     cat = Catalyst()
     cat.set_params(parameters)
 
-    gen_graphs = 1
-    project_graphs =1
-    gen_samples = 1
+    gen_graphs = 0
+    project_graphs =0
+    gen_samples = 0
     perform_train = 1
     perform_retrain = 0
     perform_test = 0
@@ -615,8 +615,8 @@ if __name__ == '__main__':
     if gen_samples:
         sample_data(cat,graph_data=raw_data,projected_data=projections)
     if perform_train:
-        cat.parameters['loader_dict']['batch_size'] = [100,100]
-        cat.parameters['model_dict']['num_epochs'] = 100
+        cat.parameters['loader_dict']['batch_size'] = [10,10]
+        cat.parameters['model_dict']['num_epochs'] = 1000
         cat.parameters['model_dict']['train_delta'] = 0.001
         cat.parameters['model_dict']['train_tolerance'] = 0.001
         train_model(cat, False)
