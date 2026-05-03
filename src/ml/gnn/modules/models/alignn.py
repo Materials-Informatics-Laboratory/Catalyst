@@ -204,6 +204,144 @@ class PositiveScalarsDecoder(nn.Module):
             else:
                 return [g_node_scalars, a_node_scalars]
 
+class PositiveKChannelDecoder(nn.Module):
+    def __init__(self, dim, act, K=16):
+        super().__init__()
+        self.dim = dim
+        self.K = K
+        self.act_func = act
+
+        self.transform_g_node = nn.Sequential(
+            MLP([dim, dim, K], act=self.act_func),
+            nn.Softplus()
+        )
+
+        self.transform_a_node = nn.Sequential(
+            MLP([dim, dim, K], act=self.act_func),
+            nn.Softplus()
+        )
+
+        self.transform_a_edge = nn.Sequential(
+            MLP([dim, dim, K], act=self.act_func),
+            nn.Softplus()
+        )
+
+    def forward(self, data):
+        if isinstance(data, Atomic_Graph_Data):
+            atm_scalars = self.transform_g_node(data.h_atm)   # [N_atom, K]
+            bnd_scalars = self.transform_a_node(data.h_bnd)   # [N_bond, K]
+
+            if hasattr(data, "x_ang"):
+                ang_scalars = self.transform_a_edge(data.h_ang)  # [N_angle, K]
+                return [atm_scalars, bnd_scalars, ang_scalars]
+            else:
+                return [atm_scalars, bnd_scalars]
+
+        elif isinstance(data, Generic_Graph_Data):
+            g_node_scalars = self.transform_g_node(data.h_g_node)  # [N_g_node, K]
+            a_node_scalars = self.transform_a_node(data.h_a_node)  # [N_a_node, K]
+
+            if hasattr(data, "edge_A"):
+                a_edge_scalars = self.transform_a_edge(data.h_a_edge)  # [N_a_edge, K]
+                return [g_node_scalars, a_node_scalars, a_edge_scalars]
+            else:
+                return [g_node_scalars, a_node_scalars]
+
+        else:
+            raise TypeError("Data type not supported by PositiveKChannelDecoder.")
+
+class PositiveFeatureReadout(nn.Module):
+    """
+    Maps pooled positive feature vectors to scalar or vector outputs.
+
+    This is used after accumulate_predictions(..., channel_mode='latent').
+
+    If out_dim = 1:
+        scalar prediction.
+
+    If out_dim > 1:
+        true vector-valued prediction.
+    """
+
+    def __init__(
+        self,
+        feature_dim,
+        out_dim=1,
+        nonnegative_weights=True,
+        signed=False,
+    ):
+        super().__init__()
+
+        self.feature_dim = feature_dim
+        self.out_dim = out_dim
+        self.nonnegative_weights = nonnegative_weights
+        self.signed = signed
+
+        if signed:
+            # Positive-minus-positive decomposition:
+            # y = b + W_plus z - W_minus z
+            self.weight_plus_raw = nn.Parameter(torch.zeros(feature_dim, out_dim))
+            self.weight_minus_raw = nn.Parameter(torch.zeros(feature_dim, out_dim))
+        else:
+            self.weight_raw = nn.Parameter(torch.zeros(feature_dim, out_dim))
+
+        self.bias = nn.Parameter(torch.zeros(out_dim))
+
+    def forward(self, features, return_contributions=False):
+        """
+        features:
+            [num_graphs, feature_dim]
+            or [feature_dim]
+
+        returns:
+            y:
+                [num_graphs, out_dim]
+                or [out_dim]
+        """
+
+        if self.signed:
+            w_plus = torch.nn.functional.softplus(self.weight_plus_raw)
+            w_minus = torch.nn.functional.softplus(self.weight_minus_raw)
+
+            y_plus = features @ w_plus
+            y_minus = features @ w_minus
+            y = self.bias + y_plus - y_minus
+
+            if return_contributions:
+                # Shape:
+                #   [num_graphs, feature_dim, out_dim]
+                # or
+                #   [feature_dim, out_dim]
+                contrib_plus = features.unsqueeze(-1) * w_plus
+                contrib_minus = features.unsqueeze(-1) * w_minus
+
+                return y, {
+                    "w_plus": w_plus,
+                    "w_minus": w_minus,
+                    "contrib_plus": contrib_plus,
+                    "contrib_minus": contrib_minus,
+                    "net_contrib": contrib_plus - contrib_minus,
+                }
+
+            return y
+
+        if self.nonnegative_weights:
+            w = torch.nn.functional.softplus(self.weight_raw)
+        else:
+            w = self.weight_raw
+
+        y = self.bias + features @ w
+
+        if return_contributions:
+            contributions = features.unsqueeze(-1) * w
+
+            return y, {
+                "weights": w,
+                "contributions": contributions,
+            }
+
+        return y
+
 class ALIGNN(nn.Module):
 
     def __init__(self, encoder, processor, decoder):
