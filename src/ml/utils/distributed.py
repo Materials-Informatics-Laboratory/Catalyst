@@ -1,4 +1,5 @@
 from torch.distributed import init_process_group,destroy_process_group
+from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.multiprocessing as mp
 import torch.distributed as dist
 from numba import cuda
@@ -17,16 +18,36 @@ def ddp_setup(rank: int ,world_size ,backend):
     torch.cuda.set_device(rank)
     init_process_group(backend=backend, rank=rank, world_size=world_size,init_method="env://?use_libuv=False")
 
+def ddp_model(model, find_unused_parameters, rank, batchnorm):
+    # 1) Set device for this rank and move model there
+    device = torch.device(f"cuda:{rank}")
+    torch.cuda.set_device(device)
+    model.to(device)
+
+    # 2) Convert BN → SyncBatchNorm BEFORE wrapping in DDP
+    if batchnorm:
+        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+
+    # 3) Wrap in DDP on this device
+    model = DDP(
+        model,
+        device_ids=[device.index],     # or [rank] if rank == local GPU index
+        output_device=device.index,
+        find_unused_parameters=find_unused_parameters,
+    )
+    return model
+
+
 def cuda_destroy():
-    # collect memory via garbage collection
-    gc.collect()
-    # loop through active devices (assumes you are using all devices available), clear their memory, and then reset the device and close cuda
-    for gpu_id in range(torch.cuda.device_count()):
-        cuda.select_device(gpu_id)
-        torch.cuda.empty_cache()
-        device = cuda.get_current_device()
-        device.reset()
-        cuda.close()
+    def cuda_destroy():
+        gc.collect()
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+
+        if dist.is_available() and dist.is_initialized():
+            dist.destroy_process_group()
 
 def ddp_destroy():
     dist.barrier()

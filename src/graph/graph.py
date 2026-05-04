@@ -9,6 +9,9 @@ import sys
 
 from torch_geometric.data import Data
 
+import numba
+from numba import njit, prange
+
 mask2index = lambda mask: np.flatnonzero(mask)
 
 class Generic_Graph_Data(Data):
@@ -140,9 +143,165 @@ def summary(model):
     params.append(('Total', total_num))
     return pd.DataFrame(params, columns=['Layer', 'Params'])
 
+import numpy as np
+import numba
+from numba import njit, prange
+
+@njit
+def minimum_image(dx, box_length):
+    if dx > 0.5 * box_length:
+        dx -= box_length
+    elif dx < -0.5 * box_length:
+        dx += box_length
+    return dx
+
+@njit
+def build_cell_list(positions, box, cell_size):
+    n_atoms = positions.shape[0]
+    nx = int(box[0] // cell_size)
+    ny = int(box[1] // cell_size)
+    nz = int(box[2] // cell_size)
+    if nx == 0: nx = 1
+    if ny == 0: ny = 1
+    if nz == 0: nz = 1
+
+    n_cells = nx * ny * nz
+    atom_cell_indices = np.empty(n_atoms, dtype=np.int32)
+
+    for i in range(n_atoms):
+        cx = int(positions[i,0] / cell_size) % nx
+        cy = int(positions[i,1] / cell_size) % ny
+        cz = int(positions[i,2] / cell_size) % nz
+        atom_cell_indices[i] = cx + cy*nx + cz*nx*ny
+
+    counts = np.zeros(n_cells, dtype=np.int32)
+    for c in atom_cell_indices:
+        counts[c] += 1
+
+    cell_starts = np.zeros(n_cells, dtype=np.int32)
+    for i in range(1, n_cells):
+        cell_starts[i] = cell_starts[i-1] + counts[i-1]
+
+    cell_ends = np.zeros(n_cells, dtype=np.int32)
+    for i in range(n_cells):
+        cell_ends[i] = cell_starts[i] + counts[i]
+
+    cell_list_atoms = np.empty(n_atoms, dtype=np.int32)
+    counters = np.zeros(n_cells, dtype=np.int32)
+    for i in range(n_atoms):
+        c = atom_cell_indices[i]
+        pos = cell_starts[c] + counters[c]
+        cell_list_atoms[pos] = i
+        counters[c] += 1
+
+    return nx, ny, nz, cell_starts, cell_ends, cell_list_atoms, atom_cell_indices
+
+@njit
+def get_neighbor_cells(cx, cy, cz, nx, ny, nz):
+    neighbors = []
+    for dx in (-1,0,1):
+        nxn = (cx + dx) % nx
+        for dy in (-1,0,1):
+            nyn = (cy + dy) % ny
+            for dz in (-1,0,1):
+                nzn = (cz + dz) % nz
+                neighbors.append(nxn + nyn*nx + nzn*nx*ny)
+    return neighbors
+
+@njit(parallel=True)
+def find_neighbors_cell_list(positions, box, cell_size, cutoff):
+    n_atoms = positions.shape[0]
+    cutoff_sq = cutoff * cutoff
+    nx, ny, nz, cell_starts, cell_ends, cell_list_atoms, atom_cell_indices = build_cell_list(positions, box, cell_size)
+
+    max_edges_per_thread = 10000  # Adjust based on memory, e.g. ~max expected neighbors per thread
+    n_threads = numba.get_num_threads()
+
+    # create buffers per thread:
+    edge_i_threads = np.empty((n_threads, max_edges_per_thread), dtype=np.int32)
+    edge_j_threads = np.empty((n_threads, max_edges_per_thread), dtype=np.int32)
+    edge_d_threads = np.empty((n_threads, max_edges_per_thread), dtype=np.float32)
+    edge_count_threads = np.zeros(n_threads, dtype=np.int32)
+
+    for atom_idx in prange(n_atoms):
+        thread_id = numba.get_thread_id()
+        pos_i = positions[atom_idx]
+
+        cx = int(pos_i[0] / cell_size) % nx
+        cy = int(pos_i[1] / cell_size) % ny
+        cz = int(pos_i[2] / cell_size) % nz
+
+        neighbor_cells = get_neighbor_cells(cx, cy, cz, nx, ny, nz)
+
+        for cell in neighbor_cells:
+            start = cell_starts[cell]
+            end = cell_ends[cell]
+            for idx in range(start, end):
+                j = cell_list_atoms[idx]
+                if j <= atom_idx:
+                    continue
+
+                dx = positions[j,0] - pos_i[0]
+                dy = positions[j,1] - pos_i[1]
+                dz = positions[j,2] - pos_i[2]
+
+                if dx > 0.5 * box[0]: dx -= box[0]
+                elif dx < -0.5 * box[0]: dx += box[0]
+                if dy > 0.5 * box[1]: dy -= box[1]
+                elif dy < -0.5 * box[1]: dy += box[1]
+                if dz > 0.5 * box[2]: dz -= box[2]
+                elif dz < -0.5 * box[2]: dz += box[2]
+
+                r2 = dx*dx + dy*dy + dz*dz
+                if r2 <= cutoff_sq:
+                    count = edge_count_threads[thread_id]
+                    if count == max_edges_per_thread:
+                        # Could handle buffer extension or skip overflow edges safely
+                        continue
+                    edge_i_threads[thread_id, count] = atom_idx
+                    edge_j_threads[thread_id, count] = j
+                    edge_d_threads[thread_id, count] = np.sqrt(r2)
+                    edge_count_threads[thread_id] = count + 1
+
+    # After parallel: gather all thread edges together
+    total_edges = np.sum(edge_count_threads)
+    edge_i = np.empty(total_edges, dtype=np.int32)
+    edge_j = np.empty(total_edges, dtype=np.int32)
+    edge_d = np.empty(total_edges, dtype=np.float32)
+
+    pos = 0
+    for t in range(n_threads):
+        count = edge_count_threads[t]
+        edge_i[pos:pos+count] = edge_i_threads[t, :count]
+        edge_j[pos:pos+count] = edge_j_threads[t, :count]
+        edge_d[pos:pos+count] = edge_d_threads[t, :count]
+        pos += count
+
+    return edge_i, edge_j, edge_d
+
+'''
+def atoms2graph(atoms, cutoff, k=5):
+    """
+    Fast neighbor finder for atoms based on cell linked list with PBC.
+    Fully replaces ASE neighbor_list and KDTree approaches.
+
+    Returns:
+        edge_index (2 x N_edges ndarray)
+        edge_attr distances as ndarray (N_edges,)
+    """
+    atoms.wrap()  # wrap positions into the box
+    pos = atoms.get_positions()
+    box = np.linalg.norm(atoms.cell[:3], axis=1)
+    cell_size = cutoff
+
+    edge_i, edge_j, edge_d = find_neighbors_cell_list(pos, box, cell_size, cutoff)
+
+    return np.stack((edge_i, edge_j)), edge_d.astype(np.float32)
+
+'''
 def atoms2graph(atoms, cutoff,k=5):
     """Convert an ASE `Atoms` object into a graph based on a radius cutoff.
-    Returns the graph (in COO format) and its edge attributes (format 
+    Returns the graph (in COO format) and its edge attributes (format
     determined by `edge_dist`).
 
     Args:
@@ -175,6 +334,8 @@ def atoms2graph(atoms, cutoff,k=5):
         d = [n for one_dim in d for n in one_dim]
 
     return np.stack((i, j)), np.array(d).astype(np.float32)
+
+
 
 def atoms2knngraph(atoms, cutoff, k=12, scale_inv=True):
     """Convert an ASE `Atoms` object into a graph based on k nearest neighbors.

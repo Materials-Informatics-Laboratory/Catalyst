@@ -1,4 +1,5 @@
 from ...graph.graph import Generic_Graph_Data,Atomic_Graph_Data
+from ...graph.alignnd import alignn_gen
 from sklearn.neighbors import KDTree
 from ase.atoms import Atoms
 from ase.geometry import get_distances
@@ -6,11 +7,15 @@ import networkx as nx
 import numpy as np
 import math
 
+from itertools import product
+
+
 class GOP():
     def __init__(self,params=dict(
                         cutoffs=[], # [3.0,4.0,5.0,...]
                         interactions=[], # [['Al','Al'],...]
-                        k=1
+                        k=1,
+                        with_gini = False
                     )
                  ):
         super().__init__()
@@ -30,11 +35,31 @@ class GOP():
                     for edge in edges:
                         degrees[-1] += G[edge[0]][edge[1]]['weight']
             unique_degrees, counts = np.unique(degrees, return_counts=True)
+            gini = lambda x: np.abs(np.subtract.outer(x, x)).sum() / (2 * len(x) * np.sum(x))
+
             for ii, deg in enumerate(unique_degrees):
                 p_ii = counts[ii] / sum(counts)
-                sg_op += p_ii * math.log(p_ii) + deg * p_ii
+                sg_op += -1.0*p_ii * math.log(p_ii)
+            if self.params['with_gini']:
+                sg_op += gini(np.array(unique_degrees))
+            else:
+                prob_sum = 0.0
+                for ii, deg in enumerate(unique_degrees):
+                    p_ii = counts[ii] / sum(counts)
+                    prob_sum += deg * p_ii
+                sg_op += prob_sum
             op += math.pow(sg_op, self.params['k'])
         return op
+
+    def build_graph(self,snapshot):
+        data = {
+            'type': 'alignnd',
+            'neighbor_params': [max(self.params['cutoffs']), -1],
+            'raw_data': snapshot,
+            'is_dihedral': False,
+            'include_angs': False,
+        }
+        return alignn_gen(data=data)
 
     def predict(self,data,flatten=False):
         '''
@@ -43,11 +68,19 @@ class GOP():
         predictions = []
         for snapshot in data:
             predictions.append([])
-            if isinstance(snapshot, Atomic_Graph_Data) or isinstance(snapshot, Generic_Graph_Data):
-                if hasattr(snapshot, 'x_atm'):
-                    symbols = snapshot['x_atm']
-                elif hasattr(snapshot, 'node_G'):
-                    symbols = snapshot['node_G']
+            graph_type = [0,0]
+            if isinstance(snapshot, Atoms):
+                graph = self.build_graph(snapshot)
+            else:
+                graph = snapshot
+
+            if isinstance(graph, Atomic_Graph_Data) or isinstance(graph, Generic_Graph_Data):
+                if hasattr(graph, 'x_atm'):
+                    symbols = graph['x_atm']
+                    graph_type[0] = 1
+                elif hasattr(graph, 'node_G'):
+                    symbols = graph['node_G']
+                    graph_type[1] = 1
 
                 for interaction in self.params['interactions']:
                     i = np.where(np.array(interaction[0]) != 0)[0][0]
@@ -67,92 +100,58 @@ class GOP():
                     predictions[-1].append([])
                     for interaction in self.params['interactions']:
                         predictions[-1][-1].append([])
-                        G = nx.Graph()
+
                         i = np.where(np.array(interaction[0]) != 0)[0][0]
                         j = np.where(np.array(interaction[1]) != 0)[0][0]
                         kks = []
                         for symbol in symbols:
                             kks.append(np.where(np.array(symbol) != 0)[0][0])
+                        edge_list = []
                         if i == j:
+                            edge_index = np.array(graph['edge_index_G'])
+                            edge_lookup = {(u, v): idx for idx, (u, v) in enumerate(zip(edge_index[0], edge_index[1]))}
                             idx = np.where(np.array(kks) == i)[0]
-                            for ii, idi in enumerate(idx):
-                                G.add_node(ii)
-                                for jj, idj in enumerate(idx):
-                                    if ii != jj:
-                                        edge_id = np.where(np.logical_and(np.array(snapshot['edge_index_G'][0]) == idi,
-                                                                          np.array(snapshot['edge_index_G'][1]) == idj))
-                                        if len(edge_id[0]) > 0:
-                                            if hasattr(snapshot, 'x_atm'):
-                                                edge = snapshot['x_bnd'][edge_id]
-                                            elif hasattr(snapshot, 'node_G'):
-                                                edge = snapshot['node_A'][edge_id]
-                                            if rc > -1.0 and edge < rc:
-                                                edge = 1.0 / edge
-                                                G.add_edge(ii, jj, weight=edge.item())
-                        else:
-                            idx = []
-                            idx.append(np.where(np.array(kks) == i)[0])
-                            idx.append(np.where(np.array(kks) == j)[0])
+                            for i_, j_ in product(idx, idx):
+                                if i_ == j_:
+                                    continue
 
-                            for ii, idi in enumerate(idx[0]):
-                                G.add_node(ii)
-                                for jj, idj in enumerate(idx[1]):
-                                    if ii != jj:
-                                        edge_id = np.where(np.logical_and(np.array(snapshot['edge_index_G'][0]) == idi,
-                                                                          np.array(snapshot['edge_index_G'][1]) == idj))
-                                        if len(edge_id[0]) > 0:
-                                            if len(idx[0]) + jj not in list(G.nodes):
-                                                G.add_node(len(idx[0]) + jj)
-                                            if hasattr(snapshot, 'x_atm'):
-                                                edge = snapshot['x_bnd'][edge_id]
-                                            elif hasattr(snapshot, 'node_G'):
-                                                edge = snapshot['node_A'][edge_id]
-                                            if rc > -1.0 and edge < rc:
-                                                edge = 1.0 / edge
-                                                G.add_edge(ii, len(idx[0]) + jj, weight=edge.item())
-                        predictions[-1][-1][-1].append(self.calc_gop(G))
-            else:
-                symbols = np.unique(snapshot.get_chemical_symbols())
-                for interaction in self.params['interactions']:
-                    check = 0
-                    for symbol in symbols:
-                        if symbol == interaction[0]:
-                            check += 1
-                        if symbol == interaction[1]:
-                            check += 1
-                    if check < 2:
-                        print('Requested interaction not possible with given Atoms object...killing run...')
-                        exit(0)
-                for rc in self.params['cutoffs']:
-                    predictions[-1].append([])
-                    for interaction in self.params['interactions']:
-                        predictions[-1][-1].append([])
-                        G = nx.Graph()
-                        selected_atoms = []
-                        if interaction[0] == interaction[1]:
-                            idx = np.where(np.array(snapshot.get_chemical_symbols()) == interaction[0])
-                            selected_atoms.append([snapshot[i] for i in idx])
-                            for i, atom_i in enumerate(selected_atoms[0][0]):
-                                G.add_node(i)
-                                for j, atom_j in enumerate(selected_atoms[0][0]):
-                                    r = get_distances(atom_i.position, atom_j.position,cell=snapshot.get_cell(),pbc=True)[1][0][0]
-                                    if r < rc and r > .01:
-                                        G.add_edge(i, j, weight=1.0 / r)
+                                edge_id = edge_lookup.get((i_, j_))
+                                if edge_id is None:
+                                    continue
+
+                                if graph_type[0]:
+                                    edge = graph['x_bnd'][edge_id]
+                                elif graph_type[1]:
+                                    edge = graph['node_A'][edge_id]
+
+                                if edge < rc:
+                                    edge_weight = 1.0 / edge
+                                    edge_list.append((i_, j_, {'weight': edge_weight.item()}))
                         else:
-                            idx = []
-                            for symbol in interaction:
-                                idx.append(np.where(np.array(snapshot.get_chemical_symbols()) == symbol))
-                            selected_atoms.append([snapshot[i] for i in idx[0]])
-                            selected_atoms.append([snapshot[i] for i in idx[1]])
-                            for i, atom_i in enumerate(selected_atoms[0][0]):
-                                G.add_node(i)
-                                for j, atom_j in enumerate(selected_atoms[1][0]):
-                                    if i == 0:
-                                        G.add_node(len(selected_atoms[0][0]) + j)
-                                    r = get_distances(atom_i.position, atom_j.position,cell=snapshot.get_cell(),pbc=True)[1][0][0]
-                                    if r < rc and r > .01:
-                                        G.add_edge(i, len(selected_atoms[0][0]) + j, weight=1.0 / r)
+                            idx_i = np.where(np.array(kks) == i)[0]
+                            idx_j = np.where(np.array(kks) == j)[0]
+                            edge_index = np.array(graph['edge_index_G'])
+                            edge_lookup = {(u, v): eid for eid, (u, v) in enumerate(zip(edge_index[0], edge_index[1]))}
+
+                            for i_, j_ in product(idx_i, idx_j):
+                                if i_ == j_:
+                                    continue  # skip same enumeration index pairs if needed
+
+                                edge_id = edge_lookup.get((i_, j_))
+                                if edge_id is None:
+                                    continue
+
+                                if hasattr(graph, 'x_atm'):
+                                    edge = graph['x_bnd'][edge_id]
+                                elif hasattr(graph, 'node_G'):
+                                    edge = graph['node_A'][edge_id]
+
+                                if edge < rc:
+                                    edge_weight = 1.0 / edge
+                                    edge_list.append((i_, j_, {'weight': edge_weight.item()}))
+                        G = nx.Graph(edge_list)
                         predictions[-1][-1][-1].append(self.calc_gop(G))
+
         if flatten:
             flattened_predictions = []
             for pred in predictions:
@@ -163,7 +162,7 @@ class GOP():
                             flattened_predictions[-1] = p2
                         else:
                             flattened_predictions[-1] = flattened_predictions[-1] + p2
-            return predictions, flattened_predictions
+            return predictions, np.array(flattened_predictions)
         else:
             return predictions
 

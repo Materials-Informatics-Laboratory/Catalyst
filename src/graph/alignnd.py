@@ -4,6 +4,8 @@ from ..utilities.data_tools import remove_duplicate_list_pairs
 from .graph import Atomic_Graph_Data
 from .graph import atoms2graph
 from .graph import line_graph
+from joblib import Parallel, delayed
+from collections import defaultdict
 import torch
 import math
 
@@ -18,6 +20,7 @@ def check_params(target_dict):
         'store_raw_data': False,
         'use_pt': False,
         'include_angs': False,
+        'cpu_cores':-1,
         'store_atoms_type': 'ase-atoms'
     }
     updated_dict = target_dict.copy()
@@ -41,50 +44,62 @@ def alignn_gen(data):
     if data['type'] == 'atomic_alignnd':
         graphs = atomic_alignnd(atoms=data['raw_data'],neighbor_params=data['neighbor_params'],dihedral=data['is_dihedral'],
                          store_atoms=data['store_raw_data'],use_pt=data['use_pt'],include_angs=data['include_angs'],
-                         atom_labels=data['node_labels'],all_elements=data['element_list'],store_atoms_type=data['store_atoms_type'])
+                         atom_labels=data['node_labels'],all_elements=data['element_list'],store_atoms_type=data['store_atoms_type'],
+                         cpu_cores=data['cpu_cores'])
     if data['type'] == 'atomic_alignnd_from_global_graph':
         graphs = atomic_alignnd_from_global_graph(global_graph=data['raw_data'],dihedral=data['is_dihedral'],
                          store_atoms=data['store_raw_data'],include_angs=data['include_angs'],store_atoms_type=data['store_atoms_type'])
 
     return graphs
 
-def alignnd(atoms,neighbor_params,dihedral=False, store_atoms=False, use_pt=False,include_angs=True, atom_labels=''):
+def alignnd(atoms, neighbor_params, dihedral=False, store_atoms=False, use_pt=False,
+            include_angs=True, atom_labels=''):
     """Converts ASE `atoms` into a PyG graph data holding the atomic graph (G) and the angular graph (A).
     The angular graph holds bond angle information, but can also calculate dihedral information upon request.
     """
-    atms = None
-    if store_atoms:
-        atms = atoms
+    atms = atoms if store_atoms else None
+
     data_amounts = dict(x_atm=[], x_bnd=[], x_ang=[])
     if dihedral:
-        data_amounts.append(x_dih_ang=[])
+        data_amounts['x_dih_ang'] = []
 
-    pdb = None
+    pdb = Physics_data() if use_pt else None
+
     if use_pt:
-        pdb = Physics_data()
-    elements = np.sort(np.unique(atoms.get_atomic_numbers()), axis=None)
-    ohe = []
-    for atom in atoms:
-        all_elem = elements
-        if use_pt:
-            elems = []
-            for el in pdb.elements:
-                elems.append(el.number)
-            all_elem = elems
-        tx = [0.0] * len(all_elem)
-        for i in range(len(all_elem)):
-            if atom.number == all_elem[i]:
-                tx[i] = 1.0
-                if atom_labels == 'atomic_number':
-                    tx[i] *= atom.number
-                break
-        ohe.append(tx)
-    x_atm = np.array(ohe)
+        all_elem = np.array([el.number for el in pdb.elements])
+    else:
+        all_elem = np.sort(np.unique(atoms.get_atomic_numbers()), axis=None)
 
-    edge_index_G, x_bnd = atoms2graph(atoms,cutoff=neighbor_params[0],k=neighbor_params[1])
-    edge_index_G, unique_edges = remove_duplicate_list_pairs(edge_index_G[0],edge_index_G[1])
-    edge_index_G = np.array(edge_index_G)
+    atomic_numbers = atoms.get_atomic_numbers()
+
+    x_atm = np.zeros((len(atomic_numbers), len(all_elem)), dtype=float)
+
+    elem_to_idx = {el: i for i, el in enumerate(all_elem)}
+
+    for atom_idx, atom_number in enumerate(atomic_numbers):
+        i = elem_to_idx.get(atom_number)
+        if i is not None:
+            x_atm[atom_idx, i] = atom_number if atom_labels == 'atomic_number' else 1.0
+
+    edge_index_G, x_bnd = atoms2graph(
+        atoms,
+        cutoff=neighbor_params[0],
+        k=neighbor_params[1]
+    )
+
+    edge_index_G_0, edge_index_G_1, unique_edges = remove_duplicate_list_pairs(
+        edge_index_G[0],
+        edge_index_G[1],
+        stack=False
+    )
+
+    edge_index_G = np.array([edge_index_G_0, edge_index_G_1])
     x_bnd = x_bnd[unique_edges]
+
+    edge_index_G_tensor = torch.tensor(edge_index_G, dtype=torch.long)
+    x_atm_tensor = torch.tensor(x_atm, dtype=torch.float)
+    x_bnd_tensor = torch.tensor(x_bnd, dtype=torch.float)
+
     if include_angs:
         edge_index_bnd_ang = line_graph(edge_index_G)
         x_bnd_ang = get_bnd_angs(atoms, edge_index_G, edge_index_bnd_ang)
@@ -92,34 +107,36 @@ def alignnd(atoms,neighbor_params,dihedral=False, store_atoms=False, use_pt=Fals
         if dihedral:
             edge_index_dih_ang = dihedral_graph(edge_index_G)
             edge_index_A = np.hstack([edge_index_bnd_ang, edge_index_dih_ang])
-            x_dih_ang = get_dih_angs(atoms, edge_index_G, edge_index_dih_ang)
-            x_ang = np.concatenate([x_bnd_ang,x_dih_ang])
-            mask_dih_ang = [False] * len(x_bnd_ang) + [True]*len(x_dih_ang)
 
+            x_dih_ang = get_dih_angs(atoms, edge_index_G, edge_index_dih_ang)
+            x_ang = np.concatenate([x_bnd_ang, x_dih_ang])
+
+            mask_dih_ang = [False] * len(x_bnd_ang) + [True] * len(x_dih_ang)
         else:
-            edge_index_A = np.hstack([edge_index_bnd_ang])
-            x_ang = np.concatenate([x_bnd_ang])
-            mask_dih_ang = [False]
+            edge_index_A = edge_index_bnd_ang
+            x_ang = x_bnd_ang
+            mask_dih_ang = [False] * len(x_ang)
 
         data = Atomic_Graph_Data(
-            atoms = atms,
-            edge_index_G=torch.tensor(edge_index_G, dtype=torch.long),
+            atoms=atms,
+            edge_index_G=edge_index_G_tensor,
             edge_index_A=torch.tensor(edge_index_A, dtype=torch.long),
-            x_atm=torch.tensor(x_atm, dtype=torch.float),
-            x_bnd=torch.tensor(x_bnd, dtype=torch.float),
+            x_atm=x_atm_tensor,
+            x_bnd=x_bnd_tensor,
             x_ang=torch.tensor(x_ang, dtype=torch.float),
             mask_dih_ang=torch.tensor(mask_dih_ang, dtype=torch.bool),
-            atm_amounts = torch.tensor(data_amounts['x_atm'], dtype=torch.long),
-            bnd_amounts = torch.tensor(data_amounts['x_bnd'], dtype=torch.long),
-            ang_amounts = torch.tensor(data_amounts['x_ang'], dtype=torch.long),
+            atm_amounts=torch.tensor(data_amounts['x_atm'], dtype=torch.long),
+            bnd_amounts=torch.tensor(data_amounts['x_bnd'], dtype=torch.long),
+            ang_amounts=torch.tensor(data_amounts['x_ang'], dtype=torch.long),
         )
+
     else:
         data = Atomic_Graph_Data(
             atoms=atms,
-            edge_index_G=torch.tensor(edge_index_G, dtype=torch.long),
+            edge_index_G=edge_index_G_tensor,
             edge_index_A=None,
-            x_atm=torch.tensor(x_atm, dtype=torch.float),
-            x_bnd=torch.tensor(x_bnd, dtype=torch.float),
+            x_atm=x_atm_tensor,
+            x_bnd=x_bnd_tensor,
             x_ang=None,
             mask_dih_ang=None,
             atm_amounts=torch.tensor(data_amounts['x_atm'], dtype=torch.long),
@@ -186,7 +203,9 @@ def realignnd(structures,neighbor_params,dihedral=False,store_atoms=False,use_pt
         x_atm = np.array(ohe)
 
         edge_index_G, x_bnd = atoms2graph(atoms, cutoff=neighbor_params[0], k=neighbor_params[1])
-        edge_index_G, unique_edges = remove_duplicate_list_pairs(edge_index_G[0], edge_index_G[1])
+        edge_index_G_0, edge_index_G_1, unique_edges = remove_duplicate_list_pairs(edge_index_G[0], edge_index_G[1],
+                                                                                   stack=False)
+        edge_index_G = [edge_index_G_0, edge_index_G_1]
         edge_index_G = np.array(edge_index_G)
         x_bnd = x_bnd[unique_edges]
         t_edge_index_G = []
@@ -210,29 +229,33 @@ def realignnd(structures,neighbor_params,dihedral=False,store_atoms=False,use_pt
                 edge_index_A = np.hstack([edge_index_bnd_ang])
                 x_ang = np.concatenate([x_bnd_ang])
                 mask_dih_ang = [False]
-            if len(data_amounts["x_ang"]) == 0:
-                data_amounts["x_ang"].append(len(x_ang) - 1)
-                if dihedral:
-                    data_amounts["x_dih_ang"].append(len(x_dih_ang) - 1)
-            else:
-                data_amounts["x_ang"].append(data_amounts["x_ang"][-1] + len(x_ang) - 1)
-                if dihedral:
-                    data_amounts["x_dih_ang"].append(data_amounts["x_dih_ang"][-1] + len(x_dih_ang) - 1)
 
-        if len(data_amounts["x_atm"]) == 0:
-            data_amounts["x_atm"].append(len(x_atm) - 1)
-            data_amounts["x_bnd"].append(len(x_bnd) - 1)
+        if scale == 0:
+            data_amounts["x_atm"].append(len(x_atm))
+            data_amounts["x_bnd"].append(len(x_bnd))
+            if include_angs:
+                data_amounts["x_ang"].append(len(x_ang))
+                if dihedral:
+                    data_amounts["x_dih_ang"].append(len(x_dih_ang))
         else:
-            data_amounts["x_atm"].append(data_amounts["x_atm"][-1] + len(x_atm) - 1)
-            data_amounts["x_bnd"].append(data_amounts["x_bnd"][-1] + len(x_bnd) - 1)
+            data_amounts["x_atm"].append(data_amounts["x_atm"][-1] + len(x_atm))
+            data_amounts["x_bnd"].append(data_amounts["x_bnd"][-1] + len(x_bnd))
+            if include_angs:
+                data_amounts["x_ang"].append(data_amounts["x_ang"][-1] + len(x_ang))
+                if dihedral:
+                    data_amounts["x_dih_ang"].append(data_amounts["x_dih_ang"][-1] + len(x_dih_ang))
 
         if scale > 0:
             if include_angs:
-                f_edge_index_A = np.hstack((f_edge_index_A, edge_index_A))
-                f_x_ang = np.append(f_x_ang, x_ang)
-                f_mask_dih_ang = np.append(f_mask_dih_ang, mask_dih_ang)
                 if dihedral:
                     f_x_dih_ang = np.append(f_x_dih_ang, x_dih_ang)
+                else:
+                    ang_scale = data_amounts["x_bnd"][-2]
+                    edge_index_A += ang_scale
+
+                    f_edge_index_A = np.hstack((f_edge_index_A, edge_index_A))
+                    f_x_ang = np.append(f_x_ang, x_ang)
+                    f_mask_dih_ang = np.append(f_mask_dih_ang, mask_dih_ang)
 
             f_edge_index_G = np.hstack((f_edge_index_G, t_edge_index_G))
             f_x_atm = np.concatenate((f_x_atm, x_atm), axis=0)
@@ -242,6 +265,7 @@ def realignnd(structures,neighbor_params,dihedral=False,store_atoms=False,use_pt
                 atms.append(atoms)
         else:
             if include_angs:
+
                 f_edge_index_A = edge_index_A
                 f_x_ang = x_ang
                 f_mask_dih_ang = mask_dih_ang
@@ -253,7 +277,8 @@ def realignnd(structures,neighbor_params,dihedral=False,store_atoms=False,use_pt
 
             if store_atoms:
                 atms = [atoms]
-        scale += len(atoms)
+        scale += len(x_atm)
+
 
     if include_angs:
         data = Atomic_Graph_Data(
@@ -286,7 +311,217 @@ def realignnd(structures,neighbor_params,dihedral=False,store_atoms=False,use_pt
 
     return data
 
-def atomic_alignnd(atoms,neighbor_params,dihedral=False,all_elements=[],store_atoms=False,use_pt=False,include_angs=True,store_atoms_type='ase-atoms',atom_labels=''):
+
+def build_adjacency_csr(edge_index_G, x_bnd,len_atoms):
+    """
+    Builds compressed sparse row (CSR) adjacency arrays from edge indices and bond values.
+
+    Args:
+        edge_index_G: numpy array shape (2, N_edges), representing edges (src, tgt)
+        x_bnd: numpy array shape (N_edges,), representing bond attributes
+
+    Returns:
+        indptr: shape (n_atoms+1,), int32 array of neighbor start indices
+        indices: shape (N_edges,), int32 array of neighbor targets
+        data: shape (N_edges,), float32 array of bond attributes
+    """
+
+    n_atoms = max(len_atoms, edge_index_G[0].max() + 1)
+    print(f"max in edge_index_G[0]: {edge_index_G[0].max()}")
+    print(f"length of indptr (should be max+1): {n_atoms + 1}")
+    print(f"expected number of atoms: {len_atoms}")
+
+
+    n_atoms = edge_index_G[0].max() + 1
+    counts = np.bincount(edge_index_G[0], minlength=n_atoms)
+    indptr = np.zeros(n_atoms + 1, dtype=np.int32)
+    indptr[1:] = np.cumsum(counts)
+
+    indices = np.empty(len(edge_index_G[0]), dtype=np.int32)
+    data = np.empty(len(edge_index_G[0]), dtype=np.float32)
+
+    position = np.zeros(n_atoms, dtype=np.int32)
+    for src, tgt, bnd in zip(edge_index_G[0], edge_index_G[1], x_bnd):
+        idx = indptr[src] + position[src]
+        indices[idx] = tgt
+        data[idx] = bnd
+        position[src] += 1
+
+    return indptr, indices, data
+
+def build_x_atm(tmp_edge_index_G, atoms, elems_array, atom_labels):
+    unique_atom_indices, indices_ = np.unique(tmp_edge_index_G[0], return_index=True)
+    unique_atom_indices = unique_atom_indices[np.argsort(indices_)]
+
+    atomic_numbers = atoms.get_atomic_numbers()
+    unique_elements_in_order = atomic_numbers[unique_atom_indices]
+
+    elem_to_idx = {elem: idx for idx, elem in enumerate(elems_array)}
+
+    x_atm = np.zeros((len(unique_elements_in_order), len(elems_array)), dtype=np.float32)
+
+    if atom_labels == 'atomic_number':
+        for local_i, elem in enumerate(unique_elements_in_order):
+            idx_in_global = elem_to_idx.get(elem)
+            if idx_in_global is not None:
+                x_atm[local_i, idx_in_global] = elem
+    else:
+        for local_i, elem in enumerate(unique_elements_in_order):
+            idx_in_global = elem_to_idx.get(elem)
+            if idx_in_global is not None:
+                x_atm[local_i, idx_in_global] = 1.0
+
+    return x_atm
+
+def process_atom(i, indptr, indices, data, atoms, elems_array, atms,
+                 include_angs, dihedral, store_atoms, store_atoms_type, atom_labels):
+    if store_atoms:
+        atm = atoms if store_atoms_type == 'ase-atoms' else atoms[i]
+    else:
+        atm = None
+
+    start = indptr[i]
+    end = indptr[i+1]
+    neighbor_targets = indices[start:end]
+    neighbor_bnds = data[start:end]
+
+    if len(neighbor_targets) == 0:
+        tmp_edge_index_G = np.empty((2,0), dtype=np.int32)
+        tmp_x_bnd = np.empty((0,), dtype=np.float32)
+    else:
+        tmp_edge_index_G_0 = np.concatenate([np.full(len(neighbor_targets), i), neighbor_targets])
+        tmp_edge_index_G_1 = np.concatenate([neighbor_targets, np.full(len(neighbor_targets), i)])
+        tmp_edge_index_G = np.array([tmp_edge_index_G_0, tmp_edge_index_G_1])
+        tmp_x_bnd = np.concatenate([neighbor_bnds, neighbor_bnds])
+
+    local_data_amounts = dict(x_bnd=[len(tmp_x_bnd) - 1], x_atm=[], x_ang=[], x_dih_ang=[])
+
+    if include_angs and tmp_edge_index_G.shape[1] > 0:
+        edge_index_bnd_ang = line_graph(tmp_edge_index_G)
+        x_bnd_ang = get_bnd_angs(atoms, tmp_edge_index_G, edge_index_bnd_ang)
+
+        x_atm = build_x_atm(tmp_edge_index_G, atoms, elems_array, atom_labels)
+        edge_index_bnd_ang = line_graph(tmp_edge_index_G)
+
+        if dihedral:
+            edge_index_dih_ang = dihedral_graph(tmp_edge_index_G)
+            edge_index_A = np.hstack([edge_index_bnd_ang, edge_index_dih_ang])
+            x_dih_ang = get_dih_angs(atoms, tmp_edge_index_G, edge_index_dih_ang)
+            x_ang = np.concatenate([x_bnd_ang, x_dih_ang])
+            mask_dih_ang = [False] * len(x_bnd_ang) + [True] * len(x_dih_ang)
+        else:
+            edge_index_A = np.hstack([edge_index_bnd_ang])
+            x_ang = np.concatenate([x_bnd_ang])
+            mask_dih_ang = [False] * len(x_ang)
+
+        local_data_amounts["x_atm"].append(len(x_atm) - 1)
+        local_data_amounts["x_ang"].append(len(x_ang) - 1)
+        if dihedral:
+            local_data_amounts["x_dih_ang"].append(len(x_dih_ang) - 1)
+
+        data_obj = Atomic_Graph_Data(
+            atoms=atms,
+            edge_index_G=torch.tensor(tmp_edge_index_G, dtype=torch.long),
+            edge_index_A=torch.tensor(edge_index_A, dtype=torch.long),
+            x_atm=torch.tensor(x_atm, dtype=torch.float),
+            x_bnd=torch.tensor(tmp_x_bnd, dtype=torch.float),
+            x_ang=torch.tensor(x_ang, dtype=torch.float),
+            atm_amounts=torch.tensor(local_data_amounts['x_atm'], dtype=torch.long),
+            bnd_amounts=torch.tensor(local_data_amounts['x_bnd'], dtype=torch.long),
+            ang_amounts=torch.tensor(local_data_amounts['x_ang'], dtype=torch.long),
+            mask_dih_ang=torch.tensor(mask_dih_ang, dtype=torch.bool)
+        )
+    else:
+        if tmp_edge_index_G.shape[1] == 0:
+            tmp_edge_index_G = np.empty((2, 0), dtype=np.int32)
+            x_atm = np.empty((0, len(elems_array)), dtype=np.float32)
+            tmp_x_bnd = np.empty((0,), dtype=np.float32)
+        else:
+            x_atm = build_x_atm(tmp_edge_index_G, atoms, elems_array, atom_labels)
+
+        local_data_amounts["x_atm"].append(len(x_atm) - 1 if len(x_atm) > 0 else -1)
+
+        data_obj = Atomic_Graph_Data(
+            atoms=atms,
+            edge_index_G=torch.tensor(tmp_edge_index_G, dtype=torch.long),
+            edge_index_A=None,
+            x_atm=torch.tensor(x_atm, dtype=torch.float),
+            x_bnd=torch.tensor(tmp_x_bnd, dtype=torch.float),
+            x_ang=None,
+            atm_amounts=torch.tensor(local_data_amounts['x_atm'], dtype=torch.long),
+            bnd_amounts=torch.tensor(local_data_amounts['x_bnd'], dtype=torch.long),
+            ang_amounts=None,
+            mask_dih_ang=None
+        )
+
+    data_obj.generate_gid()
+    return i, data_obj, local_data_amounts
+
+
+def atomic_alignnd(atoms, neighbor_params, dihedral=False, all_elements=[],
+                   store_atoms=False, use_pt=False, include_angs=True,
+                   store_atoms_type='ase-atoms', atom_labels='',cpu_cores=-1):
+
+    data_amounts = dict(x_atm=[], x_bnd=[], x_ang=[], x_dih_ang=[])
+    atms = atoms if store_atoms else None
+
+    pdb = None
+    # Prepare elems_array once:
+    atom_numbers = atoms.get_atomic_numbers()
+
+    if use_pt:
+        pdb = Physics_data()
+        elems_array = np.array([el.number for el in pdb.elements])
+    else:
+        unique_elements = np.unique(atom_numbers)
+        elems_array = np.array(all_elements) if len(unique_elements) < len(all_elements) else unique_elements
+
+    elems_array = np.sort(elems_array)  # ensure sorted for searchsorted
+
+    edge_index_G, x_bnd = atoms2graph(atoms, cutoff=neighbor_params[0], k=neighbor_params[1])
+    edge_index_G_0, edge_index_G_1, unique_edges = remove_duplicate_list_pairs(edge_index_G[0], edge_index_G[1],
+                                                                               stack=False)
+    edge_index_G = [edge_index_G_0, edge_index_G_1]
+    edge_index_G = np.array(edge_index_G)
+    x_bnd = x_bnd[unique_edges]
+
+    # Build CSR adjacency arrays
+    indptr, indices_arr, data_arr = build_adjacency_csr(edge_index_G, x_bnd,len(atoms))
+
+    # Choose your number of CPU cores
+    num_cores = cpu_cores # use all available cores
+
+    results = Parallel(n_jobs=num_cores, backend='loky', verbose=10)(
+        delayed(process_atom)(
+            i, indptr, indices_arr, data_arr,
+            atoms, elems_array,
+            atms=atoms if store_atoms else None,
+            include_angs=include_angs,
+            dihedral=dihedral,
+            store_atoms=store_atoms,
+            store_atoms_type=store_atoms_type,
+            atom_labels=atom_labels
+        )
+        for i in range(len(atoms))
+    )
+
+    data = [None] * len(atoms)
+    for i, data_obj, local_data_amounts in results:
+        data[i] = data_obj
+        # Merge local amounts into global amounts
+        for key in local_data_amounts:
+            if local_data_amounts[key]:
+                data_amounts.setdefault(key, []).extend(local_data_amounts[key])
+
+    # Convert to tensors (optional)
+    for key in data_amounts:
+        data_amounts[key] = torch.tensor(data_amounts[key], dtype=torch.long)
+
+    return data
+'''
+
+def atomic_alignnd(atoms,neighbor_params,dihedral=False,all_elements=[],store_atoms=False,use_pt=False,
+                   include_angs=True,store_atoms_type='ase-atoms',atom_labels='',cpu_cores=-1):
     """Converts ASE `atoms` into a PyG graph data holding the atomic graph (G) and the angular graph (A).
     The angular graph holds bond angle information, but can also calculate dihedral information upon request.
     """
@@ -320,7 +555,10 @@ def atomic_alignnd(atoms,neighbor_params,dihedral=False,all_elements=[],store_at
         ohe.append(tx)
 
     edge_index_G, x_bnd = atoms2graph(atoms, cutoff=neighbor_params[0], k=neighbor_params[1])
-    edge_index_G, unique_edges = remove_duplicate_list_pairs(edge_index_G[0], edge_index_G[1])
+    #edge_index_G, unique_edges = remove_duplicate_list_pairs(edge_index_G[0], edge_index_G[1])
+    edge_index_G_0, edge_index_G_1, unique_edges = remove_duplicate_list_pairs(edge_index_G[0], edge_index_G[1],
+                                                                               stack=False)
+    edge_index_G = [edge_index_G_0, edge_index_G_1]
     edge_index_G = np.array(edge_index_G)
     x_bnd = x_bnd[unique_edges]
     data = []
@@ -420,6 +658,7 @@ def atomic_alignnd(atoms,neighbor_params,dihedral=False,all_elements=[],store_at
         graph.generate_gid()
 
     return data
+'''
 def atomic_alignnd_from_global_graph(global_graph,dihedral=False, store_atoms=False,include_angs=True,store_atoms_type='ase-atoms'):
     data_amounts = dict(x_atm=[], x_bnd=[], x_ang=[])
     atm = None
@@ -501,7 +740,7 @@ def atomic_alignnd_from_global_graph(global_graph,dihedral=False, store_atoms=Fa
                 )
             )
         else:
-            unique_elements, indices = np.unique(tmp_edge_index_G[0], return_index=True)
+            unique_elements, indices = np.unique(edge_index_G[0], return_index=True)
             unique_elements_in_order = unique_elements[np.argsort(indices)]
             for m in range(len(edge_index_G[0])):
                 for n in range(len(unique_elements_in_order)):
@@ -532,11 +771,3 @@ def atomic_alignnd_from_global_graph(global_graph,dihedral=False, store_atoms=Fa
         graph.generate_gid()
 
     return data
-
-
-
-
-
-
-
-

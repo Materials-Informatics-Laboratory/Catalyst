@@ -5,11 +5,53 @@ from .graph import line_graph
 import numpy as np
 import torch
 
+
 def generic_graph_gen(data):
     if data['type'] == 'generic_pairwise':
-        graphs = generic_pairwise(data=data['raw_data'],data_params=data['params'],gen_line_graph=data['line_graph'])
+        graph_data = generic_pairwise(data=data['raw_data'],data_params=data['params'],gen_line_graph=data['line_graph'])
+    elif data['type'] == 'generic_pairwise_atomic':
+        graph_data = generic_pairwise_atomic(data=data['raw_data'],data_params=data['params'])
 
-    return graphs
+    return graph_data
+
+
+def generic_pairwise_atomic(data, data_params):
+    ind = data_params['ind']
+    dist = data_params['dist']
+    g_nodes = data_params['g_nodes']
+
+    if len(dist) > 0:
+
+        new_labels = []
+        symbol_to_id = {s: i+1 for i, s in enumerate(data_params['all_labels'])}
+        new_labels.append(np.array([1,0,0,0]))
+        for i, node in enumerate(g_nodes):
+            new_labels.append(np.eye(len(data_params['all_labels']) + 1)[symbol_to_id[node]])
+        g_nodes = new_labels
+
+        g_edge_index = [[], []]
+        a_nodes = []
+
+        for i, x in enumerate(ind):
+            g_edge_index[0].append(0)
+            g_edge_index[1].append(i+1)
+            a_nodes.append(dist[i])
+        for i, x in enumerate(ind):
+            g_edge_index[0].append(i+1)
+            g_edge_index[1].append(0)
+            a_nodes.append(dist[i])
+        g_edge_index = np.array(g_edge_index)
+
+        graph = Generic_Graph_Data(
+            node_G=torch.tensor(g_nodes, dtype=torch.float),
+            edge_index_G=torch.tensor(g_edge_index, dtype=torch.long),
+            node_A=torch.tensor(a_nodes, dtype=torch.float),
+        )
+
+        graph.generate_gid()
+        return graph
+    else:
+        return None
 
 def generic_pairwise(data,data_params,gen_line_graph=True):
     ind = data_params['ind']
@@ -24,6 +66,7 @@ def generic_pairwise(data,data_params,gen_line_graph=True):
                 g_edge_index[0].append(x[0])
                 g_edge_index[1].append(xx)
                 a_nodes.append(dist[i][j])
+
     g_edge_index = np.array(g_edge_index)
     if gen_line_graph:
         a_edge_index = np.hstack([line_graph(g_edge_index)])

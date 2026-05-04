@@ -1,20 +1,18 @@
-import torch.nn as nn
 import numpy as np
 import torch
 
-from torch_geometric.utils import scatter
-
 from ....graph.graph import Generic_Graph_Data, Atomic_Graph_Data
-from ....ml.utils.predict import accumulate_predictions
+from ....ml.utils.pooling_algorithms import scatter_
 
 class SODAS():
-    def __init__(self, mod, ls_mod):
+    def __init__(self, mod, ls_mod,pooling='mean'):
         super().__init__()
 
         self.model = mod
         self.model.eval()
         self.dim_model = ls_mod
         self.preprocess = None
+        self.pooling = pooling
 
     def generate_gnn_latent_space(self,parameters,loader,global_data=True):
         # Run a forward pass
@@ -27,27 +25,27 @@ class SODAS():
             if global_data:
                 if isinstance(data,Atomic_Graph_Data):
                     if  'x_ang' in loader.follow_batch:
-                        rp = scatter(preds,torch.cat((data.x_atm_batch,data.x_bnd_batch,data.x_ang_batch),0), dim=0, reduce='mean')
+                        rp = scatter_(preds,torch.cat((data.x_atm_batch,data.x_bnd_batch,data.x_ang_batch),0), dim=0, reduce=self.pooling)
                     else:
-                        rp = scatter(preds, torch.cat((data.x_atm_batch, data.x_bnd_batch), 0), dim=0,
-                                               reduce='mean')
+                        rp = scatter_(preds, torch.cat((data.x_atm_batch, data.x_bnd_batch), 0), dim=0,
+                                               reduce=self.pooling)
                 elif isinstance(data,Generic_Graph_Data):
                     if 'edge_A' in loader.follow_batch:
-                        rp = scatter(preds,torch.cat((data.node_G_batch,data.node_A_batch,data.edge_A_batch),0), dim=0, reduce='mean')
+                        rp = scatter_(preds,torch.cat((data.node_G_batch,data.node_A_batch,data.edge_A_batch),0), dim=0, reduce=self.pooling)
                     else:
-                        rp = scatter(preds, torch.cat((data.node_G_batch, data.node_A_batch), 0), dim=0,
-                                               reduce='mean')
+                        rp = scatter_(preds, torch.cat((data.node_G_batch, data.node_A_batch), 0), dim=0,
+                                               reduce=self.pooling)
             else:
                 if isinstance(data,Atomic_Graph_Data):
                     if  'x_ang' in loader.follow_batch:
-                        rp = scatter(preds,torch.cat((data.x_atm_batch,data.x_bnd_batch,data.x_ang_batch),0), dim=0)
+                        rp = scatter_(preds,torch.cat((data.x_atm_batch,data.x_bnd_batch,data.x_ang_batch),0), dim=0)
                     else:
-                        rp = scatter(preds, torch.cat((data.x_atm_batch, data.x_bnd_batch), 0), dim=0)
+                        rp = scatter_(preds, torch.cat((data.x_atm_batch, data.x_bnd_batch), 0), dim=0)
                 elif isinstance(data,Generic_Graph_Data):
                     if 'edge_A' in loader.follow_batch:
-                        rp = scatter(preds,torch.cat((data.node_G_batch,data.node_A_batch,data.edge_A_batch),0), dim=0)
+                        rp = scatter_(preds,torch.cat((data.node_G_batch,data.node_A_batch,data.edge_A_batch),0), dim=0)
                     else:
-                        rp = scatter(preds, torch.cat((data.node_G_batch, data.node_A_batch), 0), dim=0)
+                        rp = scatter_(preds, torch.cat((data.node_G_batch, data.node_A_batch), 0), dim=0)
             for tensor in rp:
                 total_data.append(tensor.cpu().tolist())
         return np.array(total_data)

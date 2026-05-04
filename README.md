@@ -7,7 +7,7 @@
 
 <!-- badges: end -->
 
-![Screenshot](https://github.com/Materials-Informatics-Laboratory/Catalyst/blob/main/visuals/catalyst.jpg?raw=true)
+![Screenshot](https://github.com/Materials-Informatics-Laboratory/Catalyst/blob/main/visuals/catalyst2.png?raw=true)
 
 # Catalyst
 General-purpose toolkit for analyzing atomistic simulations via machine learning. Whether it's building regression models to predict materials properties or performing unsupervised projections and clustering to characterize and understand trends, Catalyst is the perfect tool. Catalyst is built around being user-friendly, abstracting much of the complex machine learning and providing an easy-to-user API that wraps heavy-lifting codes such as PyTorch. Catalyst provides a highly GPU-parallelized framework that streamlines regression model training so you can quickly build and deploy property models for your research needs. Catalyst comes with several built-in and pre-optimized raph neural network routines, such as ALIGNN-d and MeshGraph networks, but also provides the user with the ability to design their own ML architechtures (using PyTorch) and train them via our GPU-parallelized training routines. Catalyst is designed with the user in-mind and comes optimized and ready for all of your research needs. Catalyst has been optimized for both Windows and Linux and has been tested to work on systems ranging from small laptops to high performance computing environments. See the user manual for a detailed list of internal parameters, examples, and the theory behind Catalyst.
