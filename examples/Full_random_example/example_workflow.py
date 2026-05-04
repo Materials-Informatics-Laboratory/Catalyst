@@ -570,21 +570,36 @@ def train_model(cat: Catalyst) -> None:
 
 
 
-def retrain_model(cat: Catalyst) -> None:
+def retrain_model(cat: Catalyst,use_latest_checkpoint: bool = False) -> None:
     cat.parameters["io_dict"]["samples_dir"] = str(Path(cat.parameters["io_dict"]["main_path"]) / "samples" / "model_samples")
+    model_pattern = "checkpoint_epoch_*.pt"
+    model_dir = os.path.join(Path(cat.parameters["io_dict"]["main_path"]),'models','training')
+    if use_latest_checkpoint:
+        loaded_model_name = latest_checkpoint(
+            checkpoint_dir=model_dir,
+            checkpoint_pattern=model_pattern,
+        )
+    else:
+        loaded_model_name = first_match(os.path.join(model_dir,model_pattern))
+    cat.parameters["io_dict"].update(
+        {
+            "model_dir": str(model_dir),
+            "loaded_model_name": loaded_model_name,
+        }
+    )
 
     if cat.parameters["device_dict"]["run_ddp"]:
         print("Performing model retraining on", cat.parameters["io_dict"]["loaded_model_name"])
         processes = []
         for rank in range(cat.parameters["device_dict"]["world_size"]):
-            process = mp.Process(target=run_training, args=(rank, "restart", cat))
+            process = mp.Process(target=run_training, args=(rank, cat))
             process.start()
             processes.append(process)
         for process in processes:
             process.join()
         cuda_destroy()
     else:
-        run_training(rank=0, iteration="restart", cat=cat)
+        run_training(rank=0, cat=cat)
 
 
 
@@ -758,54 +773,6 @@ def predict(cat: Catalyst, interpretable: bool) -> None:
 
 
 
-def improve_model(cat: Catalyst) -> None:
-    active_data_dir = reset_dir(ACTIVE_LEARNING_DATA_DIR)
-    cat.parameters["io_dict"]["data_dir"] = str(active_data_dir)
-
-    n_nodes = np.linspace(10, 50, N_DATA)
-    k_values = np.linspace(*ACTIVE_NEIGHBOR_RANGE, N_DATA)
-    targets = [np.linspace(0, 10, N_DATA) for _ in range(REGRESSION_OUT_DIM)]
-
-    for sample_idx in range(N_DATA):
-        if sample_idx % 10 == 0:
-            print(f"Generating graph {sample_idx}")
-
-        raw_data = np.random.uniform(-1, 1, size=(math.ceil(n_nodes[sample_idx]), N_DIM))
-        g_node_labels = np.eye(N_TYPES)[np.random.choice(N_TYPES, len(raw_data))]
-        tree = KDTree(raw_data, metric="euclidean", leaf_size=2)
-        distances, indices = tree.query(raw_data, k=math.ceil(k_values[sample_idx]))
-
-        graph = generic_graph_gen(
-            {
-                "raw_data": raw_data,
-                "params": {
-                    "dist": distances,
-                    "ind": indices,
-                    "g_nodes": g_node_labels,
-                },
-                "line_graph": True,
-                "type": "generic_pairwise",
-            }
-        )
-        graph.y = [
-            torch.tensor(targets[target_idx][sample_idx], dtype=torch.float)
-            for target_idx in range(REGRESSION_OUT_DIM)
-        ]
-        torch.save(graph, active_data_dir / f"{graph.gid}.pt")
-
-    if cat.parameters["device_dict"]["run_ddp"]:
-        print("Performing model retraining on", cat.parameters["io_dict"]["loaded_model_name"])
-        processes = []
-        for rank in range(cat.parameters["device_dict"]["world_size"]):
-            process = mp.Process(target=run_active_learning, args=(rank, cat))
-            process.start()
-            processes.append(process)
-        for process in processes:
-            process.join()
-        cuda_destroy()
-    else:
-        run_active_learning(rank=0, cat=cat)
-
 
 # =============================================================================
 # MAIN WORKFLOW
@@ -841,22 +808,16 @@ def main() -> None:
         cat.parameters["model_dict"]["train_tolerance"] = TRAINING_TOLERANCE_OVERRIDE
         train_model(cat)
 
-        if RUN_RETRAINING:
-            cat.parameters["model_dict"]["restart_training"] = True
-            cat.parameters["io_dict"]["loaded_model_name"] = first_match(
-                BASE_DIR / "models" / "training" / "0" / "model*"
-            )
-            retrain_model(cat)
-
         if RUN_PLOT_TRAINING:
             plot_training_results(cat)
 
-    elif RUN_RETRAINING:
+    if RUN_RETRAINING:
+        cat.parameters["loader_dict"]["batch_size"] = TRAINING_BATCH_SIZE
+        cat.parameters["model_dict"]["num_epochs"] = TRAINING_NUM_EPOCHS_OVERRIDE
+        cat.parameters["model_dict"]["train_delta"] = TRAINING_DELTA_OVERRIDE
+        cat.parameters["model_dict"]["train_tolerance"] = TRAINING_TOLERANCE_OVERRIDE
         cat.set_model(regression_model)
         cat.parameters["model_dict"]["restart_training"] = True
-        cat.parameters["io_dict"]["loaded_model_name"] = first_match(
-            BASE_DIR / "models" / "training" / "0" / "model*"
-        )
         retrain_model(cat)
 
     if RUN_TESTING and not RUN_ACTIVE_LEARNING:
@@ -871,16 +832,6 @@ def main() -> None:
         cat.set_model(regression_model)
         predict(cat, interpretable=RUN_RANKING)
 
-    if RUN_ACTIVE_LEARNING:
-        cat.parameters["loader_dict"]["batch_size"] = ACTIVE_LEARNING_BATCH_SIZE
-        cat.set_model(regression_model)
-        cat.parameters["io_dict"]["loaded_model_name"] = first_match(
-            BASE_DIR / "models" / "training" / "0" / "model*"
-        )
-        cat.parameters["model_dict"]["active_learning_params_group"]["sampling_params_group"]["rng"] = (
-            np.random.default_rng(seed=cat.parameters["sampling_dict"]["sampling_seed"])
-        )
-        improve_model(cat)
 
 
 if __name__ == "__main__":
