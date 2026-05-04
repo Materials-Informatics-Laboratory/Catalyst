@@ -44,7 +44,7 @@ class GNN():
         self.validation_graphs = None
         self.validation_samples = None
         self.checkpoint = None
-        self.scaler = torch.cuda.amp.GradScaler(enabled=False)
+        self.scaler = torch.amp.GradScaler(enabled=False)
 
     def print_debug(self):
         print(self.model)
@@ -94,7 +94,7 @@ class GNN():
                             subparam._grad.data = subparam._grad.data.to(self.device)
 
         use_amp = parameters['device_dict'].get('use_amp', False)
-        self.scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+        self.scaler = torch.amp.GradScaler(enabled=use_amp)
 
     def save_checkpoint(self, parameters, epoch, rank=0, fname=None):
         """Save model/optimizer state (rank 0 only)."""
@@ -113,7 +113,7 @@ class GNN():
             "model_state": core.state_dict(),
             "optimizer_state": self.optimizer.state_dict() if self.optimizer is not None else None,
             "parameters": parameters,  # optional
-            "scaler_state": scaler.state_dict(),
+            "scaler_state": self.scaler.state_dict(),
         }
         self.checkpoint = checkpoint
         torch.save(checkpoint, fname)
@@ -246,7 +246,7 @@ class GNN():
             self.optimizer.zero_grad(set_to_none=True)
 
             # forward + loss under autocast
-            with torch.cuda.amp.autocast(enabled=use_amp):
+            with torch.amp.autocast(enabled=use_amp,device_type=self.device):
                 pred = self.model(data)
                 preds, y, vec = accumulate_predictions(pred, data, loss_accum)
                 preds = preds.to(y.device)
