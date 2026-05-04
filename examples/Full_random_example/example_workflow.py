@@ -31,7 +31,7 @@ from catalyst.src.ml.gnn.modules.models.alignn import (
     PositiveScalarsDecoder,
     Processor,
 )
-from catalyst.src.ml.inference import test_non_intepretable_external
+from catalyst.src.ml.inference import run_inference
 from catalyst.src.ml.training import run_active_learning, run_training
 from catalyst.src.ml.utils.distributed import cuda_destroy
 from catalyst.src.observer.params import Catalyst
@@ -589,7 +589,7 @@ def retrain_model(cat: Catalyst) -> None:
 
 
 def plot_training_results(cat: Catalyst) -> None:
-    model_dir = Path(cat.parameters["io_dict"]["main_path"]) / "models" / "training" / "0"
+    model_dir = Path(cat.parameters["io_dict"]["main_path"]) / "models" / "training"
     cat.parameters["io_dict"]["model_dir"] = str(model_dir)
 
     run_data = load_dictionary(model_dir / "run_information.npy")
@@ -636,8 +636,8 @@ def run_testing_for_model(
 
         for rank in range(cat.parameters["device_dict"]["world_size"]):
             process = mp.Process(
-                target=test_non_intepretable_external,
-                args=(cat, "all", rank),
+                target=run_inference,
+                args=(rank,cat.parameters["io_dict"]['loaded_model_name'], cat,True),
             )
             process.start()
             processes.append(process)
@@ -648,10 +648,12 @@ def run_testing_for_model(
         cuda_destroy()
 
     else:
-        test_non_intepretable_external(cat, "all", rank=0)
+        run_inference(rank,model_name=cat.parameters["io_dict"]['loaded_model_name'], cat=cat,test=True)
 
 def test_model(cat: Catalyst) -> None:
     main_path = Path(cat.parameters["io_dict"]["main_path"])
+    cat.parameters["io_dict"]["samples_dir"] = str(
+        Path(cat.parameters["io_dict"]["main_path"]) / "samples")
 
     # Test optional pretraining model if present.
     try:
@@ -679,9 +681,8 @@ def plot_test_data(cat: Catalyst) -> None:
     results_dir = Path(cat.parameters["io_dict"]["main_path"]) / "testing" / "training"
     cat.parameters["io_dict"]["results_dir"] = str(results_dir)
 
-    run_data = [load_dictionary(results_dir / "all_indv_pred.data")]
+    run_data = [load_dictionary(results_dir / "indv_pred.data")][0]
     predictions = [[[] for _ in range(REGRESSION_OUT_DIM)] for _ in range(2)]
-
     for data in run_data:
         if data["vec"]:
             for target_values in data["y"]:

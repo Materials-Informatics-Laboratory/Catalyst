@@ -1,6 +1,6 @@
 from ..utilities.rankings import organize_rankings_atomic, organize_rankings_generic
 from .utils.loss import loss_setup
-from .utils.distributed import reduce_tensor, combine_dicts_across_gpus, ddp_destroy, ddp_setup
+from .utils.distributed import reduce_tensor, combine_dicts_across_gpus, ddp_destroy, ddp_setup, ddp_model
 
 from ..data.utils import load_dictionary, save_dictionary
 import torch
@@ -8,31 +8,41 @@ import torch
 import glob as glob
 import os
 
+def setup_inference(rank,model_name,cat=None):
+    if rank == 0:
+        print('Running inference...')
 
-@torch.no_grad()
-def test_non_intepretable_external(cat,ind_fn='all',rank=0):
     parameters = cat.parameters
     if parameters['device_dict']['run_ddp']:
         ddp_setup(rank, parameters['device_dict']['world_size'], parameters['device_dict']['ddp_backend'])
 
-    if rank == 0:
-        print('Reading data...')
+    parameters['model_dict']['model'].load_checkpoint(fname=model_name)
+    parameters['model_dict']['model'].load_data(parameters,
+           format=parameters['io_dict']['graph_read_format'], rank=rank,load_training=False,
+                                                samples_file=os.path.join(parameters['io_dict']['samples_dir'],'test_data.npy'))
 
-    if cat.parameters['io_dict']['graph_read_format'] != -1:
-        files = glob.glob(os.path.join(parameters['io_dict']['data_dir'], '*'))
-        graphs = [None]*len(files)
-        for i in range(len(files)):
-            graphs[i] = torch.load(files[i])
-    else:
-        graphs = load_dictionary(glob.glob(os.path.join(cat.parameters['io_dict']['data_dir'], 'graphs.data'))[0])['graphs']
+@torch.no_grad()
+def run_inference(rank,model_name,cat=None,test=False):
+    parameters = cat.parameters
+    setup_inference(rank=rank,model_name=model_name, cat=cat)
 
-    data = dict(validation = graphs)
-    model, model_data = setup_model(cat, rank=rank,load=True)
-    loader_valid = setup_dataloader(data=data,cat=cat,mode=2)
-    if rank == 0:
-        print('Testing...')
-   # loss = parameters['model_dict']['model']
+    model = parameters['model_dict']['model']
+    model.device = parameters['device_dict']['device']
     if parameters['device_dict']['run_ddp']:
-        ddp_destroy()
-    return loss
+        model.model = ddp_model(model=model.model,
+                                find_unused_parameters=parameters['device_dict']['find_unused_parameters'],
+                                rank=rank, batchnorm=parameters['model_dict']['batchnorm'])
+    model.set_dataloader(cat=cat,training=False)
+    if test:
+        test_dict = model.validate(parameters=parameters, rank=rank)
+    else:
+        test_dict = model.predict(parameters=parameters, rank=rank)
 
+    if test:
+        pass
+    else:
+        if parameters['io_dict']['write_indv_pred']:
+            if rank == 0:
+                save_dictionary(fname=os.path.join(parameters['io_dict']['results_dir'], 'indv_pred.data'),
+                                data=test_dict)
+    return test_dict

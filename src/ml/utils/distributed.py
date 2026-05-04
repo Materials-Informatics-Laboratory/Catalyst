@@ -39,15 +39,15 @@ def ddp_model(model, find_unused_parameters, rank, batchnorm):
 
 
 def cuda_destroy():
-    # collect memory via garbage collection
-    gc.collect()
-    # loop through active devices (assumes you are using all devices available), clear their memory, and then reset the device and close cuda
-    for gpu_id in range(torch.cuda.device_count()):
-        cuda.select_device(gpu_id)
-        torch.cuda.empty_cache()
-        device = cuda.get_current_device()
-        device.reset()
-        cuda.close()
+    def cuda_destroy():
+        gc.collect()
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+
+        if dist.is_available() and dist.is_initialized():
+            dist.destroy_process_group()
 
 def ddp_destroy():
     dist.barrier()

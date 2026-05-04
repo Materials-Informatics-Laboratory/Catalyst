@@ -33,8 +33,8 @@ def setup_training(rank,cat=None):
             shutil.rmtree(parameters['io_dict']['model_dir'])
         os.makedirs(parameters['io_dict']['model_dir'], exist_ok=True)
 
-    parameters['model_dict']['model'].load_training_data(parameters,
-                                                         os.path.join(parameters['io_dict']['samples_dir'],'train_valid_split.npy'),
+    parameters['model_dict']['model'].load_data(parameters,
+                samples_file=os.path.join(parameters['io_dict']['samples_dir'],'train_valid_split.npy'),
                                                          format=parameters['io_dict']['graph_read_format'], rank=rank)
 
     if parameters['device_dict']['run_ddp']:
@@ -286,8 +286,8 @@ def run_training(rank,cat=None):
     else:
         model.compile_model()
     model.set_optimizer_(parameters=parameters)
-    model.load_training_data(parameters, os.path.join(parameters['io_dict']['samples_dir'], 'train_valid_split.npy'),
-                             format=parameters['io_dict']['graph_read_format'], rank=rank)
+    #model.load_training_data(parameters, os.path.join(parameters['io_dict']['samples_dir'], 'train_valid_split.npy'),
+    #                         format=parameters['io_dict']['graph_read_format'], rank=rank)
     model.set_dataloader(cat=cat, epoch=ep)
 
 

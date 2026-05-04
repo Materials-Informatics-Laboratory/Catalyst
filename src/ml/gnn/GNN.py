@@ -44,7 +44,7 @@ class GNN():
         self.validation_graphs = None
         self.validation_samples = None
         self.checkpoint = None
-        self.scaler = torch.amp.GradScaler(enabled=False)
+        self.scalar = torch.amp.GradScaler(enabled=False)
 
     def print_debug(self):
         print(self.model)
@@ -141,12 +141,13 @@ class GNN():
 
         return checkpoint.get("epoch", None)
 
-    def load_training_data(self,params, samples_file, format=0, rank=0):
+    def load_data(self,params,format=0, rank=0,load_training=True,samples_file=None):
         if format != 2 and format != -1:
             graph_files = glob.glob(os.path.join(params['io_dict']['data_dir'], '*'))
             samples = load_dictionary(samples_file)
-            self.training_samples = samples['training']
-            self.validation_samples = samples['validation']
+            if load_training:
+                self.training_samples = samples['training']
+            self.validation_samples = samples.get('validation') or samples.get('gids')
 
             if format == 0:
                 gids = [PurePath(graph).parts[-1].split('.')[0] for graph in graph_files]
@@ -156,16 +157,17 @@ class GNN():
             else:
                 gids = [torch.load(gname)['gid'] for gname in graph_files]
 
-            a, b, c = np.intersect1d(self.training_samples, gids, return_indices=True)
-            selected_graphs = [graph_files[cc] for cc in c]
-            if format == 0:
-                self.training_graphs = [None] * len(selected_graphs)
-                for i in range(len(selected_graphs)):
-                    self.training_graphs[i] = torch.load(selected_graphs[i])
-            else:
-                self.training_graphs = [None] * len(selected_graphs)
-                for i in range(len(selected_graphs)):
-                    self.training_graphs[i] = selected_graphs[i]
+            if load_training:
+                a, b, c = np.intersect1d(self.training_samples, gids, return_indices=True)
+                selected_graphs = [graph_files[cc] for cc in c]
+                if format == 0:
+                    self.training_graphs = [None] * len(selected_graphs)
+                    for i in range(len(selected_graphs)):
+                        self.training_graphs[i] = torch.load(selected_graphs[i])
+                else:
+                    self.training_graphs = [None] * len(selected_graphs)
+                    for i in range(len(selected_graphs)):
+                        self.training_graphs[i] = selected_graphs[i]
             a, b, c = np.intersect1d(self.validation_samples, gids, return_indices=True)
             selected_graphs = [graph_files[cc] for cc in c]
             if format == 0:
@@ -179,16 +181,18 @@ class GNN():
         elif format == 2:
             graph_file = load_dictionary(glob.glob(os.path.join(params['io_dict']['data_dir'], 'graphs.data'))[0])
             samples = load_dictionary(samples_file)
-            self.training_samples = samples['training']
-            self.validation_samples = samples['validation']
             gids = [graph.gid for graph in graph_file['graphs']]
-            a, b, c = np.intersect1d(self.training_samples, gids, return_indices=True)
-            self.training_graphs = [graph_file['graphs'][cc] for cc in c]
+            if load_training:
+                self.training_samples = samples['training']
+                a, b, c = np.intersect1d(self.training_samples, gids, return_indices=True)
+                self.training_graphs = [graph_file['graphs'][cc] for cc in c]
+            self.validation_samples = samples['validation']
             a, b, c = np.intersect1d(self.validation_samples, gids, return_indices=True)
             self.validation_graphs = [graph_file['graphs'][cc] for cc in c]
         else:
             graph_data = load_dictionary(os.path.join(params['io_dict']['data_dir'], 'graphs.data'))
-            self.training_graphs = [graph for graph in graph_data['training']]
+            if load_training:
+                self.training_graphs = [graph for graph in graph_data['training']]
             self.validation_graphs = [graph for graph in graph_data['validation']]
 
     def set_dataloader(self,cat,training=True,validation=True,epoch=-1):
@@ -237,7 +241,7 @@ class GNN():
                 else:
                     return base_loss(preds, y)
 
-        epoch_loss = 0.0
+        loss = 0.0
 
         for data in self.training_loader:
             # move batch to device
@@ -253,24 +257,24 @@ class GNN():
 
                 batch_loss = loss_fn(preds, y, vec, data, loss_params)
 
-            epoch_loss += batch_loss.item()
+            loss += batch_loss.item()
 
             # backward with mixed precision
-            self.scaler.scale(batch_loss).backward()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+            self.scalar.scale(batch_loss).backward()
+            self.scalar.step(self.optimizer)
+            self.scalar.update()
 
         # DDP: average loss across ranks
         if parameters['device_dict']['run_ddp']:
-            epoch_loss = reduce_tensor(torch.tensor(epoch_loss, device=self.device)).item()
+            loss = reduce_tensor(torch.tensor(loss, device=self.device)).item()
 
-        return epoch_loss / (len(self.training_loader) * parameters['device_dict']['world_size'])
+        return loss / (len(self.training_loader) * parameters['device_dict']['world_size'])
 
     @torch.no_grad()
     def validate(self,parameters,rank=0):
         self.model.eval()
         loss_fn = loss_setup(params=parameters['model_dict']['loss_params'])
-        epoch_loss = 0.0
+        loss = 0.0
         loss_accum = parameters['model_dict']['accumulate_loss']
         values = [[],[],[]]
         gids = []
@@ -286,7 +290,7 @@ class GNN():
             else:
                 loss_list = [loss_fn(preds, y)]
             batch_loss = torch.sum(torch.stack(loss_list))
-            epoch_loss += batch_loss.item()
+            loss += batch_loss.item()
 
             values[0].append(preds.tolist())
             values[1].append(y.tolist())
@@ -309,6 +313,32 @@ class GNN():
                 save_dictionary(fname=os.path.join(parameters['io_dict']['results_dir'],'indv_pred.data'),
                                 data=test_info)
         if parameters['device_dict']['run_ddp']:
-            epoch_loss = reduce_tensor(torch.tensor(epoch_loss).to(parameters['device_dict']['device'])).item()
+            loss = reduce_tensor(torch.tensor(loss).to(parameters['device_dict']['device'])).item()
 
-        return epoch_loss / (len(self.validation_loader) * parameters['device_dict']['world_size'])
+        return loss / (len(self.validation_loader) * parameters['device_dict']['world_size'])
+
+    @torch.no_grad()
+    def predict(self,parameters,rank=0):
+        self.model.eval()
+        values = []
+        gids = []
+
+        for data in self.validation_loader:
+            data = data.to(self.device, non_blocking=parameters['device_dict']['pin_memory'])
+            pred = self.model(data)
+            preds, vec = accumulate_predictions(pred, data, loss_tag='exact',return_y=False)
+            preds = preds.to(self.device)
+
+            values.append(preds.tolist())
+            gids.append(data.gid)
+
+        test_info = {
+            'gids': gids,
+            'pred': values,
+            'vec': vec
+        }
+        if parameters['device_dict']['run_ddp']:
+            test_info = combine_dicts_across_gpus(test_info)
+        return test_info
+
+
