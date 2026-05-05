@@ -20,6 +20,7 @@ import numpy as np
 import pickle
 import random
 import torch
+import copy
 import glob
 import gzip
 import math
@@ -108,21 +109,37 @@ class GNN():
             )
 
         core = self._core_model()
+
+        safe_parameters = copy.deepcopy(parameters)
+
+        if "model_dict" in safe_parameters:
+            safe_parameters["model_dict"].pop("model", None)
+            safe_parameters["model_dict"].pop("optimizer", None)
+            safe_parameters["model_dict"].pop("scheduler", None)
+            safe_parameters["model_dict"].pop("loss_fn", None)
+
         checkpoint = {
             "epoch": epoch,
             "model_state": core.state_dict(),
             "optimizer_state": self.optimizer.state_dict() if self.optimizer is not None else None,
-            "parameters": parameters,  # optional
-            "scaler_state": self.scaler.state_dict(),
+            "parameters": safe_parameters,
+            "scaler_state": self.scaler.state_dict() if self.scaler is not None else None,
         }
+
         self.checkpoint = checkpoint
         torch.save(checkpoint, fname)
 
-    def load_checkpoint(self, fname=None, map_location=None):
+    def load_checkpoint(self, fname=None, map_location=None, load_optimizer=True):
         """
-        Load model/optimizer state into this GNN.
-        Call after self.model has been constructed (and wrapped in DDP if used).
+        Load model/optimizer/scaler state into this GNN.
+
+        Supports:
+        - CUDA checkpoint -> CPU load
+        - CPU checkpoint -> CUDA load
+        - DDP checkpoint -> non-DDP model
+        - non-DDP checkpoint -> DDP model
         """
+
         if map_location is None:
             map_location = self.device if hasattr(self, "device") else "cpu"
 
@@ -130,16 +147,70 @@ class GNN():
             checkpoint = self.checkpoint
         else:
             checkpoint = torch.load(fname, map_location=map_location)
-        core = self._core_model()
-        core.load_state_dict(checkpoint["model_state"])
 
-        if self.optimizer is not None and checkpoint.get("optimizer_state") is not None:
+        core = self._core_model()
+
+        # -----------------------------
+        # Get model state safely
+        # -----------------------------
+        if isinstance(checkpoint, dict) and "model_state" in checkpoint:
+            model_state = checkpoint["model_state"]
+        elif isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+            model_state = checkpoint["state_dict"]
+        elif isinstance(checkpoint, dict):
+            model_state = checkpoint
+        else:
+            raise TypeError(
+                "Checkpoint must be a dict/state_dict. "
+                "It looks like the full model object may have been saved."
+            )
+
+        # -----------------------------
+        # Handle DDP 'module.' prefixes
+        # -----------------------------
+        core_state = core.state_dict()
+
+        model_has_module = next(iter(core_state)).startswith("module.")
+        checkpoint_has_module = next(iter(model_state)).startswith("module.")
+
+        if checkpoint_has_module and not model_has_module:
+            model_state = {
+                k.replace("module.", "", 1): v
+                for k, v in model_state.items()
+            }
+
+        elif model_has_module and not checkpoint_has_module:
+            model_state = {
+                "module." + k: v
+                for k, v in model_state.items()
+            }
+
+        core.load_state_dict(model_state)
+
+        # -----------------------------
+        # Optimizer/scaler are usually
+        # not needed for inference
+        # -----------------------------
+        if (
+                load_optimizer
+                and self.optimizer is not None
+                and isinstance(checkpoint, dict)
+                and checkpoint.get("optimizer_state") is not None
+        ):
             self.optimizer.load_state_dict(checkpoint["optimizer_state"])
 
-        if self.scalar is not None and checkpoint.get("scalar_state") is not None:
+        if (
+                load_optimizer
+                and self.scalar is not None
+                and isinstance(checkpoint, dict)
+                and checkpoint.get("scalar_state") is not None
+        ):
             self.scalar.load_state_dict(checkpoint["scalar_state"])
 
-        return checkpoint.get("epoch", None)
+        if isinstance(checkpoint, dict):
+            return checkpoint.get("epoch", None)
+
+        return None
 
     def load_data(self,params,format=0, rank=0,load_training=True,samples_file=None):
         if format != 2 and format != -1:
