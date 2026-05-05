@@ -652,7 +652,7 @@ def run_testing_for_model(
         for rank in range(cat.parameters["device_dict"]["world_size"]):
             process = mp.Process(
                 target=run_inference,
-                args=(rank,cat.parameters["io_dict"]['loaded_model_name'], cat,True),
+                args=(cat.parameters["io_dict"]['loaded_model_name'],rank, cat,True),
             )
             process.start()
             processes.append(process)
@@ -663,7 +663,7 @@ def run_testing_for_model(
         cuda_destroy()
 
     else:
-        run_inference(rank,model_name=cat.parameters["io_dict"]['loaded_model_name'], cat=cat,test=True)
+        run_inference(model_name=cat.parameters["io_dict"]['loaded_model_name'], cat=cat,test=True)
 
 def test_model(cat: Catalyst) -> None:
     main_path = Path(cat.parameters["io_dict"]["main_path"])

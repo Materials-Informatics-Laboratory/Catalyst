@@ -22,7 +22,7 @@ def setup_inference(rank,model_name,cat=None):
                                                 samples_file=os.path.join(parameters['io_dict']['samples_dir'],'test_data.npy'))
 
 @torch.no_grad()
-def run_inference(rank,model_name,cat=None,test=False):
+def run_inference(model_name,rank=0,cat=None,test=False):
     parameters = cat.parameters
     setup_inference(rank=rank,model_name=model_name, cat=cat)
 
