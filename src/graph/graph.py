@@ -392,6 +392,21 @@ def line_graph(edge_index_G):
     ]
     return np.array(edge_index_A).T
 
+def dihedral_graph(edge_index_G):
+    """Return the "dihedral angle line graph" of the input graph.
+
+    Args:
+        edge_index_G (ndarray): Input graph in COO format.
+    """
+    src, dst = edge_index_G
+    edge_index_A = [
+        (u, v)
+        for i, j in edge_index_G.T
+        for u in np.flatnonzero((dst == i) & (src != j))
+        for v in np.flatnonzero((dst == j) & (src != i))
+    ]
+    return np.array(edge_index_A).T
+
 '''
 DEPRECIATED CLASS: To remove prior to v1.0
 '''
