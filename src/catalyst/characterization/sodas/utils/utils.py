@@ -6,7 +6,7 @@ full NxN pairwise distance matrix from generate_latent_space_path().  Instead it
 uses a cached k-nearest-neighbor table with per-node fallback expansion when the
 pathfinder runs out of locally cached neighbors.
 
-"""
+""" 
 
 from sklearn.neighbors import NearestNeighbors
 from sklearn.neighbors import KDTree
