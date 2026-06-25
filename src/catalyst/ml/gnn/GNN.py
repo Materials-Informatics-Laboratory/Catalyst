@@ -26,7 +26,6 @@ import gzip
 import math
 import sys
 import os
-import data
 
 class GNN():
     def __init__(self, model,device):
@@ -68,10 +67,24 @@ class GNN():
         return isinstance(self.model, DDP)
 
     def _core_model(self):
-        """Return underlying nn.Module (unwrap DDP if needed)."""
-        if self.is_ddp():
-            return self.model.module
-        return self.model
+        """
+        Return the underlying nn.Module.
+
+        Handles:
+          - DistributedDataParallel / DataParallel wrappers: .module
+          - torch.compile OptimizedModule wrappers: ._orig_mod
+        """
+        model = self.model
+
+        if hasattr(model, "module"):
+            model = model.module
+
+        if hasattr(model, "_orig_mod"):
+            model = model._orig_mod
+
+        return model
+
+
 
     def set_model_state(self,model_state):
         self.model_state = model_state
@@ -129,108 +142,319 @@ class GNN():
         self.checkpoint = checkpoint
         torch.save(checkpoint, fname)
 
-    def load_checkpoint(self, fname=None, map_location=None, load_optimizer=True):
+    def load_checkpoint(
+            self,
+            fname=None,
+            map_location=None,
+            load_optimizer=True,
+            strict=True,
+    ):
         """
         Load model/optimizer/scaler state into this GNN.
 
-        Supports:
+        Handles:
         - CUDA checkpoint -> CPU load
         - CPU checkpoint -> CUDA load
-        - DDP checkpoint -> non-DDP model
-        - non-DDP checkpoint -> DDP model
+        - DDP/DataParallel prefixes: module.*
+        - torch.compile prefixes: _orig_mod.*
+        - nested prefixes: module._orig_mod.*, _orig_mod.module.*, etc.
+        - checkpoints saved as {"model_state": ...}
+        - checkpoints saved as {"state_dict": ...}
+        - raw state_dict checkpoints
+        - scaler_state / scalar_state typo compatibility
+        - lazy GenericFeatureEncoder MLP initialization from checkpoint shapes
         """
+
+        import warnings
 
         if map_location is None:
             map_location = self.device if hasattr(self, "device") else "cpu"
 
+        # ------------------------------------------------------------------
+        # Load checkpoint object
+        # ------------------------------------------------------------------
         if fname is None:
             checkpoint = self.checkpoint
         else:
-            checkpoint = torch.load(fname, map_location=map_location)
+            try:
+                checkpoint = torch.load(
+                    fname,
+                    map_location=map_location,
+                    weights_only=False,
+                )
+            except TypeError:
+                # Older PyTorch versions do not support weights_only.
+                checkpoint = torch.load(fname, map_location=map_location)
+
+        if checkpoint is None:
+            raise ValueError(
+                "No checkpoint was provided. Pass fname=... or set self.checkpoint first."
+            )
 
         core = self._core_model()
 
-        # -----------------------------
-        # Get model state safely
-        # -----------------------------
-        if isinstance(checkpoint, dict) and "model_state" in checkpoint:
-            model_state = checkpoint["model_state"]
-        elif isinstance(checkpoint, dict) and "state_dict" in checkpoint:
-            model_state = checkpoint["state_dict"]
-        elif isinstance(checkpoint, dict):
-            model_state = checkpoint
-        else:
-            raise TypeError(
-                "Checkpoint must be a dict/state_dict. "
-                "It looks like the full model object may have been saved."
+        # ------------------------------------------------------------------
+        # Extract model state safely
+        # ------------------------------------------------------------------
+        def _looks_like_state_dict(obj):
+            if not isinstance(obj, dict):
+                return False
+            if not obj:
+                return False
+            return all(isinstance(k, str) for k in obj.keys()) and any(
+                torch.is_tensor(v) for v in obj.values()
             )
 
-        # -----------------------------
-        # Handle DDP 'module.' prefixes
-        # -----------------------------
-        core_state = core.state_dict()
+        if isinstance(checkpoint, dict) and "model_state" in checkpoint:
+            model_state = checkpoint["model_state"]
 
-        def _strip_checkpoint_prefixes(state_dict):
+        elif isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+            model_state = checkpoint["state_dict"]
+
+        elif isinstance(checkpoint, dict) and "model" in checkpoint:
+            maybe_model = checkpoint["model"]
+            if hasattr(maybe_model, "state_dict"):
+                model_state = maybe_model.state_dict()
+            else:
+                raise TypeError(
+                    "Checkpoint has key 'model', but checkpoint['model'] does not "
+                    "appear to be a torch.nn.Module."
+                )
+
+        elif _looks_like_state_dict(checkpoint):
+            model_state = checkpoint
+
+        else:
+            if isinstance(checkpoint, dict):
+                raise KeyError(
+                    "Could not find model weights in checkpoint. Expected one of: "
+                    "'model_state', 'state_dict', 'model', or a raw state_dict. "
+                    f"Available keys: {list(checkpoint.keys())}"
+                )
+            raise TypeError(
+                "Checkpoint must be a dict/state_dict. "
+                "It looks like the full model object may have been saved directly."
+            )
+
+        if not isinstance(model_state, dict):
+            raise TypeError(
+                f"Extracted model_state must be a dict/state_dict, got {type(model_state)}."
+            )
+
+        # ------------------------------------------------------------------
+        # Normalize checkpoint prefixes
+        # ------------------------------------------------------------------
+        def _strip_known_prefixes_from_key(key):
+            """
+            Convert:
+                module.encoder...
+                _orig_mod.encoder...
+                module._orig_mod.encoder...
+                _orig_mod.module.encoder...
+            to:
+                encoder...
+            """
+            new_key = key
+
+            changed = True
+            while changed:
+                changed = False
+
+                if new_key.startswith("module."):
+                    new_key = new_key[len("module."):]
+                    changed = True
+
+                if new_key.startswith("_orig_mod."):
+                    new_key = new_key[len("_orig_mod."):]
+                    changed = True
+
+            return new_key
+
+        def _strip_known_prefixes_from_state_dict(state_dict):
             cleaned = {}
 
             for key, value in state_dict.items():
-                new_key = key
-
-                # torch.compile() checkpoints often add this prefix.
-                if new_key.startswith("_orig_mod."):
-                    new_key = new_key[len("_orig_mod."):]
-
-                # DDP/DataParallel checkpoints often add this prefix.
-                if new_key.startswith("module."):
-                    new_key = new_key[len("module."):]
-
-                cleaned[new_key] = value
+                cleaned[_strip_known_prefixes_from_key(key)] = value
 
             return cleaned
 
-        model_has_module = next(iter(core_state)).startswith("module.")
-        checkpoint_has_module = next(iter(model_state)).startswith("module.")
+        model_state = _strip_known_prefixes_from_state_dict(model_state)
 
-        if checkpoint_has_module and not model_has_module:
-            model_state = {
-                k.replace("module.", "", 1): v
-                for k, v in model_state.items()
+        # ------------------------------------------------------------------
+        # Initialize lazy encoder modules if needed
+        # ------------------------------------------------------------------
+        def _get_model_device(module):
+            try:
+                return next(module.parameters()).device
+            except StopIteration:
+                if hasattr(self, "device"):
+                    return torch.device(self.device)
+                return torch.device("cpu")
+
+        def _infer_mlp_input_dim_from_state(state_dict, prefix):
+            """
+            For modules like:
+                encoder.embed_g_node = Sequential(MLP(...), LayerNorm(...))
+
+            the first linear weight usually appears as:
+                encoder.embed_g_node.0.mlp.0.weight
+
+            with shape:
+                [hidden_dim, input_dim]
+            """
+            candidate_keys = [
+                f"{prefix}.0.mlp.0.weight",
+                f"{prefix}.mlp.0.weight",
+                f"{prefix}.0.weight",
+            ]
+
+            for key in candidate_keys:
+                if key in state_dict and torch.is_tensor(state_dict[key]):
+                    weight = state_dict[key]
+                    if weight.dim() >= 2:
+                        return int(weight.shape[1])
+
+            return None
+
+        def _maybe_initialize_lazy_generic_encoder(module, state_dict):
+            """
+            GenericFeatureEncoder initializes embed_g_node/embed_a_node/embed_a_edge
+            lazily. During standalone inference, load_checkpoint can run before the
+            first forward pass, so those modules may not exist yet.
+
+            If the encoder exposes _ensure_mlp(...), initialize missing MLPs from
+            checkpoint weight shapes.
+            """
+            encoder = getattr(module, "encoder", None)
+            if encoder is None:
+                return
+
+            if not hasattr(encoder, "_ensure_mlp"):
+                return
+
+            device = _get_model_device(module)
+
+            prefix_to_attr = {
+                "encoder.embed_g_node": "embed_g_node",
+                "encoder.embed_a_node": "embed_a_node",
+                "encoder.embed_a_edge": "embed_a_edge",
             }
 
-        elif model_has_module and not checkpoint_has_module:
-            model_state = {
-                "module." + k: v
-                for k, v in model_state.items()
-            }
+            for prefix, attr_name in prefix_to_attr.items():
+                if getattr(encoder, attr_name, None) is not None:
+                    continue
 
-        model_state = _strip_checkpoint_prefixes(model_state)
-        core.load_state_dict(model_state)
+                in_dim = _infer_mlp_input_dim_from_state(state_dict, prefix)
+                if in_dim is None:
+                    continue
 
-        # -----------------------------
-        # Optimizer/scaler are usually
-        # not needed for inference
-        # -----------------------------
+                encoder._ensure_mlp(attr_name, in_dim, device=device)
+
+        _maybe_initialize_lazy_generic_encoder(core, model_state)
+
+        # ------------------------------------------------------------------
+        # Load model state
+        # ------------------------------------------------------------------
+        core_state = core.state_dict()
+
+        if strict:
+            try:
+                core.load_state_dict(model_state, strict=True)
+            except RuntimeError as exc:
+                model_keys = list(core_state.keys())
+                ckpt_keys = list(model_state.keys())
+
+                raise RuntimeError(
+                    "Failed to load checkpoint with strict=True after normalizing "
+                    "known wrapper prefixes. This usually means either:\n"
+                    "  1. the inference model architecture differs from the training model,\n"
+                    "  2. lazy modules were not initialized correctly,\n"
+                    "  3. decoder/encoder names changed between training and inference, or\n"
+                    "  4. the checkpoint is from a different model.\n\n"
+                    f"First model keys: {model_keys[:8]}\n"
+                    f"First checkpoint keys: {ckpt_keys[:8]}\n"
+                ) from exc
+
+        else:
+            # Partial/non-strict load: only load keys that exist and match shape.
+            filtered_state = {}
+            skipped = []
+
+            for key, value in model_state.items():
+                if key not in core_state:
+                    skipped.append((key, "missing_in_model"))
+                    continue
+
+                if core_state[key].shape != value.shape:
+                    skipped.append(
+                        (key, f"shape_mismatch checkpoint={tuple(value.shape)} model={tuple(core_state[key].shape)}")
+                    )
+                    continue
+
+                filtered_state[key] = value
+
+            missing, unexpected = core.load_state_dict(filtered_state, strict=False)
+
+            if skipped:
+                warnings.warn(
+                    "Checkpoint loaded with strict=False. "
+                    f"Loaded {len(filtered_state)} tensors, skipped {len(skipped)} tensors. "
+                    f"First skipped entries: {skipped[:8]}"
+                )
+
+            if missing:
+                warnings.warn(f"Missing model keys after partial load: {missing[:8]}")
+
+            if unexpected:
+                warnings.warn(f"Unexpected checkpoint keys after partial load: {unexpected[:8]}")
+
+        # ------------------------------------------------------------------
+        # Optimizer/scaler are usually not needed for inference
+        # ------------------------------------------------------------------
         if (
                 load_optimizer
                 and self.optimizer is not None
                 and isinstance(checkpoint, dict)
                 and checkpoint.get("optimizer_state") is not None
         ):
-            self.optimizer.load_state_dict(checkpoint["optimizer_state"])
+            try:
+                self.optimizer.load_state_dict(checkpoint["optimizer_state"])
+            except Exception as exc:
+                warnings.warn(
+                    "Model weights were loaded, but optimizer_state could not be loaded. "
+                    "This is usually fine for inference. "
+                    f"Optimizer load error: {exc}"
+                )
 
-        if (
-                load_optimizer
-                and self.scalar is not None
-                and isinstance(checkpoint, dict)
-                and checkpoint.get("scalar_state") is not None
-        ):
-            self.scalar.load_state_dict(checkpoint["scalar_state"])
+        # Support both names because older code used scalar/scaler inconsistently.
+        scaler_obj = None
+        if hasattr(self, "scaler") and self.scaler is not None:
+            scaler_obj = self.scaler
+        elif hasattr(self, "scalar") and self.scalar is not None:
+            scaler_obj = self.scalar
 
+        scaler_state = None
         if isinstance(checkpoint, dict):
+            scaler_state = checkpoint.get("scaler_state", None)
+            if scaler_state is None:
+                scaler_state = checkpoint.get("scalar_state", None)
+
+        if load_optimizer and scaler_obj is not None and scaler_state is not None:
+            try:
+                scaler_obj.load_state_dict(scaler_state)
+            except Exception as exc:
+                warnings.warn(
+                    "Model weights were loaded, but scaler_state/scalar_state could not be loaded. "
+                    "This is usually fine for inference. "
+                    f"Scaler load error: {exc}"
+                )
+
+        # Keep a reference to the loaded checkpoint.
+        if isinstance(checkpoint, dict):
+            self.checkpoint = checkpoint
             return checkpoint.get("epoch", None)
 
         return None
-
 
 
     def load_data(self,params,format=0, rank=0,load_training=True,samples_file=None):

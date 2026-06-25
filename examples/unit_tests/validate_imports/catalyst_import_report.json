@@ -1,0 +1,727 @@
+{
+  "python_executable": "C:\\Users\\jc112358\\Documents\\venv_310\\Scripts\\python.exe",
+  "python_version": "3.10.11 (tags/v3.10.11:7d4cc5a, Apr  5 2023, 00:38:17) [MSC v.1929 64 bit (AMD64)]",
+  "working_directory": "C:\\Users\\jc112358\\Documents\\venv_310\\Lib\\site-packages\\catalyst\\examples\\unit_test",
+  "critical_imports": [
+    {
+      "name": "catalyst",
+      "ok": true,
+      "seconds": 4.009995609521866e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.graph",
+      "ok": true,
+      "seconds": 2.3300061002373695e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.graph.graph",
+      "ok": true,
+      "seconds": 2.150004729628563e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.graph.alignnd",
+      "ok": true,
+      "seconds": 2.010003663599491e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.graph.generic_build",
+      "ok": true,
+      "seconds": 0.0011473000049591064,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.data.utils",
+      "ok": true,
+      "seconds": 3.360002301633358e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.observer.params",
+      "ok": true,
+      "seconds": 0.42785220011137426,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.utilities.sampling",
+      "ok": true,
+      "seconds": 2.6995155999902636,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.gnn.GNN",
+      "ok": false,
+      "seconds": 0.02088190009817481,
+      "category": "missing_dependency",
+      "error_type": "ModuleNotFoundError",
+      "error_message": "No module named 'data'",
+      "missing_module": "data",
+      "traceback_text": "Traceback (most recent call last):\n  File \"C:\\Users\\jc112358\\Documents\\venv_310\\Lib\\site-packages\\catalyst\\examples\\unit_test\\test_catalyst_imports.py\", line 153, in import_one\n    importlib.import_module(name)\n  File \"C:\\Users\\jc112358\\AppData\\Local\\Programs\\Python\\Python310\\lib\\importlib\\__init__.py\", line 126, in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\n  File \"<frozen importlib._bootstrap>\", line 1050, in _gcd_import\n  File \"<frozen importlib._bootstrap>\", line 1027, in _find_and_load\n  File \"<frozen importlib._bootstrap>\", line 1006, in _find_and_load_unlocked\n  File \"<frozen importlib._bootstrap>\", line 688, in _load_unlocked\n  File \"<frozen importlib._bootstrap_external>\", line 883, in exec_module\n  File \"<frozen importlib._bootstrap>\", line 241, in _call_with_frames_removed\n  File \"C:\\Users\\jc112358\\Documents\\venv_310\\Lib\\site-packages\\catalyst\\src\\catalyst\\ml\\gnn\\GNN.py\", line 29, in <module>\n    import data\nModuleNotFoundError: No module named 'data'\n"
+    },
+    {
+      "name": "catalyst.ml.gnn.modules.models.alignn",
+      "ok": true,
+      "seconds": 0.013700000010430813,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.training",
+      "ok": true,
+      "seconds": 0.0020425000693649054,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.inference",
+      "ok": true,
+      "seconds": 0.0020276999566704035,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.characterization.sodas.model.sodas",
+      "ok": true,
+      "seconds": 0.004212700063362718,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    }
+  ],
+  "walk_imports": [
+    {
+      "name": "catalyst.characterization",
+      "ok": true,
+      "seconds": 0.00011799996718764305,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.characterization.sodas",
+      "ok": true,
+      "seconds": 4.959991201758385e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.characterization.sodas.model",
+      "ok": true,
+      "seconds": 4.549999721348286e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.characterization.sodas.model.sodas",
+      "ok": true,
+      "seconds": 4.169996827840805e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.characterization.sodas.utils",
+      "ok": true,
+      "seconds": 4.320009611546993e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.characterization.sodas.utils.utils",
+      "ok": true,
+      "seconds": 0.003401299938559532,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.data",
+      "ok": true,
+      "seconds": 9.280000813305378e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.data.graph_data",
+      "ok": true,
+      "seconds": 4.96001448482275e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.data.model_data",
+      "ok": true,
+      "seconds": 4.2800093069672585e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.data.utils",
+      "ok": true,
+      "seconds": 4.359986633062363e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.graph",
+      "ok": true,
+      "seconds": 4.160008393228054e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.graph.alignnd",
+      "ok": true,
+      "seconds": 4.0899962186813354e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.graph.generic_build",
+      "ok": true,
+      "seconds": 4.029995761811733e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.graph.graph",
+      "ok": true,
+      "seconds": 4.009995609521866e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml",
+      "ok": true,
+      "seconds": 3.8499943912029266e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.gnn",
+      "ok": true,
+      "seconds": 3.900006413459778e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.gnn.GNN",
+      "ok": false,
+      "seconds": 0.005075399996712804,
+      "category": "missing_dependency",
+      "error_type": "ModuleNotFoundError",
+      "error_message": "No module named 'data'",
+      "missing_module": "data",
+      "traceback_text": "Traceback (most recent call last):\n  File \"C:\\Users\\jc112358\\Documents\\venv_310\\Lib\\site-packages\\catalyst\\examples\\unit_test\\test_catalyst_imports.py\", line 153, in import_one\n    importlib.import_module(name)\n  File \"C:\\Users\\jc112358\\AppData\\Local\\Programs\\Python\\Python310\\lib\\importlib\\__init__.py\", line 126, in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\n  File \"<frozen importlib._bootstrap>\", line 1050, in _gcd_import\n  File \"<frozen importlib._bootstrap>\", line 1027, in _find_and_load\n  File \"<frozen importlib._bootstrap>\", line 1006, in _find_and_load_unlocked\n  File \"<frozen importlib._bootstrap>\", line 688, in _load_unlocked\n  File \"<frozen importlib._bootstrap_external>\", line 883, in exec_module\n  File \"<frozen importlib._bootstrap>\", line 241, in _call_with_frames_removed\n  File \"C:\\Users\\jc112358\\Documents\\venv_310\\Lib\\site-packages\\catalyst\\src\\catalyst\\ml\\gnn\\GNN.py\", line 29, in <module>\n    import data\nModuleNotFoundError: No module named 'data'\n"
+    },
+    {
+      "name": "catalyst.ml.gnn.modules",
+      "ok": true,
+      "seconds": 7.940013892948627e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.gnn.modules.conv",
+      "ok": true,
+      "seconds": 7.950002327561378e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.gnn.modules.conv.gated_gcn",
+      "ok": true,
+      "seconds": 4.1400082409381866e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.gnn.modules.conv.mgn_conv",
+      "ok": true,
+      "seconds": 4.190020263195038e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.gnn.modules.models",
+      "ok": true,
+      "seconds": 3.890017978847027e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.gnn.modules.models.alignn",
+      "ok": true,
+      "seconds": 4.329998046159744e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.gnn.modules.models.gated_gcn",
+      "ok": true,
+      "seconds": 3.979983739554882e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.gnn.modules.models.mgn",
+      "ok": true,
+      "seconds": 0.002921599894762039,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.gnn.modules.utils",
+      "ok": true,
+      "seconds": 9.229988791048527e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.gnn.modules.utils.basis",
+      "ok": true,
+      "seconds": 4.5900000259280205e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.gnn.modules.utils.data_manager",
+      "ok": true,
+      "seconds": 4.320009611546993e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.gnn.modules.utils.e3nn_initial_embedding",
+      "ok": true,
+      "seconds": 0.0024596001021564007,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.gnn.modules.utils.edges",
+      "ok": true,
+      "seconds": 4.879990592598915e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.gnn.modules.utils.mic",
+      "ok": true,
+      "seconds": 2.2700056433677673e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.gnn.modules.utils.misc",
+      "ok": true,
+      "seconds": 2.0700041204690933e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.gnn.modules.utils.periodic_radius_graph",
+      "ok": true,
+      "seconds": 2.0099803805351257e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.gnn.modules.utils.predict",
+      "ok": true,
+      "seconds": 2.0700041204690933e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.inference",
+      "ok": true,
+      "seconds": 1.9999919459223747e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.nn",
+      "ok": true,
+      "seconds": 1.9200146198272705e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.nn.mlp",
+      "ok": true,
+      "seconds": 1.900014467537403e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.ml.training",
+      "ok": true,
+      "seconds": 2.059992402791977e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.observer",
+      "ok": true,
+      "seconds": 2.0300038158893585e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.observer.params",
+      "ok": true,
+      "seconds": 2.040015533566475e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.properties",
+      "ok": true,
+      "seconds": 2.5999965146183968e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.properties.chemical_properties",
+      "ok": true,
+      "seconds": 0.0015527000650763512,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.properties.physics_database",
+      "ok": true,
+      "seconds": 8.239992894232273e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.properties.structure_properties",
+      "ok": true,
+      "seconds": 4.920014180243015e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.utilities",
+      "ok": true,
+      "seconds": 4.300009459257126e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.utilities.data_tools",
+      "ok": true,
+      "seconds": 4.3800100684165955e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.utilities.distributions",
+      "ok": true,
+      "seconds": 0.0015555999707430601,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.utilities.rankings",
+      "ok": true,
+      "seconds": 6.689992733299732e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    },
+    {
+      "name": "catalyst.utilities.sampling",
+      "ok": true,
+      "seconds": 4.569999873638153e-05,
+      "category": "ok",
+      "error_type": null,
+      "error_message": null,
+      "missing_module": null,
+      "traceback_text": null
+    }
+  ],
+  "critical_symbols": [
+    {
+      "module": "catalyst.graph.alignnd",
+      "symbol": "alignn_gen",
+      "ok": true,
+      "error_message": null
+    },
+    {
+      "module": "catalyst.graph.alignnd",
+      "symbol": "alignnd",
+      "ok": true,
+      "error_message": null
+    },
+    {
+      "module": "catalyst.graph.alignnd",
+      "symbol": "realignnd",
+      "ok": true,
+      "error_message": null
+    },
+    {
+      "module": "catalyst.graph.alignnd",
+      "symbol": "atomic_alignnd",
+      "ok": true,
+      "error_message": null
+    },
+    {
+      "module": "catalyst.graph.generic_build",
+      "symbol": "generic_graph_gen",
+      "ok": true,
+      "error_message": null
+    },
+    {
+      "module": "catalyst.graph.graph",
+      "symbol": "Atomic_Graph_Data",
+      "ok": true,
+      "error_message": null
+    },
+    {
+      "module": "catalyst.graph.graph",
+      "symbol": "Generic_Graph_Data",
+      "ok": true,
+      "error_message": null
+    },
+    {
+      "module": "catalyst.graph.graph",
+      "symbol": "line_graph",
+      "ok": true,
+      "error_message": null
+    },
+    {
+      "module": "catalyst.ml.gnn.GNN",
+      "symbol": "GNN",
+      "ok": false,
+      "error_message": "ModuleNotFoundError: No module named 'data'"
+    },
+    {
+      "module": "catalyst.ml.gnn.modules.models.alignn",
+      "symbol": "ALIGNN",
+      "ok": true,
+      "error_message": null
+    },
+    {
+      "module": "catalyst.ml.gnn.modules.models.alignn",
+      "symbol": "Encoder_atomic",
+      "ok": true,
+      "error_message": null
+    },
+    {
+      "module": "catalyst.ml.gnn.modules.models.alignn",
+      "symbol": "Processor",
+      "ok": true,
+      "error_message": null
+    },
+    {
+      "module": "catalyst.ml.inference",
+      "symbol": "run_inference",
+      "ok": true,
+      "error_message": null
+    },
+    {
+      "module": "catalyst.ml.training",
+      "symbol": "run_training",
+      "ok": true,
+      "error_message": null
+    },
+    {
+      "module": "catalyst.characterization.sodas.model.sodas",
+      "symbol": "SODAS",
+      "ok": true,
+      "error_message": null
+    },
+    {
+      "module": "catalyst.observer.params",
+      "symbol": "Catalyst",
+      "ok": true,
+      "error_message": null
+    }
+  ]
+}

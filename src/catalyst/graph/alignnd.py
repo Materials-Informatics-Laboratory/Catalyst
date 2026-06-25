@@ -3,6 +3,7 @@ from ..properties.structure_properties import *
 from ..utilities.data_tools import remove_duplicate_list_pairs
 from .graph import Atomic_Graph_Data
 from .graph import atoms2graph
+from .graph import build_equivariant_atomic_fields
 from .graph import line_graph
 from joblib import Parallel, delayed
 import warnings
@@ -27,6 +28,7 @@ def check_params(target_dict):
         'include_angs': False,
         'cpu_cores': -1,
         'store_atoms_type': 'ase-atoms',
+        'include_equivariant_fields': True,
 
         # Universal graph retry controls. These are passed through alignn_gen to
         # all graph builders that can actually change cutoff/k.
@@ -74,6 +76,7 @@ def alignn_gen(data):
             store_atoms=data['store_raw_data'],
             use_pt=data['use_pt'],
             include_angs=data['include_angs'],
+            include_equivariant_fields=data['include_equivariant_fields'],
             atom_labels=data['node_labels'],
             **retry_kwargs,
         )
@@ -85,6 +88,7 @@ def alignn_gen(data):
             store_atoms=data['store_raw_data'],
             use_pt=data['use_pt'],
             include_angs=data['include_angs'],
+            include_equivariant_fields=data['include_equivariant_fields'],
             atom_labels=data['node_labels'],
             **retry_kwargs,
         )
@@ -96,6 +100,7 @@ def alignn_gen(data):
             store_atoms=data['store_raw_data'],
             use_pt=data['use_pt'],
             include_angs=data['include_angs'],
+            include_equivariant_fields=data['include_equivariant_fields'],
             atom_labels=data['node_labels'],
             all_elements=data['element_list'],
             store_atoms_type=data['store_atoms_type'],
@@ -111,6 +116,7 @@ def alignn_gen(data):
             dihedral=data['is_dihedral'],
             store_atoms=data['store_raw_data'],
             include_angs=data['include_angs'],
+            include_equivariant_fields=data['include_equivariant_fields'],
             store_atoms_type=data['store_atoms_type'],
             require_bonds=data['require_bonds'],
             require_angles=data['require_angles'],
@@ -187,6 +193,47 @@ def _extract_numpy_graph_field(graph, key, dtype=None):
         value = value.detach().cpu().numpy()
     return np.asarray(value, dtype=dtype) if dtype is not None else np.asarray(value)
 
+
+
+
+def _finalize_equivariant_graph_metadata(data):
+    """Finalize PyG/equivariant metadata after constructing Atomic_Graph_Data.
+
+    This is intentionally redundant with graph.py.  The Data container should
+    already set num_nodes and handle batching, but setting it here as well makes
+    every ALIGNN-generation pathway explicit and safer for equivariant models.
+
+    The most important field is num_nodes.  PyG can infer this from a normal
+    ``x`` field, but Catalyst atomic graphs use ``x_atm``/``x_1`` instead.
+    Equivariant processors also consume ``z`` and ``pos`` directly, so setting
+    num_nodes explicitly avoids ambiguous batching behavior.
+    """
+    z = getattr(data, "z", None)
+    pos = getattr(data, "pos", None)
+    x_atm = getattr(data, "x_atm", None)
+
+    if z is not None:
+        data.num_nodes = int(z.size(0))
+    elif pos is not None:
+        data.num_nodes = int(pos.size(0))
+    elif x_atm is not None:
+        data.num_nodes = int(x_atm.size(0))
+
+    # If equivariant fields are present, ensure the PyG-standard edge_index is
+    # present too.  This should already be handled by graph.py, but the alias is
+    # useful for downstream equivariant processors and generic PyG utilities.
+    if getattr(data, "edge_index", None) is None and getattr(data, "edge_index_G", None) is not None:
+        data.edge_index = data.edge_index_G
+
+    # If edge geometry is omitted but shifts are required for a conservative
+    # energy-gradient model, provide an explicit zero-shift tensor so the
+    # processor can always rely on data.shifts existing.
+    edge_index = getattr(data, "edge_index", None)
+    if getattr(data, "shifts", None) is None and edge_index is not None:
+        n_edges = int(edge_index.size(1))
+        data.shifts = torch.zeros((n_edges, 3), dtype=torch.long, device=edge_index.device)
+
+    return data
 
 def _deduplicate_bond_graph(edge_index_G, x_bnd):
     edge_index_G = _normalize_edge_index(edge_index_G, dtype=np.int64)
@@ -306,7 +353,8 @@ def _build_angular_components(atoms, edge_index_G, include_angs, dihedral,
 
 
 def _build_graph_components_once(atoms, cutoff, k, include_angs, dihedral,
-                                 require_bonds, require_angles, require_dihedrals):
+                                 require_bonds, require_angles, require_dihedrals,
+                                 include_equivariant_fields=True):
     edge_index_G, x_bnd = atoms2graph(atoms, cutoff=cutoff, k=k)
     edge_index_G, x_bnd = _deduplicate_bond_graph(edge_index_G, x_bnd)
 
@@ -329,6 +377,17 @@ def _build_graph_components_once(atoms, cutoff, k, include_angs, dihedral,
         k_used=k,
     )
     result.update(angular)
+
+    if include_equivariant_fields:
+        result['equivariant_fields'] = build_equivariant_atomic_fields(
+            atoms,
+            edge_index_G,
+            dtype=np.float32,
+            include_edge_geometry=True,
+        )
+    else:
+        result['equivariant_fields'] = {}
+
     return result
 
 
@@ -343,7 +402,8 @@ def _build_graph_components_with_retry(atoms, neighbor_params, include_angs, dih
                                        require_angles=True,
                                        require_dihedrals=False,
                                        retry_verbose=True,
-                                       context='graph'):
+                                       context='graph',
+                                       include_equivariant_fields=True):
     if len(neighbor_params) < 2:
         raise ValueError("neighbor_params must contain [cutoff, k].")
 
@@ -368,6 +428,7 @@ def _build_graph_components_with_retry(atoms, neighbor_params, include_angs, dih
                 require_bonds=require_bonds,
                 require_angles=require_angles,
                 require_dihedrals=require_dihedrals,
+                include_equivariant_fields=include_equivariant_fields,
             )
             components['graph_build_attempts'] = attempt + 1
             if retry_verbose and attempt > 0:
@@ -446,7 +507,7 @@ def _element_basis_for_structures(structures, use_pt=False):
 # -----------------------------------------------------------------------------
 
 def alignnd(atoms, neighbor_params, dihedral=False, store_atoms=False, use_pt=False,
-            include_angs=True, atom_labels='', *, auto_retry_graph=True,
+            include_angs=True, include_equivariant_fields=True, atom_labels='', *, auto_retry_graph=True,
             max_graph_attempts=8, k_step=4, cutoff_scale=1.25, max_k=None,
             max_cutoff=None, require_bonds=True, require_angles=True,
             require_dihedrals=False, retry_verbose=True):
@@ -479,6 +540,7 @@ def alignnd(atoms, neighbor_params, dihedral=False, store_atoms=False, use_pt=Fa
         require_dihedrals=require_dihedrals,
         retry_verbose=retry_verbose,
         context='alignnd',
+        include_equivariant_fields=include_equivariant_fields,
     )
 
     edge_index_G_tensor = torch.tensor(components['edge_index_G'], dtype=torch.long)
@@ -494,6 +556,7 @@ def alignnd(atoms, neighbor_params, dihedral=False, store_atoms=False, use_pt=Fa
             x_bnd=x_bnd_tensor,
             x_ang=torch.tensor(components['x_ang'], dtype=torch.float),
             mask_dih_ang=torch.tensor(components['mask_dih_ang'], dtype=torch.bool),
+            **components.get('equivariant_fields', {}),
             atm_amounts=torch.tensor(data_amounts['x_atm'], dtype=torch.long),
             bnd_amounts=torch.tensor(data_amounts['x_bnd'], dtype=torch.long),
             ang_amounts=torch.tensor(data_amounts['x_ang'], dtype=torch.long),
@@ -507,11 +570,13 @@ def alignnd(atoms, neighbor_params, dihedral=False, store_atoms=False, use_pt=Fa
             x_bnd=x_bnd_tensor,
             x_ang=None,
             mask_dih_ang=None,
+            **components.get('equivariant_fields', {}),
             atm_amounts=torch.tensor(data_amounts['x_atm'], dtype=torch.long),
             bnd_amounts=torch.tensor(data_amounts['x_bnd'], dtype=torch.long),
             ang_amounts=None,
         )
 
+    data = _finalize_equivariant_graph_metadata(data)
     data.graph_cutoff_used = components['cutoff_used']
     data.graph_k_used = components['k_used']
     data.graph_build_attempts = components['graph_build_attempts']
@@ -520,7 +585,7 @@ def alignnd(atoms, neighbor_params, dihedral=False, store_atoms=False, use_pt=Fa
 
 
 def realignnd(structures, neighbor_params, dihedral=False, store_atoms=False,
-              use_pt=False, include_angs=True, atom_labels='', *,
+              use_pt=False, include_angs=True, include_equivariant_fields=True, atom_labels='', *,
               auto_retry_graph=True, max_graph_attempts=8, k_step=4,
               cutoff_scale=1.25, max_k=None, max_cutoff=None,
               require_bonds=True, require_angles=True, require_dihedrals=False,
@@ -547,6 +612,17 @@ def realignnd(structures, neighbor_params, dihedral=False, store_atoms=False,
     f_x_bnd = []
     f_x_ang = []
     f_mask_dih_ang = []
+    f_eq_z = []
+    f_eq_pos = []
+    f_eq_edge_index = []
+    f_eq_edge_vec = []
+    f_eq_edge_dist = []
+    f_eq_shifts = []
+    f_eq_cell = []
+    f_eq_pbc = []
+    f_eq_atom_graph_batch = []
+    f_eq_edge_graph_batch = []
+    f_eq_global_atom_indices = []
 
     atom_offset = 0
     bond_offset = 0
@@ -576,12 +652,33 @@ def realignnd(structures, neighbor_params, dihedral=False, store_atoms=False,
             require_dihedrals=require_dihedrals,
             retry_verbose=retry_verbose,
             context=f'realignnd structure {structure_index}',
+            include_equivariant_fields=include_equivariant_fields,
         )
 
         edge_index_G = components['edge_index_G'] + atom_offset
         f_edge_index_G.append(edge_index_G)
         f_x_atm.append(x_atm)
         f_x_bnd.append(components['x_bnd'])
+
+        if include_equivariant_fields:
+            eq = components.get('equivariant_fields', {})
+            if eq:
+                n_local_atoms = int(eq['pos'].size(0))
+                n_local_edges = int(eq['edge_index'].size(1))
+                f_eq_z.append(eq['z'])
+                f_eq_pos.append(eq['pos'])
+                f_eq_edge_index.append(eq['edge_index'] + atom_offset)
+                f_eq_edge_vec.append(eq['edge_vec'])
+                f_eq_edge_dist.append(eq['edge_dist'])
+                f_eq_shifts.append(eq['shifts'])
+                f_eq_cell.append(eq['cell'])
+                f_eq_pbc.append(eq['pbc'])
+                if 'global_atom_indices' in eq and eq['global_atom_indices'] is not None:
+                    f_eq_global_atom_indices.append(eq['global_atom_indices'] + atom_offset)
+                else:
+                    f_eq_global_atom_indices.append(torch.arange(n_local_atoms, dtype=torch.long) + atom_offset)
+                f_eq_atom_graph_batch.append(torch.full((n_local_atoms,), structure_index, dtype=torch.long))
+                f_eq_edge_graph_batch.append(torch.full((n_local_edges,), structure_index, dtype=torch.long))
 
         if include_angs:
             edge_index_A = components['edge_index_A'] + bond_offset
@@ -614,6 +711,22 @@ def realignnd(structures, neighbor_params, dihedral=False, store_atoms=False,
     final_x_atm = np.concatenate(f_x_atm, axis=0) if f_x_atm else np.empty((0, len(elems_array)), dtype=np.float32)
     final_x_bnd = np.concatenate(f_x_bnd) if f_x_bnd else np.empty((0,), dtype=np.float32)
 
+    final_equivariant_kwargs = {}
+    if include_equivariant_fields and f_eq_pos:
+        final_equivariant_kwargs = dict(
+            z=torch.cat(f_eq_z, dim=0),
+            pos=torch.cat(f_eq_pos, dim=0),
+            edge_index=torch.cat(f_eq_edge_index, dim=1),
+            edge_vec=torch.cat(f_eq_edge_vec, dim=0),
+            edge_dist=torch.cat(f_eq_edge_dist, dim=0),
+            shifts=torch.cat(f_eq_shifts, dim=0),
+            cell=torch.stack(f_eq_cell, dim=0),
+            pbc=torch.stack(f_eq_pbc, dim=0),
+            global_atom_indices=torch.cat(f_eq_global_atom_indices, dim=0),
+            atom_graph_batch=torch.cat(f_eq_atom_graph_batch, dim=0),
+            edge_graph_batch=torch.cat(f_eq_edge_graph_batch, dim=0),
+        )
+
     if include_angs:
         final_edge_index_A = np.hstack(f_edge_index_A) if f_edge_index_A else _empty_edge_index()
         final_x_ang = np.concatenate(f_x_ang) if f_x_ang else np.empty((0,), dtype=np.float32)
@@ -629,6 +742,7 @@ def realignnd(structures, neighbor_params, dihedral=False, store_atoms=False,
             bnd_amounts=torch.tensor(data_amounts['x_bnd'], dtype=torch.long),
             ang_amounts=torch.tensor(data_amounts['x_ang'], dtype=torch.long),
             mask_dih_ang=torch.tensor(final_mask_dih_ang, dtype=torch.bool),
+            **final_equivariant_kwargs,
         )
     else:
         data = Atomic_Graph_Data(
@@ -642,8 +756,10 @@ def realignnd(structures, neighbor_params, dihedral=False, store_atoms=False,
             bnd_amounts=torch.tensor(data_amounts['x_bnd'], dtype=torch.long),
             ang_amounts=None,
             mask_dih_ang=None,
+            **final_equivariant_kwargs,
         )
 
+    data = _finalize_equivariant_graph_metadata(data)
     data.graph_cutoffs_used = cutoffs_used
     data.graph_ks_used = ks_used
     data.graph_build_attempts = attempts_used
@@ -962,7 +1078,7 @@ def _build_local_angles(atoms, tmp_edge_index_G, center_atom, include_angs, dihe
 def process_atom(i, indptr, indices, data, atoms, elems_array, atms,
                  include_angs, dihedral, store_atoms, store_atoms_type,
                  atom_labels, require_bonds=False, require_angles=False,
-                 require_dihedrals=False):
+                 require_dihedrals=False, include_equivariant_fields=True):
     """Build one atomic graph, including a two-hop shell when needed."""
     if store_atoms:
         stored_atoms = atoms if store_atoms_type == 'ase-atoms' else atoms[i]
@@ -987,6 +1103,17 @@ def process_atom(i, indptr, indices, data, atoms, elems_array, atms,
         atom_labels,
         center_atom_index=i,
     )
+
+    equivariant_kwargs = {}
+    if include_equivariant_fields:
+        local_atom_indices = _ordered_local_atom_indices(tmp_edge_index_G, i)
+        equivariant_kwargs = build_equivariant_atomic_fields(
+            atoms,
+            tmp_edge_index_G,
+            atom_indices=local_atom_indices,
+            dtype=np.float32,
+            include_edge_geometry=True,
+        )
 
     if include_angs:
         local_angles = _build_local_angles(
@@ -1021,6 +1148,7 @@ def process_atom(i, indptr, indices, data, atoms, elems_array, atms,
             bnd_amounts=torch.tensor(local_data_amounts['x_bnd'], dtype=torch.long),
             ang_amounts=torch.tensor(local_data_amounts['x_ang'], dtype=torch.long),
             mask_dih_ang=torch.tensor(mask_dih_ang, dtype=torch.bool),
+            **equivariant_kwargs,
         )
     else:
         local_data_amounts = dict(
@@ -1041,8 +1169,10 @@ def process_atom(i, indptr, indices, data, atoms, elems_array, atms,
             bnd_amounts=torch.tensor(local_data_amounts['x_bnd'], dtype=torch.long),
             ang_amounts=None,
             mask_dih_ang=None,
+            **equivariant_kwargs,
         )
 
+    data_obj = _finalize_equivariant_graph_metadata(data_obj)
     data_obj.generate_gid()
     return i, data_obj, local_data_amounts
 
@@ -1075,7 +1205,8 @@ def _resolve_element_numbers(all_elements, atom_numbers):
 def _run_atomic_alignnd_once(atoms, cutoff, k, dihedral, elems_array,
                              store_atoms, include_angs, store_atoms_type,
                              atom_labels, cpu_cores, require_bonds,
-                             require_angles, require_dihedrals):
+                             require_angles, require_dihedrals,
+                             include_equivariant_fields=True):
     edge_index_G, x_bnd = atoms2graph(atoms, cutoff=cutoff, k=k)
     edge_index_G, x_bnd = _deduplicate_bond_graph(edge_index_G, x_bnd)
 
@@ -1106,6 +1237,7 @@ def _run_atomic_alignnd_once(atoms, cutoff, k, dihedral, elems_array,
             require_bonds=require_bonds,
             require_angles=bool(require_angles and include_angs),
             require_dihedrals=bool(require_dihedrals and include_angs and dihedral),
+            include_equivariant_fields=include_equivariant_fields,
         )
         for i in range(len(atoms))
     )
@@ -1128,6 +1260,7 @@ def _run_atomic_alignnd_once(atoms, cutoff, k, dihedral, elems_array,
 def atomic_alignnd(atoms, neighbor_params, dihedral=False, all_elements=None,
                    store_atoms=False, use_pt=False, include_angs=True,
                    store_atoms_type='ase-atoms', atom_labels='', cpu_cores=-1,
+                   include_equivariant_fields=True,
                    *, auto_retry_graph=True, max_graph_attempts=8, k_step=4,
                    cutoff_scale=1.25, max_k=None, max_cutoff=None,
                    require_bonds=True, require_angles=True,
@@ -1173,6 +1306,7 @@ def atomic_alignnd(atoms, neighbor_params, dihedral=False, all_elements=None,
                 require_bonds=require_bonds,
                 require_angles=require_angles,
                 require_dihedrals=require_dihedrals,
+                include_equivariant_fields=include_equivariant_fields,
             )
             for graph in graph_data:
                 graph.graph_cutoff_used = cutoff
@@ -1218,7 +1352,8 @@ def atomic_alignnd(atoms, neighbor_params, dihedral=False, all_elements=None,
 
 
 def atomic_alignnd_from_global_graph(global_graph, dihedral=False, store_atoms=False,
-                                     include_angs=True, store_atoms_type='ase-atoms',
+                                     include_angs=True, include_equivariant_fields=True,
+                                     store_atoms_type='ase-atoms',
                                      require_bonds=True, require_angles=True,
                                      require_dihedrals=False):
     """Create atom-centered local graphs from an existing global graph.
@@ -1284,6 +1419,16 @@ def atomic_alignnd_from_global_graph(global_graph, dihedral=False, store_atoms=F
         local_atom_indices = _ordered_local_atom_indices(tmp_edge_index_G, atom)
         x_atm = x_atm_global_np[local_atom_indices]
 
+        equivariant_kwargs = {}
+        if include_equivariant_fields:
+            equivariant_kwargs = build_equivariant_atomic_fields(
+                atoms,
+                tmp_edge_index_G,
+                atom_indices=local_atom_indices,
+                dtype=np.float32,
+                include_edge_geometry=True,
+            )
+
         data_amounts['x_atm'].append(len(x_atm) - 1)
         data_amounts['x_bnd'].append(len(tmp_x_bnd) - 1)
 
@@ -1317,6 +1462,7 @@ def atomic_alignnd_from_global_graph(global_graph, dihedral=False, store_atoms=F
                 atm_amounts=torch.tensor(data_amounts['x_atm'], dtype=torch.long),
                 bnd_amounts=torch.tensor(data_amounts['x_bnd'], dtype=torch.long),
                 ang_amounts=torch.tensor(data_amounts['x_ang'], dtype=torch.long),
+                **equivariant_kwargs,
             )
         else:
             data_obj = Atomic_Graph_Data(
@@ -1330,6 +1476,7 @@ def atomic_alignnd_from_global_graph(global_graph, dihedral=False, store_atoms=F
                 atm_amounts=torch.tensor(data_amounts['x_atm'], dtype=torch.long),
                 bnd_amounts=torch.tensor(data_amounts['x_bnd'], dtype=torch.long),
                 ang_amounts=None,
+                **equivariant_kwargs,
             )
 
         data_obj.generate_gid()

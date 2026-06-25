@@ -7,6 +7,7 @@ import itertools
 import secrets
 import sys
 
+import torch
 from torch_geometric.data import Data
 
 import numba
@@ -144,9 +145,217 @@ def build_knn_edges_from_atoms(
 
     return edge_index, edge_distances
 
+
+# =============================================================================
+# Equivariant graph-field helpers
+# =============================================================================
+
+
+def _normalize_edge_index_array(edge_index, dtype=np.int64):
+    """Return a NumPy edge index with canonical shape (2, n_edges)."""
+    edge_index = np.asarray(edge_index, dtype=dtype)
+
+    if edge_index.size == 0:
+        return np.empty((2, 0), dtype=dtype)
+
+    if edge_index.ndim == 1:
+        if edge_index.size != 2:
+            raise ValueError(
+                f"A one-dimensional edge index must have exactly two values; "
+                f"received shape {edge_index.shape}."
+            )
+        return edge_index.reshape(2, 1)
+
+    if edge_index.ndim != 2:
+        raise ValueError(f"edge_index must be 2D; received shape {edge_index.shape}.")
+
+    if edge_index.shape[0] == 2:
+        return edge_index
+
+    if edge_index.shape[1] == 2:
+        return edge_index.T
+
+    raise ValueError(
+        f"edge_index must have shape (2, n_edges) or (n_edges, 2); "
+        f"received shape {edge_index.shape}."
+    )
+
+
+def _to_torch_optional(value, dtype=None):
+    """Convert optional NumPy/list values to torch tensors without touching tensors."""
+    if value is None:
+        return None
+    if torch.is_tensor(value):
+        return value.to(dtype=dtype) if dtype is not None else value
+    return torch.as_tensor(value, dtype=dtype)
+
+
+def _infer_integer_shifts(edge_vec, raw_vec, cell, pbc):
+    """Infer integer periodic image shifts from MIC and raw vectors.
+
+    Convention:
+        edge_vec = pos[j] + shifts @ cell - pos[i]
+
+    The inference is best-effort. If the cell is singular or nonperiodic, zeros
+    are returned.
+    """
+    edge_vec = np.asarray(edge_vec, dtype=np.float64).reshape(-1, 3)
+    raw_vec = np.asarray(raw_vec, dtype=np.float64).reshape(-1, 3)
+    cell = np.asarray(cell, dtype=np.float64).reshape(3, 3)
+    pbc = np.asarray(pbc, dtype=bool).reshape(3)
+
+    shifts = np.zeros((edge_vec.shape[0], 3), dtype=np.int64)
+
+    if edge_vec.shape[0] == 0 or not np.any(pbc):
+        return shifts
+
+    try:
+        if np.linalg.matrix_rank(cell) < 3:
+            return shifts
+        shift_cart = edge_vec - raw_vec
+        frac_shift = np.linalg.solve(cell.T, shift_cart.T).T
+        shifts = np.rint(frac_shift).astype(np.int64)
+        shifts[:, ~pbc] = 0
+        return shifts
+    except Exception:
+        return np.zeros((edge_vec.shape[0], 3), dtype=np.int64)
+
+
+def _edge_geometry_from_atoms(atoms, edge_index, dtype=np.float32):
+    """Compute MIC edge vectors, distances, and integer image shifts for edges."""
+    edge_index = _normalize_edge_index_array(edge_index, dtype=np.int64)
+    positions = np.asarray(atoms.get_positions(), dtype=np.float64)
+    cell = np.asarray(atoms.cell.array, dtype=np.float64).reshape(3, 3)
+    pbc = np.asarray(atoms.pbc, dtype=bool).reshape(3)
+
+    n_edges = edge_index.shape[1]
+    edge_vec = np.empty((n_edges, 3), dtype=dtype)
+    edge_dist = np.empty((n_edges,), dtype=dtype)
+    raw_vec = np.empty((n_edges, 3), dtype=np.float64)
+
+    for edge_id, (src, dst) in enumerate(edge_index.T):
+        src = int(src)
+        dst = int(dst)
+        raw_vec[edge_id] = positions[dst] - positions[src]
+
+        vectors, distances = get_distances(
+            positions[src],
+            positions[dst],
+            cell=cell,
+            pbc=pbc,
+        )
+        edge_vec[edge_id] = np.asarray(vectors, dtype=dtype).reshape(-1, 3)[0]
+        edge_dist[edge_id] = np.asarray(distances, dtype=dtype).reshape(-1)[0]
+
+    shifts = _infer_integer_shifts(edge_vec, raw_vec, cell, pbc)
+    return edge_vec, edge_dist, shifts
+
+
+def build_equivariant_atomic_fields(
+    atoms,
+    edge_index,
+    atom_indices=None,
+    *,
+    dtype=np.float32,
+    include_edge_geometry=True,
+):
+    """Build standardized equivariant fields for an ASE-atom graph.
+
+    Returned fields follow the Catalyst equivariant contract:
+
+        z, pos, edge_index, edge_vec, edge_dist, cell, pbc, shifts
+
+    Parameters
+    ----------
+    atoms
+        ASE Atoms object.
+    edge_index
+        Edges referencing the parent ASE Atoms object. Shape can be (2, E) or
+        (E, 2).
+    atom_indices
+        Optional global atom IDs included in a local graph. If supplied,
+        ``pos`` and ``z`` are local/subset arrays and the returned ``edge_index``
+        is remapped into this local index space. ``global_atom_indices`` is also
+        stored for traceability.
+    dtype
+        Floating dtype for positions, cell, vectors, and distances.
+    include_edge_geometry
+        If True, also stores edge_vec and edge_dist. For conservative
+        energy-gradient force models, equivariant processors can ignore these
+        precomputed tensors and recompute geometry from pos/cell/shifts inside
+        forward so autograd tracks positions.
+    """
+    edge_index_global = _normalize_edge_index_array(edge_index, dtype=np.int64)
+
+    atomic_numbers = np.asarray(atoms.get_atomic_numbers(), dtype=np.int64)
+    positions = np.asarray(atoms.get_positions(), dtype=dtype)
+    cell = np.asarray(atoms.cell.array, dtype=dtype).reshape(3, 3)
+    pbc = np.asarray(atoms.pbc, dtype=bool).reshape(3)
+
+    if atom_indices is None:
+        selected = np.arange(len(atoms), dtype=np.int64)
+        edge_index_local = edge_index_global
+    else:
+        selected = np.asarray(atom_indices, dtype=np.int64).reshape(-1)
+        global_to_local = {int(atom_id): local_id for local_id, atom_id in enumerate(selected)}
+
+        src_local = []
+        dst_local = []
+        for src, dst in edge_index_global.T:
+            src = int(src)
+            dst = int(dst)
+            if src not in global_to_local or dst not in global_to_local:
+                raise ValueError(
+                    "Cannot build local equivariant fields because an edge "
+                    f"({src}, {dst}) references an atom outside atom_indices."
+                )
+            src_local.append(global_to_local[src])
+            dst_local.append(global_to_local[dst])
+
+        edge_index_local = np.asarray([src_local, dst_local], dtype=np.int64)
+
+    fields = {
+        "z": torch.as_tensor(atomic_numbers[selected], dtype=torch.long),
+        "pos": torch.as_tensor(positions[selected], dtype=torch.float),
+        "edge_index": torch.as_tensor(edge_index_local, dtype=torch.long),
+        "cell": torch.as_tensor(cell, dtype=torch.float),
+        "pbc": torch.as_tensor(pbc, dtype=torch.bool),
+        "global_atom_indices": torch.as_tensor(selected, dtype=torch.long),
+    }
+
+    if include_edge_geometry:
+        edge_vec, edge_dist, shifts = _edge_geometry_from_atoms(
+            atoms,
+            edge_index_global,
+            dtype=dtype,
+        )
+        fields["edge_vec"] = torch.as_tensor(edge_vec, dtype=torch.float)
+        fields["edge_dist"] = torch.as_tensor(edge_dist, dtype=torch.float)
+        fields["shifts"] = torch.as_tensor(shifts, dtype=torch.long)
+    else:
+        fields["edge_vec"] = None
+        fields["edge_dist"] = None
+        fields["shifts"] = torch.zeros((edge_index_global.shape[1], 3), dtype=torch.long)
+
+    return fields
+
+
+def attach_equivariant_fields(data, **fields):
+    """Attach standardized equivariant fields to a PyG Data object in-place."""
+    for key, value in fields.items():
+        if value is not None:
+            setattr(data, key, value)
+    return data
+
 class Generic_Graph_Data(Data):
-    """Custom PyG data for representing a pair of two graphs: one for the original graph and the other for its line grpah variant.
-    This data is used to represent an arbitrary graph and does not hard-code variables based on their atomistic connection.
+    """Custom PyG data for representing a primary graph plus optional line graph.
+
+    In addition to the legacy generic fields, this class can also carry the
+    standardized equivariant graph fields used by future equivariant processors:
+
+        z, pos, edge_index, edge_vec, edge_dist, cell, pbc, shifts
+
+    These fields are optional so existing generic workflows remain compatible.
     """
 
     def __init__(self,
@@ -157,9 +366,20 @@ class Generic_Graph_Data(Data):
                  node_A=None,
                  edge_A=None,
                  mask_edge_A=None,
-                 node_G_amounts = None,
-                 node_A_amounts = None,
-                 edge_A_amounts = None
+                 node_G_amounts=None,
+                 node_A_amounts=None,
+                 edge_A_amounts=None,
+                 z=None,
+                 pos=None,
+                 edge_index=None,
+                 edge_vec=None,
+                 edge_dist=None,
+                 cell=None,
+                 pbc=None,
+                 shifts=None,
+                 global_atom_indices=None,
+                 atom_graph_batch=None,
+                 edge_graph_batch=None
                  ):
         super().__init__()
         self.reference = reference
@@ -168,37 +388,79 @@ class Generic_Graph_Data(Data):
         self.node_G = node_G
         self.node_A = node_A
         self.edge_A = edge_A
+        self.mask_edge_A = mask_edge_A
         self.node_G_amounts = node_G_amounts
         self.node_A_amounts = node_A_amounts
         self.edge_A_amounts = edge_A_amounts
+
+        # Order-style aliases used by the modular GNN framework.
+        self.x_1 = node_G
+        self.x_2 = node_A
+        self.x_3 = edge_A
+        self.edge_index_2 = edge_index_G
+        self.edge_index_3 = edge_index_A
+
+        # PyG/equivariant-style aliases.  If an explicit equivariant edge_index
+        # is not supplied, default to the primary graph connectivity.
+        self.edge_index = edge_index if edge_index is not None else edge_index_G
+        self.z = z
+        self.pos = pos
+        self.edge_vec = edge_vec
+        self.edge_dist = edge_dist
+        self.cell = cell
+        self.pbc = pbc
+        self.shifts = shifts
+        self.global_atom_indices = global_atom_indices
+        self.atom_graph_batch = atom_graph_batch
+        self.edge_graph_batch = edge_graph_batch
+
         self.gid = None
 
     def __inc__(self, key, value, *args, **kwargs):
-        if key == 'edge_index_G':
+        if key == "edge_index_G":
             return self.node_G.size(0)
-        if key == 'edge_index_A':
+
+        if key == "edge_index_A":
             return self.node_A.size(0)
-        else:
-            return super().__inc__(key, value, *args, **kwargs)
+
+        if key == "edge_index":
+            if self.z is not None:
+                return self.z.size(0)
+            if self.pos is not None:
+                return self.pos.size(0)
+            return self.node_G.size(0)
+
+        if key == "global_atom_indices":
+            return 0
+
+        if key in {"shifts", "edge_vec", "edge_dist", "cell", "pbc"}:
+            return 0
+
+        return super().__inc__(key, value, *args, **kwargs)
+
+    def __cat_dim__(self, key, value, *args, **kwargs):
+        if key in {'cell', 'pbc'}:
+            return None
+        return super().__cat_dim__(key, value, *args, **kwargs)
 
     def generate_gid(self):
         self.gid = secrets.token_hex(64)
 
 class Atomic_Graph_Data(Data):
-    """Custom PyG data for representing a pair of two graphs: one for regular atomic
-    structure (atom and bonds) and the other for bond/dihedral angles.
+    """Custom PyG data for atom/bond graphs plus optional angle/dihedral graph.
 
-    The following arguments assume an atomic graph of `N_atm` atoms with `N_bnd` bonds,
-    and an angular graph of `N_ang` angles (including dihedral angles, if there's any).
+    The legacy ALIGNN fields are kept unchanged:
 
-    Args:
-        edge_index_G (LongTensor): Edge index of the atomic graph "G".
-        x_atm (Tensor): Atom features.
-        x_bnd (Tensor): Bond features.
-        edge_index_A (LongTensor): Edge index of the angular graph "A".
-        x_ang (Tensor): Angle features.
-        mask_dih_ang (Boolean Tensor, optional): If the angular graph contains dihedral
-            angles, this mask indicates which angles are dihedral angles.
+        x_atm, x_bnd, x_ang, edge_index_G, edge_index_A
+
+    This class can also carry standardized equivariant fields:
+
+        z, pos, edge_index, edge_vec, edge_dist, cell, pbc, shifts
+
+    ``edge_index`` is the equivariant/primary neighbor graph.  For global atomic
+    graphs it is usually identical to ``edge_index_G``.  For local atom-centered
+    graphs, it can be a local remapping while ``edge_index_G`` preserves the
+    existing legacy/global-index behavior.
     """
 
     def __init__(self,
@@ -211,7 +473,18 @@ class Atomic_Graph_Data(Data):
                  atm_amounts,
                  bnd_amounts,
                  ang_amounts,
-                 mask_dih_ang=None
+                 mask_dih_ang=None,
+                 z=None,
+                 pos=None,
+                 edge_index=None,
+                 edge_vec=None,
+                 edge_dist=None,
+                 cell=None,
+                 pbc=None,
+                 shifts=None,
+                 global_atom_indices=None,
+                 atom_graph_batch=None,
+                 edge_graph_batch=None
                  ):
         super().__init__()
         self.atoms = atoms
@@ -225,15 +498,54 @@ class Atomic_Graph_Data(Data):
         self.bnd_amounts = bnd_amounts
         self.ang_amounts = ang_amounts
 
+        # Order-style aliases used by the modular GNN framework.
+        self.x_1 = x_atm
+        self.x_2 = x_bnd
+        self.x_3 = x_ang
+        self.edge_index_2 = edge_index_G
+        self.edge_index_3 = edge_index_A
+
+        # Standard equivariant graph fields.
+        self.edge_index = edge_index if edge_index is not None else edge_index_G
+        self.z = z
+        self.pos = pos
+        self.edge_vec = edge_vec
+        self.edge_dist = edge_dist
+        self.cell = cell
+        self.pbc = pbc
+        self.shifts = shifts
+        self.global_atom_indices = global_atom_indices
+        self.atom_graph_batch = atom_graph_batch
+        self.edge_graph_batch = edge_graph_batch
+
         self.gid = None
 
     def __inc__(self, key, value, *args, **kwargs):
-        if key == 'edge_index_G':
+        if key == "edge_index_G":
             return self.x_atm.size(0)
-        if key == 'edge_index_A':
+
+        if key == "edge_index_A":
             return self.x_bnd.size(0)
-        else:
-            return super().__inc__(key, value, *args, **kwargs)
+
+        if key == "edge_index":
+            if hasattr(self, "z") and self.z is not None:
+                return self.z.size(0)
+            if hasattr(self, "pos") and self.pos is not None:
+                return self.pos.size(0)
+            return self.x_atm.size(0)
+
+        if key == "global_atom_indices":
+            return 0
+
+        if key in {"shifts", "edge_vec", "edge_dist", "cell", "pbc"}:
+            return 0
+
+        return super().__inc__(key, value, *args, **kwargs)
+
+    def __cat_dim__(self, key, value, *args, **kwargs):
+        if key in {'cell', 'pbc'}:
+            return None
+        return super().__cat_dim__(key, value, *args, **kwargs)
 
     def generate_gid(self):
         self.gid = secrets.token_hex(64)

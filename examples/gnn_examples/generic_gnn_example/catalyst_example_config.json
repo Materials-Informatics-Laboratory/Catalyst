@@ -1,0 +1,158 @@
+{
+  "paths": {
+    "active_learning_data_dir": "active_learning_data"
+  },
+  "workflow": {
+    "generate_graphs": false,
+    "project_graphs": false,
+    "generate_samples": false,
+    "train": true,
+    "retrain": true,
+    "test": true,
+    "plot_test": false,
+    "plot_training": false,
+    "ranking": false,
+    "predictions": false,
+    "active_learning": false,
+    "visualize_final_graph": true
+  },
+  "synthetic_data": {
+    "n_types": 4,
+    "n_data": 1000,
+    "n_dim": 3,
+    "n_nodes_range": [
+      5,
+      50
+    ],
+    "neighbor_range": [
+      3,
+      9
+    ],
+    "active_neighbor_range": [
+      10,
+      50
+    ]
+  },
+  "model_architecture": {
+    "cutoff": 50.0,
+    "n_convs": 3,
+    "projection_in_dim": 100,
+    "projection_out_dim": 100,
+    "regression_in_dim": 100,
+    "regression_out_dim": 1,
+    "conv_type": "edge_conditioned",
+    "pooling": "sum"
+  },
+  "projection": {
+    "umap_n_neighbors": 10,
+    "umap_min_dist": 0.1,
+    "umap_n_components": 2
+  },
+  "training_overrides": {
+    "training_batch_size": [
+      10,
+      10
+    ],
+    "active_learning_batch_size": [
+      1,
+      1
+    ],
+    "num_epochs": 10,
+    "train_delta": 0.001,
+    "train_tolerance": 0.001
+  },
+  "catalyst_parameters": {
+    "device_dict": {
+      "world_size": 1,
+      "device": "cuda",
+      "ddp_backend": "gloo",
+      "run_ddp": false,
+      "pin_memory": false,
+      "find_unused_parameters": false,
+      "use_amp": false
+    },
+    "io_dict": {
+      "main_path": ".",
+      "loaded_model_name": null,
+      "data_dir": "data",
+      "model_dir": null,
+      "results_dir": null,
+      "samples_dir": null,
+      "projection_dir": null,
+      "remove_old_model": false,
+      "write_indv_pred": false,
+      "graph_read_format": 0,
+      "training_info_nwrite_steps": 1
+    },
+    "sampling_dict": {
+      "sampling_types": [
+        "kmeans",
+        "kmeans"
+      ],
+      "split": [
+        0.2,
+        0.75
+      ],
+      "sampling_seed": 112358,
+      "params_groups": [
+        {
+          "clusters": 5
+        },
+        {
+          "clusters": 5
+        }
+      ]
+    },
+    "loader_dict": {
+      "shuffle_loader": false,
+      "batch_size": [
+        100,
+        -1
+      ],
+      "num_workers": 0,
+      "shuffle_steps": 10
+    },
+    "model_dict": {
+      "n_models": 1,
+      "num_epochs": 5,
+      "train_delta": 0.1,
+      "train_tolerance": 1.0,
+      "worsen_tolerance": 2.0,
+      "patience": 5,
+      "max_deltas": 4,
+      "loss_params": {
+        "function": "MSELoss"
+      },
+      "accumulate_loss": "exact",
+      "model": null,
+      "strict_loss_policy": false,
+      "batchnorm": false,
+      "interpretable": false,
+      "restart_training": false,
+      "optimizer_params": {
+        "dynamic_lr": true,
+        "optimizer": "AdamW",
+        "params_group": {
+          "lr": 0.001,
+          "lr_decay_factor": 0.95
+        }
+      },
+      "active_learning": true,
+      "active_learning_params_group": {
+        "sampling_params_group": {
+          "algorithm": "property",
+          "exploration_weight": 0.5,
+          "samples_per_iteration": 10,
+          "exploitation_strategy": "greedy"
+        },
+        "training_params_group": {
+          "train_with_previous": true,
+          "percent_use_previous": 0.01,
+          "epochs_per_iteration": 50,
+          "iterations": 10
+        },
+        "training_data_dir": "data"
+      }
+    }
+  }
+}
