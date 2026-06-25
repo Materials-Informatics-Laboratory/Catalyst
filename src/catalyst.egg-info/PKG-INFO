@@ -1,0 +1,87 @@
+Metadata-Version: 2.4
+Name: catalyst
+Version: 1.0.0
+Summary: A library for implementing the Catalyst framework
+Home-page: https://github.com/Materials-Informatics-Laboratory/Catalyst
+Author: James Chapman
+Author-email: jc112358@bu.edu
+Requires-Python: >=3.7
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: ase
+Requires-Dist: torch>=2.0.0
+Requires-Dist: torch-geometric>=2.0.1
+Requires-Dist: networkx
+Requires-Dist: scipy
+Requires-Dist: umap-learn
+Requires-Dist: pandas
+Requires-Dist: scikit-learn
+Requires-Dist: torch-scatter
+Requires-Dist: gputils
+Requires-Dist: periodictable
+Dynamic: license-file
+
+<!-- badges: start -->
+<!-- WARNING: -->
+<!-- The ?branch=release-x.y.y is updated automatically by the initiate_version_release workflow -->
+[![All Contributors](https://img.shields.io/badge/all_contributors-4-orange.svg?style=flat-square)](#contributors)
+![License](https://img.shields.io/badge/License-MIT-yellow.svg)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.14861737.svg)](https://doi.org/10.5281/zenodo.14861737)
+
+<!-- badges: end -->
+
+![Screenshot](https://github.com/Materials-Informatics-Laboratory/Catalyst/blob/main/visuals/catalyst2.png?raw=true)
+
+# Catalyst
+General-purpose toolkit for analyzing atomistic simulations via machine learning. Whether it's building regression models to predict materials properties or performing unsupervised projections and clustering to characterize and understand trends, Catalyst is the perfect tool. Catalyst is built around being user-friendly, abstracting much of the complex machine learning and providing an easy-to-user API that wraps heavy-lifting codes such as PyTorch. Catalyst provides a highly GPU-parallelized framework that streamlines regression model training so you can quickly build and deploy property models for your research needs. Catalyst comes with several built-in and pre-optimized raph neural network routines, such as ALIGNN-d and MeshGraph networks, but also provides the user with the ability to design their own ML architechtures (using PyTorch) and train them via our GPU-parallelized training routines. Catalyst is designed with the user in-mind and comes optimized and ready for all of your research needs. Catalyst has been optimized for both Windows and Linux and has been tested to work on systems ranging from small laptops to high performance computing environments. See the user manual for a detailed list of internal parameters, examples, and the theory behind Catalyst.
+
+If you would like to see new features added to Catalyst feel free to request something via the Issues tab. Please also report bugs and we patch them as quickly as possible.
+
+## Installation
+
+The following dependencies need to be installed before installing `catalyst`. The installation time is typically within 10 minutes on a normal local machine.
+- torch==2.4.1
+- torch-geometric>=2.6.1
+- torch-scatter
+
+- numpy>=2.0.2
+- scipy>=1.13.0
+- pandas
+- scikit-learn
+- joblib
+- networkx>=3.3
+
+- ase>=3.22.1
+- periodictable>=1.7.1
+- numba>=0.60.0
+
+- psutil
+- GPUtil
+
+- umap-learn
+
+To install `catalyst`, clone this repo and run:
+```bash
+pip install -e /path/to/the/repo
+```
+
+The `-e` option signifies an [editable install](https://pip.pypa.io/en/stable/topics/local-project-installs/), which is well suited for development; this allows you to edit the source code without having to re-install.
+
+To uninstall:
+```bash
+pip uninstall catalyst
+```
+
+## How to use
+
+`catalyst` is intended to be a plug-and-play framework where you provide data in the form as an `ase` atoms object. Tools such as graph construction and machine learning model training/testing are provided for you to build models for your atomistic systems. `catalyst` abstracts much of this process and provides an easy-to-use API for rapid building of ML models. `catalyst` also provides access to post-process scripts and visualization tools to help you better understand how your models behave, and why. 
+
+- The `src` folder contains the source code.
+- The `examples` folder contains examples that explain how to use `catalyst`'s various functions.
+
+## Contact
+
+- Questions regarding Catlayst should be directed to jc112358@bu.edu.
+
+## Cite Catalyst!
+- Please cite Catalyst using the reference: `Materials-Informatics-Laboratory. (2025). Materials-Informatics-Laboratory/Catalyst: v1.0.3 (v1.0.3). Zenodo. https://doi.org/10.5281/zenodo.14861737`

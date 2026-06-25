@@ -170,6 +170,24 @@ class GNN():
         # -----------------------------
         core_state = core.state_dict()
 
+        def _strip_checkpoint_prefixes(state_dict):
+            cleaned = {}
+
+            for key, value in state_dict.items():
+                new_key = key
+
+                # torch.compile() checkpoints often add this prefix.
+                if new_key.startswith("_orig_mod."):
+                    new_key = new_key[len("_orig_mod."):]
+
+                # DDP/DataParallel checkpoints often add this prefix.
+                if new_key.startswith("module."):
+                    new_key = new_key[len("module."):]
+
+                cleaned[new_key] = value
+
+            return cleaned
+
         model_has_module = next(iter(core_state)).startswith("module.")
         checkpoint_has_module = next(iter(model_state)).startswith("module.")
 
@@ -185,6 +203,7 @@ class GNN():
                 for k, v in model_state.items()
             }
 
+        model_state = _strip_checkpoint_prefixes(model_state)
         core.load_state_dict(model_state)
 
         # -----------------------------
@@ -211,6 +230,8 @@ class GNN():
             return checkpoint.get("epoch", None)
 
         return None
+
+
 
     def load_data(self,params,format=0, rank=0,load_training=True,samples_file=None):
         if format != 2 and format != -1:

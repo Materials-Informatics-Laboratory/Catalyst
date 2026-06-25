@@ -6,8 +6,8 @@
     "generate_graphs": false,
     "project_graphs": false,
     "generate_samples": false,
-    "train": false,
-    "retrain": false,
+    "train": true,
+    "retrain": true,
     "test": true,
     "plot_test": false,
     "plot_training": false,
@@ -57,16 +57,16 @@
       1,
       1
     ],
-    "num_epochs": 1000,
+    "num_epochs": 10,
     "train_delta": 0.001,
     "train_tolerance": 0.001
   },
   "catalyst_parameters": {
     "device_dict": {
-      "world_size": 2,
-      "device": "cpu",
+      "world_size": 1,
+      "device": "cuda",
       "ddp_backend": "gloo",
-      "run_ddp": false,
+      "run_ddp": true,
       "pin_memory": false,
       "find_unused_parameters": false,
       "use_amp": false
