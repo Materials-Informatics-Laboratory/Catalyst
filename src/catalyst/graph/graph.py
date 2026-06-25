@@ -14,6 +14,136 @@ from numba import njit, prange
 
 mask2index = lambda mask: np.flatnonzero(mask)
 
+import warnings
+import numpy as np
+from ase.geometry import get_distances
+
+
+def build_knn_edges_from_atoms(
+    atoms,
+    k,
+    cutoff=None,
+    cutoff_multiplier=2.0,
+    dtype=np.float32,
+    require_full_k=False,
+    symmetrize=False,
+):
+    """
+    Build a robust k-nearest-neighbor graph from an ASE Atoms object.
+
+    This uses ASE's minimum-image convention, so it works for arbitrary
+    triclinic cells, orthorhombic cells, partial PBC, full PBC, and
+    nonperiodic structures.
+
+    Parameters
+    ----------
+    atoms : ase.Atoms
+        Atomic structure.
+    k : int
+        Number of nearest neighbors requested per atom.
+    cutoff : float or None
+        If provided, only neighbors within cutoff_multiplier * cutoff are kept.
+        If None, no distance upper bound is applied.
+    cutoff_multiplier : float
+        Multiplier used for the distance upper bound.
+    dtype : dtype
+        Output distance dtype.
+    require_full_k : bool
+        If True, raise an error if any atom has fewer than k valid neighbors.
+        If False, return fewer edges for those atoms.
+    symmetrize : bool
+        If True, add reverse edges j -> i as well.
+
+    Returns
+    -------
+    edge_index : np.ndarray, shape (2, n_edges)
+        Directed edge indices.
+    edge_distances : np.ndarray, shape (n_edges,)
+        Edge distances.
+    """
+
+    if k < 1:
+        raise ValueError("k must be >= 1.")
+
+    n_atoms = len(atoms)
+    if n_atoms == 0:
+        raise ValueError("Cannot build a kNN graph for an empty Atoms object.")
+
+    if n_atoms == 1:
+        if require_full_k:
+            raise ValueError("Cannot find neighbors for a single-atom structure.")
+        return np.empty((2, 0), dtype=int), np.empty((0,), dtype=dtype)
+
+    atoms = atoms.copy()
+    atoms.wrap()
+
+    positions = atoms.get_positions()
+    cell = atoms.cell
+    pbc = atoms.pbc
+
+    max_neighbors = min(k, n_atoms - 1)
+
+    distance_upper_bound = None
+    if cutoff is not None:
+        distance_upper_bound = cutoff_multiplier * cutoff
+
+    all_i = []
+    all_j = []
+    all_d = []
+
+    for atom_i in range(n_atoms):
+        _, distances = get_distances(
+            positions[atom_i],
+            positions,
+            cell=cell,
+            pbc=pbc,
+        )
+
+        distances = np.asarray(distances).reshape(-1)
+
+        # Remove self-neighbor.
+        distances[atom_i] = np.inf
+
+        # Apply optional upper-bound cutoff.
+        if distance_upper_bound is not None:
+            distances[distances > distance_upper_bound] = np.inf
+
+        order = np.argsort(distances)
+        chosen = order[:max_neighbors]
+        chosen_dists = distances[chosen]
+
+        valid = np.isfinite(chosen_dists)
+        chosen = chosen[valid]
+        chosen_dists = chosen_dists[valid]
+
+        if require_full_k and len(chosen) < k:
+            raise ValueError(
+                f"Atom {atom_i} only has {len(chosen)} valid neighbors, "
+                f"but k={k} was requested."
+            )
+
+        if len(chosen) < k:
+            warnings.warn(
+                f"Atom {atom_i} only has {len(chosen)} valid neighbors "
+                f"within the requested search range. Returning fewer than k edges "
+                f"for this atom.",
+                RuntimeWarning,
+            )
+
+        all_i.extend([atom_i] * len(chosen))
+        all_j.extend(chosen.tolist())
+        all_d.extend(chosen_dists.tolist())
+
+    edge_index = np.array([all_i, all_j], dtype=int)
+    edge_distances = np.array(all_d, dtype=dtype)
+
+    if symmetrize and edge_index.shape[1] > 0:
+        rev_edge_index = edge_index[::-1]
+        edge_index = np.concatenate([edge_index, rev_edge_index], axis=1)
+        edge_distances = np.concatenate([edge_distances, edge_distances], axis=0)
+
+    return edge_index, edge_distances
+
 class Generic_Graph_Data(Data):
     """Custom PyG data for representing a pair of two graphs: one for the original graph and the other for its line grpah variant.
     This data is used to represent an arbitrary graph and does not hard-code variables based on their atomistic connection.
@@ -317,65 +447,18 @@ def atoms2graph(atoms, cutoff,k=5):
     """
     if k < 0:
         i, j, d = neighbor_list('ijd', atoms, cutoff)
+        return np.stack((i, j)), np.array(d).astype(np.float32)
     else:
-        atoms.wrap()
-        lv_norm = [np.linalg.norm(atoms.cell[0]).item(),
-                   np.linalg.norm(atoms.cell[1]).item(),
-                   np.linalg.norm(atoms.cell[2]).item()]
+        edge_index, edge_distances = build_knn_edges_from_atoms(
+            atoms=atoms,
+            k=k,
+            cutoff=cutoff,
+            cutoff_multiplier=2.0,
+            require_full_k=False,
+            symmetrize=False,
+        )
 
-        tree = cKDTree(data=atoms.get_positions(),boxsize=lv_norm)
-        dd, ii = tree.query(x=atoms.get_positions(),k=k+1,distance_upper_bound=2.0*cutoff)
-
-        i = [[m] * k for m in range(len(ii))]
-        i = [n for one_dim in i for n in one_dim]
-        j = [sublist[1:] for sublist in ii]
-        j = [n for one_dim in j for n in one_dim]
-        d = [sublist[1:] for sublist in dd]
-        d = [n for one_dim in d for n in one_dim]
-
-    return np.stack((i, j)), np.array(d).astype(np.float32)
-
-
-
-def atoms2knngraph(atoms, cutoff, k=12, scale_inv=True):
-    """Convert an ASE `Atoms` object into a graph based on k nearest neighbors.
-    Returns the graph (in COO format), and its edge attributes (distance vectors `edge_attr`).
-
-    Args:
-        atoms (ase.Atoms): Collection of atoms to be converted to a graph.
-        cutoff (float): Cutoff radius for nearest neighbor search.
-            These neighbors are then down-selected to k nearest neighbors.
-        k (int, optional): Number of nearest neighbors for each atom.
-        scale_inv (bool, optional): If set to `True`, normalize the distance
-            vectors `edge_attr` such that each atom's furthest neighbor is
-            one unit distance away. This makes the knn graph scale-invariant.
-
-    Returns:
-       tuple: Tuple of (edge_index, edge_attr) that describes the knn graph.
-
-    :rtype: (ndarray, ndarray)
-    """
-    edge_src, edge_dst, edge_dists = neighbor_list('ijd', atoms, cutoff=cutoff)
-
-    src_groups  = np_groupby(edge_src, groups=edge_dst)
-    dst_groups  = np_groupby(edge_dst, groups=edge_dst)
-    dist_groups = np_groupby(edge_dists, groups=edge_dst)
-
-    knn_idx = [np.argsort(d)[:k] for d in dist_groups]
-    for indices in knn_idx:
-        if len(indices) != k:
-            raise Exception("The number of nearest neighbors is not K. Consider increasing the cutoff radius.")
-
-    src_knn = tuple(s[indices] for s, indices in zip(src_groups, knn_idx))
-    dst_knn = tuple(d[indices] for d, indices in zip(dst_groups, knn_idx))
-
-    i = np.concatenate(src_knn)
-    j = np.concatenate(dst_knn)
-
-    edge_index = np.stack((i, j))
-    edge_attr = D.astype(np.float32)
-
-    return edge_index, edge_attr
+        return edge_index, edge_distances
 
 permute_2 = partial(itertools.permutations, r=2)
 def line_graph(edge_index_G):

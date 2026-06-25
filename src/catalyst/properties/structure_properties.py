@@ -22,19 +22,28 @@ def get_3body_angle(data,edge_index_G, edge_index_A):
         angles.append(angle_between(v1, v2))
     return np.radians(angles)
 
-def get_bnd_angs(atoms, edge_index_G, edge_index_A_bnd_ang):
-    """Return the bond angles (in radians) for the (angular) line graph edges.
-    """
-    indices = edge_index_G.T[edge_index_A_bnd_ang.T].reshape(-1, 4)
-    bnd_angs = atoms.get_angles(indices[:, [0, 1, 2]])
-    return np.radians(bnd_angs)
+def get_bnd_angs(atoms, edge_index_G, edge_index_A_bnd_ang, mic=True):
+    """Return the bond angles, in radians, for angular line-graph edges."""
+    edge_index_A_bnd_ang = np.asarray(edge_index_A_bnd_ang)
 
-def get_dih_angs(atoms, edge_index_G, edge_index_A_dih_ang):
-    """Return the dihedral angles (in radians) for the dihedral line graph edges.
-    """
+    if edge_index_A_bnd_ang.size == 0:
+        return np.empty((0,), dtype=np.float32)
+
+    indices = edge_index_G.T[edge_index_A_bnd_ang.T].reshape(-1, 4)
+    bnd_angs = atoms.get_angles(indices[:, [0, 1, 2]], mic=mic)
+    return np.radians(bnd_angs).astype(np.float32)
+
+
+def get_dih_angs(atoms, edge_index_G, edge_index_A_dih_ang, mic=True):
+    """Return the dihedral angles, in radians, for dihedral line-graph edges."""
+    edge_index_A_dih_ang = np.asarray(edge_index_A_dih_ang)
+
+    if edge_index_A_dih_ang.size == 0:
+        return np.empty((0,), dtype=np.float32)
+
     indices = edge_index_G.T[edge_index_A_dih_ang.T].reshape(-1, 4)
-    dih_angs = atoms.get_dihedrals(indices[:, [0, 1, 3, 2]])
-    return np.radians(dih_angs)
+    dih_angs = atoms.get_dihedrals(indices[:, [0, 1, 3, 2]], mic=mic)
+    return np.radians(dih_angs).astype(np.float32)
 
 def get_unique_2body(bonds):
     unique_bonds, indices = unique_lists_2d(bonds,return_indices=1)
