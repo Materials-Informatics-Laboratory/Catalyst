@@ -1,0 +1,145 @@
+{
+  "workflow": {
+    "generate_graphs": true,
+    "generate_samples": true,
+    "normalize_targets": true,
+    "train": true,
+    "retrain": false,
+    "test": true,
+    "plot_test": true,
+    "plot_training": true,
+    "predictions": false
+  },
+  "al_fcc": {
+    "num_species": 1,
+    "lattice_constant": 4.05,
+    "repeat": [
+      3,
+      3,
+      3
+    ],
+    "temperature_K": 800.0,
+    "timestep_fs": 1.0,
+    "md_steps": 300,
+    "sample_every": 3,
+    "equilibration_steps": 20,
+    "cutoff": 3.35,
+    "neighbor_k": -1,
+    "include_dihedrals": false,
+    "max_graph_attempts": 6,
+    "cutoff_scale": 1.15,
+    "max_cutoff": 5.0
+  },
+  "sampling": {
+    "sampling_seed": 112358,
+    "test_fraction": 0.2,
+    "validation_fraction_of_remaining": 0.25
+  },
+  "force_normalization": {
+    "mode": "scalar"
+  },
+  "model_architecture": {
+    "n_convs": 4,
+    "hidden_dim": 128,
+    "vector_hidden_dim": 128,
+    "edge_dim": null
+  },
+  "training_overrides": {
+    "training_batch_size": [
+      4,
+      4
+    ],
+    "num_epochs": 50,
+    "train_delta": 0.0,
+    "train_tolerance": 0.0
+  },
+  "catalyst_parameters": {
+    "device_dict": {
+      "world_size": 1,
+      "device": "cuda",
+      "ddp_backend": "gloo",
+      "run_ddp": false,
+      "pin_memory": false,
+      "find_unused_parameters": false,
+      "use_amp": false
+    },
+    "io_dict": {
+      "main_path": ".",
+      "loaded_model_name": null,
+      "data_dir": "data",
+      "model_dir": null,
+      "results_dir": null,
+      "samples_dir": null,
+      "projection_dir": null,
+      "remove_old_model": true,
+      "checkpoint_keep_last": 1,
+      "checkpoint_verbose": true,
+      "write_indv_pred": false,
+      "graph_read_format": 0,
+      "training_info_nwrite_steps": 1
+    },
+    "sampling_dict": {
+      "sampling_types": [
+        "random",
+        "random"
+      ],
+      "split": [
+        0.2,
+        0.75
+      ],
+      "sampling_seed": 112358,
+      "params_groups": [
+        {},
+        {}
+      ]
+    },
+    "loader_dict": {
+      "shuffle_loader": false,
+      "batch_size": [
+        4,
+        4
+      ],
+      "num_workers": 0,
+      "shuffle_steps": 10,
+      "follow_batch": [
+        "x_atm",
+        "x_bnd",
+        "x_ang"
+      ]
+    },
+    "model_dict": {
+      "n_models": 1,
+      "num_epochs": 50,
+      "train_delta": 0.0,
+      "train_tolerance": 0.0,
+      "worsen_tolerance": 999.0,
+      "patience": 999,
+      "max_deltas": 999,
+      "loss_params": {
+        "function": "MSELoss"
+      },
+      "accumulate_loss": "node",
+      "prediction_params": {
+        "target_key": "target_vector",
+        "output_key": "vector",
+        "prefer_equivariant_key": "vector"
+      },
+      "model": null,
+      "strict_loss_policy": false,
+      "batchnorm": false,
+      "interpretable": false,
+      "restart_training": false,
+      "optimizer_params": {
+        "dynamic_lr": false,
+        "optimizer": "AdamW",
+        "params_group": {
+          "lr": 0.001,
+          "weight_decay": 0.0,
+          "lr_decay_factor": 0.95
+        }
+      },
+      "active_learning": false,
+      "active_learning_params_group": {}
+    }
+  }
+}

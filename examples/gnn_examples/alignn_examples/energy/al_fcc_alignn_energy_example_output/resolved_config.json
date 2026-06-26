@@ -18,6 +18,8 @@
   "max_graph_attempts": 6,
   "cutoff_scale": 1.15,
   "max_cutoff": 5.0,
+  "include_equivariant_fields": true,
+  "include_edge_geometry": true,
   "train_fraction": 0.7,
   "validation_fraction": 0.15,
   "test_fraction": 0.15,

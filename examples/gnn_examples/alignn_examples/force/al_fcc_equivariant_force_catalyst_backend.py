@@ -1,46 +1,77 @@
 """
-Al FCC ALIGNN energy-learning example using the Catalyst training backend.
+Al FCC equivariant force-learning example using the Catalyst training backend.
 
 Recommended location:
-    catalyst/examples/gnn_example/al_fcc_alignn_energy_catalyst_backend.py
+    catalyst/examples/gnn_examples/alignn_examples/force/al_fcc_equivariant_force_catalyst_backend.py
 
-This example follows the same pattern as the full random Catalyst example:
+This example is the force-learning analogue of the Catalyst-backend energy
+example. It does NOT define local train_one_epoch(...), evaluate(...), or manual
+checkpoint/inference loops.
 
-    cat = Catalyst()
-    cat.set_params(build_catalyst_parameters(CONFIG))
-
-    cat.set_model(build_regression_model(DEVICE))
-    run_distributed_or_single(cat, run_training, cat)
-
-    run_inference(...)
-
-It does NOT define its own epoch loop, train_one_epoch(...), evaluate(...), or
-local validation loop. Training, retraining, checkpointing, DDP, testing, and
-prediction are delegated to the Catalyst backend:
+Training, validation, checkpointing, DDP, and inference are delegated to:
 
     catalyst.ml.training.run_training
     catalyst.ml.inference.run_inference
     catalyst.ml.gnn.GNN.GNN
 
-The only things this example owns are:
-    - generating Al FCC ASE/EMT MD frames,
-    - converting them to alignnd graphs,
-    - creating train/validation/test sample dictionaries,
-    - building the model object that Catalyst trains,
-    - optional plotting of the backend-generated inference output.
+The example owns only:
+    - ASE/EMT MD data generation,
+    - alignnd graph generation with equivariant fields,
+    - train/validation/test sample dictionaries,
+    - force target normalization,
+    - equivariant vector model construction,
+    - optional plotting of backend-generated inference outputs.
 
-Required package updates for the new builder/equivariant-compatible stack:
-    - catalyst/ml/gnn/modules/models/gnn_builder.py
-    - catalyst/ml/gnn/modules/models/__init__.py
-    - catalyst/ml/gnn/modules/utils/predict.py
-    - catalyst/ml/gnn/GNN.py
+Model target
+------------
+This trains one vector-valued model head:
+
+    pred shape   = [total_atoms_in_batch, 3]
+    target shape = [total_atoms_in_batch, 3]
+
+It does NOT train Fx, Fy, and Fz as separate scalar targets. The Catalyst loss is
+a single tensor MSE over the full vector field.
+
+Required package updates
+------------------------
+This assumes the updated Catalyst stack is installed:
+
+    catalyst/ml/gnn/GNN.py
+    catalyst/ml/gnn/modules/utils/predict.py
+    catalyst/ml/gnn/modules/models/gnn_builder.py
+    catalyst/ml/gnn/modules/equivariant/*
+
+Important config
+----------------
+The key settings are:
+
+    model_dict.accumulate_loss = "node"
+    model_dict.prediction_params.target_key = "target_vector"
+    model_dict.prediction_params.output_key = "vector"
+
+and the model is built with:
+
+    build_model(
+        model_type="equivariant",
+        output_type="vector",
+        output_level="node",
+        out_dim=1,
+        return_dict=False,
+    )
+
+The equivariant vector decoder emits [N_atoms, 1, 3], and the small adapter
+squeezes that to [N_atoms, 3] before the Catalyst loss sees it.
+
+Run
+---
+    CATALYST_AL_FCC_FORCE_CONFIG=al_fcc_equivariant_force_catalyst_config.json \\
+    python al_fcc_equivariant_force_catalyst_backend.py
 """
 
 from __future__ import annotations
 
 import glob
 import json
-import math
 import os
 import re
 import shutil
@@ -51,13 +82,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.multiprocessing as mp
-from torch import nn
-
-try:
-    from torch_geometric.utils import scatter
-except ImportError:  # pragma: no cover
-    scatter = None
-
 from ase import units
 from ase.build import bulk
 from ase.calculators.emt import EMT
@@ -81,8 +105,8 @@ from catalyst.observer.params import Catalyst
 
 CONFIG_PATH = Path(
     os.environ.get(
-        "CATALYST_AL_FCC_CONFIG",
-        Path(__file__).with_name("al_fcc_alignn_energy_catalyst_config.json"),
+        "CATALYST_AL_FCC_FORCE_CONFIG",
+        Path(__file__).with_name("al_fcc_equivariant_force_catalyst_config.json"),
     )
 )
 
@@ -90,10 +114,11 @@ CONFIG_PATH = Path(
 def load_json_config(config_path: Path = CONFIG_PATH) -> Dict[str, Any]:
     if not config_path.is_file():
         raise FileNotFoundError(
-            f"Could not find Catalyst Al FCC config file: {config_path}\n"
-            "Set CATALYST_AL_FCC_CONFIG=/path/to/config.json or place "
-            "al_fcc_alignn_energy_catalyst_config.json next to this script."
+            f"Could not find Catalyst Al FCC force config file: {config_path}\n"
+            "Set CATALYST_AL_FCC_FORCE_CONFIG=/path/to/config.json or place "
+            "al_fcc_equivariant_force_catalyst_config.json next to this script."
         )
+
     with config_path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
 
@@ -101,11 +126,11 @@ def load_json_config(config_path: Path = CONFIG_PATH) -> Dict[str, Any]:
 CONFIG = load_json_config()
 BASE_DIR = Path(__file__).resolve().parent
 
-# Frequently used settings. Edit the JSON file, not this script.
+WORKFLOW = CONFIG["workflow"]
 AL_CONFIG = CONFIG["al_fcc"]
 MODEL_CONFIG = CONFIG["model_architecture"]
+FORCE_CONFIG = CONFIG["force_normalization"]
 TRAINING_OVERRIDES = CONFIG["training_overrides"]
-WORKFLOW = CONFIG["workflow"]
 
 DEVICE = CONFIG["catalyst_parameters"]["device_dict"]["device"]
 
@@ -115,8 +140,8 @@ RUN_NORMALIZE_TARGETS = WORKFLOW.get("normalize_targets", True)
 RUN_TRAINING = WORKFLOW["train"]
 RUN_RETRAINING = WORKFLOW["retrain"]
 RUN_TESTING = WORKFLOW["test"]
-RUN_PLOT_TEST = WORKFLOW["plot_test"]
 RUN_PLOT_TRAINING = WORKFLOW["plot_training"]
+RUN_PLOT_TEST = WORKFLOW["plot_test"]
 RUN_PREDICTIONS = WORKFLOW["predictions"]
 
 TRAINING_BATCH_SIZE = TRAINING_OVERRIDES["training_batch_size"]
@@ -131,7 +156,6 @@ TRAINING_TOLERANCE_OVERRIDE = TRAINING_OVERRIDES["train_tolerance"]
 
 
 def resolve_relative_path(path_value: Optional[str]) -> Optional[str]:
-    """Resolve JSON path strings relative to this example script."""
     if path_value is None:
         return None
     path = Path(path_value)
@@ -141,23 +165,24 @@ def resolve_relative_path(path_value: Optional[str]) -> Optional[str]:
 
 
 def build_loss_function(loss_name: str):
-    """Convert the JSON loss-function name into a PyTorch loss object."""
     loss_functions = {
         "MSELoss": torch.nn.MSELoss,
         "L1Loss": torch.nn.L1Loss,
         "SmoothL1Loss": torch.nn.SmoothL1Loss,
     }
+
     if loss_name not in loss_functions:
         raise ValueError(
             f"Unsupported loss function {loss_name!r}. "
             f"Supported options are: {sorted(loss_functions)}"
         )
+
     return loss_functions[loss_name]()
 
 
 def latest_checkpoint(checkpoint_dir: Path, checkpoint_pattern: str = "checkpoint_epoch_*.pt") -> str:
-    """Find the checkpoint with the largest epoch number."""
     checkpoint_dir = Path(checkpoint_dir)
+
     if not checkpoint_dir.is_dir():
         raise FileNotFoundError(f"Checkpoint directory does not exist: {checkpoint_dir}")
 
@@ -181,10 +206,8 @@ def latest_checkpoint(checkpoint_dir: Path, checkpoint_pattern: str = "checkpoin
 
 
 def build_catalyst_parameters(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Build the Catalyst runtime parameter dictionary from JSON."""
     parameters = dict(config["catalyst_parameters"])
 
-    # Copy nested dictionaries so runtime edits do not mutate CONFIG unexpectedly.
     parameters["device_dict"] = dict(parameters["device_dict"])
     parameters["io_dict"] = dict(parameters["io_dict"])
     parameters["sampling_dict"] = dict(parameters.get("sampling_dict", {}))
@@ -197,12 +220,10 @@ def build_catalyst_parameters(config: Dict[str, Any]) -> Dict[str, Any]:
         model_dict["optimizer_params"]["params_group"]
     )
 
-    # Resolve paths relative to the script location.
     io_dict = parameters["io_dict"]
     for key in ["main_path", "data_dir", "model_dir", "results_dir", "samples_dir", "projection_dir"]:
         io_dict[key] = resolve_relative_path(io_dict.get(key))
 
-    # Reconstruct non-JSON Python objects.
     loss_params = dict(model_dict["loss_params"])
     loss_params["function"] = build_loss_function(loss_params["function"])
     if "sub_function" in loss_params and loss_params["sub_function"] is not None:
@@ -210,200 +231,109 @@ def build_catalyst_parameters(config: Dict[str, Any]) -> Dict[str, Any]:
     model_dict["loss_params"] = loss_params
     model_dict["model"] = None
 
-    # Make sure the new predict/GNN path can handle the direct tensor output from
-    # AtomicEnergyReadout.
+    # Critical for direct vector-field learning with the updated GNN/predict stack.
+    model_dict["accumulate_loss"] = "node"
     model_dict.setdefault("prediction_params", {})
     model_dict["prediction_params"] = dict(model_dict["prediction_params"])
-    model_dict["prediction_params"].setdefault("target_key", "y")
-    model_dict["prediction_params"].setdefault("prefer_equivariant_key", "scalar")
+    model_dict["prediction_params"]["target_key"] = "target_vector"
+    model_dict["prediction_params"]["output_key"] = "vector"
+    model_dict["prediction_params"]["prefer_equivariant_key"] = "vector"
 
     return parameters
 
 
-def scatter_sum(values: torch.Tensor, index: torch.Tensor, dim_size: int | None = None) -> torch.Tensor:
-    """Fallback scatter-sum used only by AtomicEnergyReadout."""
-    if dim_size is None:
-        dim_size = int(index.max().item()) + 1 if index.numel() > 0 else 0
-
-    out = values.new_zeros((dim_size,) + tuple(values.shape[1:]))
-    if values.numel() > 0:
-        out.index_add_(0, index.to(values.device), values)
-    return out
-
-
-class AlignnEnergyReadout(nn.Module):
+class ForceVectorOutputAdapter(torch.nn.Module):
     """
-    Order-aware graph-level energy decoder for ALIGNN/order models.
+    Adapter for the equivariant vector backend.
 
-    Uses atom, bond, and angle hidden states:
-        E = f([reduce_atoms(h_atm), reduce_bonds(h_bnd), reduce_angles(h_ang)])
+    The equivariant decoder represents vector-valued outputs as:
+        [N_nodes, n_vector_channels, 3]
 
-    This is much better for single-element systems because h_atm can be
-    graph-invariant while h_bnd/h_ang still contain geometry-dependent signal.
+    For forces, we want exactly one 3D vector per atom:
+        [N_nodes, 3]
+
+    Therefore the underlying equivariant model should use out_dim=1, and this
+    adapter removes the singleton vector-channel dimension before the Catalyst
+    GNN loss sees the prediction.
+
+    This is still one vector-valued model head. It is not three independent
+    scalar component models.
     """
 
-    def __init__(
-        self,
-        dim: int,
-        hidden_dim: int | None = None,
-        act=nn.SiLU(),
-        reduce: str = "mean",
-    ):
+    def __init__(self, model: torch.nn.Module):
         super().__init__()
+        self.model = model
 
-        hidden_dim = hidden_dim or dim
-        self.reduce = reduce
+    def forward(self, data):
+        out = self.model(data)
 
-        self.atom_proj = nn.Sequential(
-            nn.Linear(dim, hidden_dim),
-            act,
-            nn.Linear(hidden_dim, hidden_dim),
-            act,
-        )
+        if isinstance(out, dict):
+            if "vector" in out:
+                out = out["vector"]
+            elif "pred" in out:
+                out = out["pred"]
+            else:
+                raise KeyError(
+                    "ForceVectorOutputAdapter received a dict output, but it "
+                    "does not contain 'vector' or 'pred'."
+                )
 
-        self.bond_proj = nn.Sequential(
-            nn.Linear(dim, hidden_dim),
-            act,
-            nn.Linear(hidden_dim, hidden_dim),
-            act,
-        )
+        if torch.is_tensor(out) and out.dim() == 3:
+            if out.size(1) != 1 or out.size(2) != 3:
+                raise RuntimeError(
+                    "Expected equivariant force output with shape [N, 1, 3], "
+                    f"but got {tuple(out.shape)}. For one force vector per atom, "
+                    "build the equivariant model with out_dim=1."
+                )
+            out = out[:, 0, :]
 
-        self.angle_proj = nn.Sequential(
-            nn.Linear(dim, hidden_dim),
-            act,
-            nn.Linear(hidden_dim, hidden_dim),
-            act,
-        )
-
-        self.final = nn.Sequential(
-            nn.Linear(3 * hidden_dim, hidden_dim),
-            act,
-            nn.Linear(hidden_dim, 1),
-        )
-
-    def _first_existing(self, data, names):
-        for name in names:
-            if hasattr(data, name):
-                value = getattr(data, name)
-                if value is not None:
-                    return value
-        return None
-
-    def _batch(self, data, names, n_items, device):
-        for name in names:
-            if hasattr(data, name):
-                value = getattr(data, name)
-                if value is not None:
-                    return value.to(device)
-        return torch.zeros(n_items, dtype=torch.long, device=device)
-
-    def _reduce(self, values, batch):
-        values = values.float()
-        batch = batch.to(values.device)
-
-        n_graphs = int(batch.max().item()) + 1 if batch.numel() > 0 else 1
-        out = values.new_zeros((n_graphs, values.size(-1)))
-        out.index_add_(0, batch, values)
-
-        if self.reduce == "mean":
-            counts = values.new_zeros((n_graphs, 1))
-            counts.index_add_(0, batch, values.new_ones((values.size(0), 1)))
-            out = out / counts.clamp_min(1.0)
+        if not torch.is_tensor(out) or out.dim() != 2 or out.size(-1) != 3:
+            raise RuntimeError(
+                "ForceVectorOutputAdapter expected final force prediction shape "
+                f"[N, 3], but got {_shape_for_error(out)}."
+            )
 
         return out
 
-    def _pad_to(self, tensor, n_graphs):
-        if tensor.size(0) == n_graphs:
-            return tensor
-        if tensor.size(0) > n_graphs:
-            return tensor[:n_graphs]
-        pad = tensor.new_zeros((n_graphs - tensor.size(0), tensor.size(1)))
-        return torch.cat([tensor, pad], dim=0)
 
-    def forward(self, data):
-        h_atom = self._first_existing(data, ["h_atm", "h_1", "h_scalar"])
-        h_bond = self._first_existing(data, ["h_bnd", "h_2", "h_edge"])
-        h_angle = self._first_existing(data, ["h_ang", "h_3"])
-
-        if h_atom is None:
-            raise AttributeError("Missing atom hidden states: expected h_atm, h_1, or h_scalar.")
-
-        device = h_atom.device
-
-        atom_batch = self._batch(
-            data,
-            ["x_atm_batch", "x_1_batch", "batch"],
-            h_atom.size(0),
-            device,
-        )
-        atom_feat = self._reduce(self.atom_proj(h_atom), atom_batch)
-
-        n_graphs = atom_feat.size(0)
-
-        if h_bond is not None:
-            bond_batch = self._batch(
-                data,
-                ["x_bnd_batch", "x_2_batch", "node_A_batch"],
-                h_bond.size(0),
-                h_bond.device,
-            )
-            bond_feat = self._reduce(self.bond_proj(h_bond), bond_batch)
-            bond_feat = self._pad_to(bond_feat, n_graphs)
-        else:
-            bond_feat = atom_feat.new_zeros(atom_feat.shape)
-
-        if h_angle is not None:
-            angle_batch = self._batch(
-                data,
-                ["x_ang_batch", "x_3_batch", "edge_A_batch"],
-                h_angle.size(0),
-                h_angle.device,
-            )
-            angle_feat = self._reduce(self.angle_proj(h_angle), angle_batch)
-            angle_feat = self._pad_to(angle_feat, n_graphs)
-        else:
-            angle_feat = atom_feat.new_zeros(atom_feat.shape)
-
-        graph_feat = torch.cat([atom_feat, bond_feat, angle_feat], dim=-1)
-        energy = self.final(graph_feat)
-
-        return energy.view(-1)
+def _shape_for_error(value) -> str:
+    if torch.is_tensor(value):
+        return str(tuple(value.shape))
+    return str(type(value))
 
 
 def build_regression_model(device: str = DEVICE) -> GNN:
     """
-    Build the ALIGNN/order regression model used by Catalyst run_training.
+    Build one equivariant vector model wrapped in the high-level Catalyst GNN.
 
-    This returns the high-level GNN wrapper, matching the random example pattern:
+    The underlying equivariant decoder emits one vector channel:
+        [total_atoms_in_batch, 1, 3]
 
-        cat.set_model(build_regression_model(DEVICE))
-        run_distributed_or_single(cat, run_training, cat)
+    ForceVectorOutputAdapter squeezes this to:
+        [total_atoms_in_batch, 3]
+
+    That matches graph.target_vector and graph.y exactly.
     """
-    model = build_model(
-        preset="alignn",
-        processor_type="order",
-        conv_type=MODEL_CONFIG["conv_type"],
-        decoder=AlignnEnergyReadout(
-            dim=MODEL_CONFIG["hidden_dim"],
-            hidden_dim=MODEL_CONFIG["hidden_dim"],
-            act=nn.SiLU(),
-            reduce="mean",
-        ),
+    base_model = build_model(
+        model_type="equivariant",
+        output_type="vector",
+        output_level="node",
+        return_dict=False,
         num_species=AL_CONFIG["num_species"],
         cutoff=AL_CONFIG["cutoff"],
         dim=MODEL_CONFIG["hidden_dim"],
         num_convs=MODEL_CONFIG["n_convs"],
-        out_dim=MODEL_CONFIG["regression_out_dim"],
-        act=nn.SiLU(),
-        aggr_scheme=MODEL_CONFIG.get("aggr_scheme", "add"),
-        encode_3body=True,
-        dihedral=AL_CONFIG.get("include_dihedrals", False),
+        out_dim=1,
+        act=torch.nn.SiLU(),
     )
+
+    model = ForceVectorOutputAdapter(base_model)
+
     return GNN(model=model, device=device)
 
 
 # =============================================================================
-# UTILITY FUNCTIONS
+# GENERAL HELPERS
 # =============================================================================
 
 
@@ -429,7 +359,6 @@ def first_match(pattern: os.PathLike[str] | str) -> str:
 
 
 def safe_torch_load(file_name: os.PathLike[str] | str, map_location: str | torch.device | None = None):
-    """Load full Catalyst/PyG graph objects across old and new PyTorch versions."""
     try:
         return torch.load(file_name, map_location=map_location, weights_only=False)
     except TypeError:
@@ -437,7 +366,6 @@ def safe_torch_load(file_name: os.PathLike[str] | str, map_location: str | torch
 
 
 def as_numpy_tensor(value) -> np.ndarray:
-    """Convert tensors or arrays to a CPU NumPy array."""
     if value is None:
         return np.asarray([])
     if torch.is_tensor(value):
@@ -452,15 +380,17 @@ def run_distributed_or_single(cat: Catalyst, target, *args) -> None:
             process = mp.Process(target=target, args=(rank, *args))
             process.start()
             processes.append(process)
+
         for process in processes:
             process.join()
+
         cuda_destroy()
     else:
         target(0, *args)
 
 
 # =============================================================================
-# GRAPH GENERATION
+# ASE MD / GRAPH GENERATION
 # =============================================================================
 
 
@@ -490,7 +420,7 @@ def run_md_frames() -> list:
     )
 
     frames = []
-    energies = []
+    force_rms_values = []
 
     for step in range(AL_CONFIG["md_steps"] + 1):
         if step > 0:
@@ -504,13 +434,17 @@ def run_md_frames() -> list:
 
         frame = atoms.copy()
         frame.calc = EMT()
-        energy = float(frame.get_potential_energy())
+        forces = frame.get_forces()
+        force_rms = float(np.sqrt(np.mean(forces ** 2)))
 
         frames.append(frame)
-        energies.append(energy)
+        force_rms_values.append(force_rms)
 
     print(f"Generated {len(frames)} MD frames.")
-    print(f"Energy range: {min(energies):.6f} to {max(energies):.6f} eV")
+    print(
+        "Force RMS range: "
+        f"{min(force_rms_values):.6f} to {max(force_rms_values):.6f} eV/Ang"
+    )
 
     return frames
 
@@ -525,8 +459,7 @@ def _as_single_graph(obj):
 
 def finalize_graph_metadata(graph):
     """
-    Make graphs safe for the renamed GNNBuilder/equivariant-compatible stack.
-    Legacy ALIGNN/order fields are preserved.
+    Make graphs safe for the equivariant model path.
     """
     if getattr(graph, "z", None) is not None:
         graph.num_nodes = int(graph.z.size(0))
@@ -545,10 +478,13 @@ def finalize_graph_metadata(graph):
             device=graph.edge_index.device,
         )
 
+    if getattr(graph, "pbc", None) is None:
+        graph.pbc = torch.tensor([True, True, True], dtype=torch.bool)
+
     return graph
 
 
-def atoms_to_alignn_graph(atoms, energy_eV: float, gid: str):
+def atoms_to_equivariant_graph(atoms, forces_eVA: np.ndarray, gid: str):
     graph = alignn_gen(
         {
             "type": "alignnd",
@@ -563,9 +499,9 @@ def atoms_to_alignn_graph(atoms, energy_eV: float, gid: str):
             "cpu_cores": 1,
             "store_atoms_type": "ase-atoms",
 
-            # Updated graph fields. Older graph builders may ignore these.
-            "include_equivariant_fields": AL_CONFIG.get("include_equivariant_fields", True),
-            "include_edge_geometry": AL_CONFIG.get("include_edge_geometry", True),
+            # Required for the equivariant backend.
+            "include_equivariant_fields": True,
+            "include_edge_geometry": True,
 
             # Retry controls.
             "auto_retry_graph": True,
@@ -573,7 +509,7 @@ def atoms_to_alignn_graph(atoms, energy_eV: float, gid: str):
             "cutoff_scale": AL_CONFIG.get("cutoff_scale", 1.15),
             "max_cutoff": AL_CONFIG.get("max_cutoff", 5.0),
             "require_bonds": True,
-            "require_angles": True,
+            "require_angles": False,
             "require_dihedrals": False,
             "retry_verbose": False,
         }
@@ -582,12 +518,17 @@ def atoms_to_alignn_graph(atoms, energy_eV: float, gid: str):
     graph = _as_single_graph(graph)
     graph = finalize_graph_metadata(graph)
 
-    graph.gid = gid
-    graph.energy_eV = torch.tensor([energy_eV], dtype=torch.float32)
+    forces = torch.as_tensor(forces_eVA, dtype=torch.float32).reshape(-1, 3)
 
-    # Raw target initially; normalize_targets(...) overwrites y/target_scalar.
-    graph.y = torch.tensor([energy_eV], dtype=torch.float32)
-    graph.target_scalar = torch.tensor([energy_eV], dtype=torch.float32)
+    graph.gid = gid
+
+    # Raw force labels for reporting/denormalization.
+    graph.forces_eVA = forces.clone()
+
+    # Target fields consumed by the updated Catalyst GNN/predict stack.
+    # normalize_targets(...) overwrites these with normalized values.
+    graph.target_vector = forces.clone()
+    graph.y = forces.clone()
 
     return graph
 
@@ -597,14 +538,18 @@ def generate_data(cat: Catalyst) -> None:
     frames = run_md_frames()
 
     for idx, atoms in enumerate(frames):
-        energy_eV = float(atoms.get_potential_energy())
-        gid = f"al_fcc_md_{idx:05d}"
+        forces = atoms.get_forces()
+        gid = f"al_fcc_md_force_{idx:05d}"
+        force_rms = float(np.sqrt(np.mean(forces ** 2)))
 
-        print(f"Building graph {idx + 1:4d}/{len(frames):4d}: {gid}, E={energy_eV:.6f} eV")
+        print(
+            f"Building graph {idx + 1:4d}/{len(frames):4d}: "
+            f"{gid}, force_rms={force_rms:.6f} eV/Ang"
+        )
 
-        graph = atoms_to_alignn_graph(
+        graph = atoms_to_equivariant_graph(
             atoms=atoms,
-            energy_eV=energy_eV,
+            forces_eVA=forces,
             gid=gid,
         )
 
@@ -632,8 +577,8 @@ def sample_data(cat: Catalyst) -> None:
     indices = np.arange(len(gids))
     rng.shuffle(indices)
 
-    test_fraction = CONFIG["sampling"]["test_fraction"]
-    validation_fraction_of_remaining = CONFIG["sampling"]["validation_fraction_of_remaining"]
+    test_fraction = float(CONFIG["sampling"]["test_fraction"])
+    validation_fraction_of_remaining = float(CONFIG["sampling"]["validation_fraction_of_remaining"])
 
     n_total = len(indices)
     n_test = int(round(test_fraction * n_total))
@@ -653,7 +598,6 @@ def sample_data(cat: Catalyst) -> None:
         samples_dir / "test_data.npy",
         {
             "gids": test_gids,
-            # Placeholder kept for compatibility with projection-based examples.
             "projections": [],
         },
     )
@@ -663,11 +607,28 @@ def sample_data(cat: Catalyst) -> None:
         {
             "training": training_gids,
             "validation": validation_gids,
-            # Placeholder keys kept for compatibility with plotting/sampling code.
             "training_projections": [],
             "validation_projections": [],
         },
     )
+
+    # Split-specific test_data.npy files so run_inference can be reused for
+    # training, validation, and test parity plots without manual inference loops.
+    split_for_inference = {
+        "training": training_gids,
+        "validation": validation_gids,
+        "test": test_gids,
+    }
+
+    for split_name, split_gids in split_for_inference.items():
+        split_samples_dir = reset_dir(samples_dir / f"inference_{split_name}")
+        save_dictionary(
+            split_samples_dir / "test_data.npy",
+            {
+                "gids": split_gids,
+                "projections": [],
+            },
+        )
 
     with (samples_dir / "split_summary.json").open("w", encoding="utf-8") as handle:
         json.dump(
@@ -696,86 +657,89 @@ def _graph_path_from_gid(cat: Catalyst, gid: str) -> Path:
     return Path(cat.parameters["io_dict"]["data_dir"]) / f"{gid}.pt"
 
 
-def normalize_targets(cat: Catalyst) -> None:
-    """
-    Normalize graph.y and graph.target_scalar using training-set statistics.
-
-    Training/inference still flow through Catalyst. This function only prepares
-    graph targets before run_training.
-    """
+def compute_force_normalization_from_training(cat: Catalyst) -> tuple[torch.Tensor, torch.Tensor]:
     samples_file = Path(cat.parameters["io_dict"]["main_path"]) / "samples" / "model_samples" / "train_valid_split.npy"
-    if not samples_file.is_file():
-        raise FileNotFoundError(
-            f"Cannot normalize targets because training split is missing: {samples_file}"
-        )
-
     split = load_dictionary(samples_file)
     training_gids = split["training"]
 
     if not training_gids:
-        raise RuntimeError("Training split is empty; cannot compute target normalization.")
+        raise RuntimeError("Training split is empty; cannot compute force normalization.")
 
-    training_energies = []
+    all_forces = []
     for gid in training_gids:
-        graph = safe_torch_load(_graph_path_from_gid(cat, gid))
-        training_energies.append(float(graph.energy_eV.view(-1)[0]))
+        graph = safe_torch_load(_graph_path_from_gid(cat, gid), map_location="cpu")
+        all_forces.append(graph.forces_eVA.reshape(-1, 3).float())
 
-    target_mean = float(np.mean(training_energies))
-    target_std = float(np.std(training_energies))
-    if target_std < 1.0e-12:
-        target_std = 1.0
+    all_forces = torch.cat(all_forces, dim=0)
+
+    mode = str(FORCE_CONFIG.get("mode", "scalar")).lower()
+
+    if mode == "component":
+        force_mean = all_forces.mean(dim=0)
+        force_std = all_forces.std(dim=0)
+    elif mode == "scalar":
+        force_mean = all_forces.reshape(-1).mean().view(1)
+        force_std = all_forces.reshape(-1).std().view(1)
+    else:
+        raise ValueError(f"force_normalization.mode must be 'scalar' or 'component', got {mode!r}.")
+
+    force_std = torch.where(force_std < 1.0e-12, torch.ones_like(force_std), force_std)
+
+    return force_mean.float(), force_std.float()
+
+
+def normalize_targets(cat: Catalyst) -> None:
+    """
+    Normalize force vector targets using training-set statistics.
+
+    This writes normalized graph.target_vector and graph.y with shape [N_atoms, 3].
+    """
+    force_mean, force_std = compute_force_normalization_from_training(cat)
 
     data_files = sorted(glob.glob(os.path.join(cat.parameters["io_dict"]["data_dir"], "*.pt")))
     for path in data_files:
-        graph = safe_torch_load(path)
-        energy = float(graph.energy_eV.view(-1)[0])
-        normalized = (energy - target_mean) / target_std
+        graph = safe_torch_load(path, map_location="cpu")
 
-        graph.y = torch.tensor([normalized], dtype=torch.float32)
-        graph.target_scalar = torch.tensor([normalized], dtype=torch.float32)
-        graph.target_normalization = {
-            "target_mean": target_mean,
-            "target_std": target_std,
-            "target_units": "eV",
-            "target_type": "total_energy",
+        forces = graph.forces_eVA.float().reshape(-1, 3)
+        normalized = (forces - force_mean) / force_std
+
+        graph.target_vector = normalized.clone()
+        graph.y = normalized.clone()
+        graph.force_normalization = {
+            "force_mean": force_mean.cpu().tolist(),
+            "force_std": force_std.cpu().tolist(),
+            "force_units": "eV/Ang",
+            "mode": str(FORCE_CONFIG.get("mode", "scalar")).lower(),
         }
 
         torch.save(graph, path)
 
-    with (Path(cat.parameters["io_dict"]["main_path"]) / "target_normalization.json").open(
+    norm_data = {
+        "force_mean": force_mean.cpu().tolist(),
+        "force_std": force_std.cpu().tolist(),
+        "force_units": "eV/Ang",
+        "mode": str(FORCE_CONFIG.get("mode", "scalar")).lower(),
+    }
+
+    with (Path(cat.parameters["io_dict"]["main_path"]) / "force_normalization.json").open(
         "w",
         encoding="utf-8",
     ) as handle:
-        json.dump(
-            {
-                "target_mean": target_mean,
-                "target_std": target_std,
-                "target_units": "eV",
-                "target_type": "total_energy",
-            },
-            handle,
-            indent=2,
-        )
+        json.dump(norm_data, handle, indent=2)
 
-    print(f"Target normalization: mean={target_mean:.6f} eV, std={target_std:.6f} eV")
+    print("Force normalization mode:", norm_data["mode"])
+    print("Force mean:", norm_data["force_mean"])
+    print("Force std:", norm_data["force_std"])
 
 
 # =============================================================================
-# BACKEND WORKFLOW FUNCTIONS
+# BACKEND TRAINING / INFERENCE
 # =============================================================================
 
 
 def train_model(cat: Catalyst) -> None:
     """
-    Train using the Catalyst backend.
-
-    No local epoch loop belongs here. run_training owns:
-        GNN.load_data
-        GNN.set_dataloader
-        GNN.set_optimizer_
-        epoch loop
-        checkpointing
-        DDP behavior
+    Train using Catalyst's backend. No local training loop lives here.
     """
     cat.parameters["io_dict"]["samples_dir"] = str(
         Path(cat.parameters["io_dict"]["main_path"]) / "samples" / "model_samples"
@@ -807,27 +771,33 @@ def retrain_model(cat: Catalyst, use_latest_checkpoint: bool = False) -> None:
     run_distributed_or_single(cat, run_training, cat)
 
 
-def run_testing_for_model(
+def run_inference_for_split(
     cat: Catalyst,
+    split_name: str,
+    samples_subdir: str,
     model_dir: Path,
     results_dir: Path,
-    model_pattern: str,
-    use_latest_checkpoint: bool = False,
+    use_latest_checkpoint: bool = True,
 ) -> None:
     loaded_model_name = (
-        latest_checkpoint(model_dir, model_pattern)
+        latest_checkpoint(model_dir, "checkpoint_epoch_*.pt")
         if use_latest_checkpoint
-        else first_match(model_dir / model_pattern)
+        else first_match(model_dir / "checkpoint_epoch_*.pt")
     )
 
     cat.parameters["io_dict"].update(
         {
             "write_indv_pred": True,
+            "samples_dir": str(Path(cat.parameters["io_dict"]["main_path"]) / "samples" / samples_subdir),
             "results_dir": str(reset_dir(results_dir)),
             "model_dir": str(model_dir),
             "loaded_model_name": loaded_model_name,
         }
     )
+
+    cat.set_model(build_regression_model(DEVICE))
+
+    print(f"Running backend inference for {split_name} split...")
 
     if cat.parameters["device_dict"]["run_ddp"]:
         processes = []
@@ -835,37 +805,52 @@ def run_testing_for_model(
             process = mp.Process(target=run_inference, args=(loaded_model_name, rank, cat, True))
             process.start()
             processes.append(process)
+
         for process in processes:
             process.join()
+
         cuda_destroy()
     else:
         run_inference(model_name=loaded_model_name, cat=cat, test=True)
 
 
 def test_model(cat: Catalyst) -> None:
-    main_path = Path(cat.parameters["io_dict"]["main_path"])
-    cat.parameters["io_dict"]["samples_dir"] = str(main_path / "samples")
-    cat.set_model(build_regression_model(DEVICE))
+    """
+    Use Catalyst run_inference for training, validation, and test splits.
 
-    run_testing_for_model(
-        cat=cat,
-        model_dir=main_path / "models" / "training",
-        results_dir=main_path / "testing" / "training",
-        model_pattern="checkpoint_epoch_*.pt",
-        use_latest_checkpoint=True,
-    )
+    The split-specific folders each contain a test_data.npy file so the existing
+    backend inference path can be reused unchanged.
+    """
+    main_path = Path(cat.parameters["io_dict"]["main_path"])
+    model_dir = main_path / "models" / "training"
+
+    split_specs = {
+        "training": "inference_training",
+        "validation": "inference_validation",
+        "test": "inference_test",
+    }
+
+    for split_name, samples_subdir in split_specs.items():
+        run_inference_for_split(
+            cat=cat,
+            split_name=split_name,
+            samples_subdir=samples_subdir,
+            model_dir=model_dir,
+            results_dir=main_path / "testing" / split_name,
+            use_latest_checkpoint=True,
+        )
 
 
 def predict(cat: Catalyst) -> None:
     main_path = Path(cat.parameters["io_dict"]["main_path"])
     model_dir = main_path / "models" / "training"
-    results_dir = main_path / "testing" / "predict"
     loaded_model_name = latest_checkpoint(model_dir, "checkpoint_epoch_*.pt")
 
     cat.parameters["io_dict"].update(
         {
             "write_indv_pred": False,
-            "results_dir": str(reset_dir(results_dir)),
+            "samples_dir": str(main_path / "samples" / "inference_test"),
+            "results_dir": str(reset_dir(main_path / "testing" / "predict")),
             "model_dir": str(model_dir),
             "loaded_model_name": loaded_model_name,
         }
@@ -879,16 +864,32 @@ def predict(cat: Catalyst) -> None:
             process = mp.Process(target=run_inference, args=(loaded_model_name, rank, cat, False))
             process.start()
             processes.append(process)
+
         for process in processes:
             process.join()
+
         cuda_destroy()
     else:
         run_inference(model_name=loaded_model_name, cat=cat, test=False)
 
 
 # =============================================================================
-# OPTIONAL PLOTTING
+# PLOTTING / OUTPUT FROM BACKEND INFERENCE FILES
 # =============================================================================
+
+
+def load_force_normalization(cat: Catalyst) -> tuple[np.ndarray, np.ndarray]:
+    path = Path(cat.parameters["io_dict"]["main_path"]) / "force_normalization.json"
+    if not path.is_file():
+        return np.asarray([0.0], dtype=float), np.asarray([1.0], dtype=float)
+
+    with path.open("r", encoding="utf-8") as handle:
+        data = json.load(handle)
+
+    return (
+        np.asarray(data["force_mean"], dtype=float),
+        np.asarray(data["force_std"], dtype=float),
+    )
 
 
 def _flatten_prediction_records(obj: Any) -> list[dict[str, Any]]:
@@ -947,20 +948,66 @@ def _as_float_array(value: Any) -> np.ndarray:
         return np.asarray(flattened, dtype=float)
 
 
-def load_target_normalization(cat: Catalyst) -> tuple[float, float]:
-    path = Path(cat.parameters["io_dict"]["main_path"]) / "target_normalization.json"
+def _load_backend_force_predictions(results_dir: Path) -> tuple[np.ndarray, np.ndarray]:
+    path = Path(results_dir) / "indv_pred.data"
     if not path.is_file():
-        return 0.0, 1.0
-    with path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
-    return float(data["target_mean"]), float(data["target_std"])
+        raise FileNotFoundError(f"Missing backend inference output: {path}")
+
+    run_data = load_dictionary(path)
+    records = _flatten_prediction_records(run_data)
+
+    if not records:
+        raise RuntimeError(f"No prediction records with y/pred were found in: {path}")
+
+    y_norm = []
+    pred_norm = []
+
+    for record in records:
+        if not isinstance(record, dict) or "y" not in record or "pred" not in record:
+            continue
+
+        y_norm.extend(_as_float_array(record["y"]).reshape(-1).astype(float).tolist())
+        pred_norm.extend(_as_float_array(record["pred"]).reshape(-1).astype(float).tolist())
+
+    n = min(len(y_norm), len(pred_norm))
+    n -= n % 3
+
+    if n <= 0:
+        raise RuntimeError(f"No numeric vector force predictions were found in: {path}")
+
+    y = np.asarray(y_norm[:n], dtype=float).reshape(-1, 3)
+    pred = np.asarray(pred_norm[:n], dtype=float).reshape(-1, 3)
+
+    return y, pred
+
+
+def _denormalize_forces(y_norm: np.ndarray, pred_norm: np.ndarray, mean: np.ndarray, std: np.ndarray):
+    y = y_norm * std + mean
+    pred = pred_norm * std + mean
+    return y, pred
+
+
+def _force_metrics(y: np.ndarray, pred: np.ndarray) -> dict[str, float]:
+    diff = pred - y
+    component_mae = float(np.mean(np.abs(diff)))
+    component_rmse = float(np.sqrt(np.mean(diff ** 2)))
+
+    vector_errors = np.linalg.norm(diff, axis=1)
+    vector_mae = float(np.mean(vector_errors))
+    vector_rmse = float(np.sqrt(np.mean(vector_errors ** 2)))
+
+    return {
+        "component_mae_eVA": component_mae,
+        "component_rmse_eVA": component_rmse,
+        "vector_mae_eVA": vector_mae,
+        "vector_rmse_eVA": vector_rmse,
+    }
 
 
 def plot_training_results(cat: Catalyst) -> None:
     model_dir = Path(cat.parameters["io_dict"]["main_path"]) / "models" / "training"
-    cat.parameters["io_dict"]["model_dir"] = str(model_dir)
-
     run_data = load_dictionary(model_dir / "run_information.npy")
+
     training_loss = run_data["training_loss"]
     validation_loss = run_data["validation_loss"]
     epochs = np.linspace(1, len(training_loss), len(training_loss))
@@ -968,203 +1015,93 @@ def plot_training_results(cat: Catalyst) -> None:
     fig, ax = plt.subplots(nrows=1, ncols=1, sharex=True, sharey=True)
     ax.set_title("Training loss")
     ax.set_yscale("log")
-    ax.plot(epochs, training_loss, color="b", marker="o", label="Training loss")
-    ax.plot(epochs, validation_loss, color="r", marker="o", label="Validation loss")
+    ax.plot(epochs, training_loss, marker="o", label="Training loss")
+    ax.plot(epochs, validation_loss, marker="o", label="Validation loss")
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Normalized vector-field MSE")
     ax.legend(loc="upper right")
     plt.tight_layout()
-    plt.show()
+
+    out = Path(cat.parameters["io_dict"]["main_path"]) / "training_force_loss.png"
+    fig.savefig(out, dpi=200)
+    plt.close(fig)
+    print(f"Wrote {out}")
 
 
-
-def _follow_batch_names(graphs: Sequence[Any]) -> list[str]:
-    candidate_names = [
-        "x_atm", "x_bnd", "x_ang",
-        "x_1", "x_2", "x_3",
-        "node_G", "node_A", "edge_A",
-    ]
-    follow_batch = []
-    for name in candidate_names:
-        if any(hasattr(graph, name) and getattr(graph, name) is not None for graph in graphs):
-            follow_batch.append(name)
-    return follow_batch
-
-
-def _load_graphs_from_gids(cat: Catalyst, gids: Sequence[str]) -> list[Any]:
-    graphs = []
-    for gid in gids:
-        graph = safe_torch_load(_graph_path_from_gid(cat, gid), map_location="cpu")
-        graphs.append(graph)
-    return graphs
-
-
-def _predict_graphs_with_checkpoint(
-    cat: Catalyst,
-    graphs: Sequence[Any],
-    checkpoint_path: str,
-    batch_size: int,
-) -> tuple[np.ndarray, np.ndarray]:
-    from torch_geometric.loader import DataLoader
-
-    if not graphs:
-        return np.asarray([], dtype=float), np.asarray([], dtype=float)
-
-    gnn = build_regression_model(DEVICE)
-    gnn.load_checkpoint(
-        fname=checkpoint_path,
-        map_location=DEVICE,
-        load_optimizer=False,
-        strict=True,
-    )
-    gnn.model.eval()
-
-    follow_batch = _follow_batch_names(graphs)
-    loader = DataLoader(
-        list(graphs),
-        batch_size=batch_size,
-        shuffle=False,
-        follow_batch=follow_batch,
-        num_workers=0,
-    )
-
-    pred_norm = []
-    y_norm = []
-
-    grad_context = torch.enable_grad if gnn._model_requires_grad_forward() else torch.no_grad
-
-    with grad_context():
-        for batch in loader:
-            batch = batch.to(gnn.device)
-
-            raw_pred = gnn.model(batch)
-            preds, y, vec = gnn._accumulate_predictions(
-                raw_pred,
-                batch,
-                cat.parameters,
-                return_y=True,
-            )
-            preds, y = gnn._align_pred_and_target(preds, y)
-
-            pred_norm.extend(as_numpy_tensor(preds).reshape(-1).astype(float).tolist())
-            y_norm.extend(as_numpy_tensor(y).reshape(-1).astype(float).tolist())
-
-    n = min(len(pred_norm), len(y_norm))
-    return (
-        np.asarray(y_norm[:n], dtype=float),
-        np.asarray(pred_norm[:n], dtype=float),
-    )
-
-
-def _parity_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[float, float]:
-    mae = float(np.mean(np.abs(y_pred - y_true)))
-    rmse = float(np.sqrt(np.mean((y_pred - y_true) ** 2)))
-    return mae, rmse
-
-
-def plot_test_data(cat: Catalyst) -> None:
-    """
-    Plot parity results for training, validation, and test splits in one figure.
-
-    This bypasses the saved indv_pred.data parser and instead:
-        1. loads the latest training checkpoint,
-        2. loads graph objects for each split,
-        3. runs direct model inference on each split,
-        4. denormalizes predictions/targets back to eV,
-        5. renders a 1x3 parity-plot figure.
-    """
+def plot_force_parity(cat: Catalyst) -> None:
     main_path = Path(cat.parameters["io_dict"]["main_path"])
-    model_dir = main_path / "models" / "training"
-    checkpoint_path = latest_checkpoint(model_dir, "checkpoint_epoch_*.pt")
+    force_mean, force_std = load_force_normalization(cat)
 
-    split_train_valid = load_dictionary(main_path / "samples" / "model_samples" / "train_valid_split.npy")
-    split_test = load_dictionary(main_path / "samples" / "test_data.npy")
-
-    split_map = {
-        "Training": split_train_valid.get("training", []),
-        "Validation": split_train_valid.get("validation", []),
-        "Test": split_test.get("gids", []),
+    split_names = ["training", "validation", "test"]
+    pretty_names = {
+        "training": "Training",
+        "validation": "Validation",
+        "test": "Test",
     }
 
-    target_mean, target_std = load_target_normalization(cat)
-    batch_size = int(cat.parameters["loader_dict"]["batch_size"][1])
-    if batch_size <= 0:
-        batch_size = max(max(len(v) for v in split_map.values()), 1)
+    split_data = {}
+    all_components = []
+    metrics_out = {}
 
-    split_results: dict[str, tuple[np.ndarray, np.ndarray, float, float]] = {}
-    all_values = []
+    for split_name in split_names:
+        y_norm, pred_norm = _load_backend_force_predictions(main_path / "testing" / split_name)
+        y, pred = _denormalize_forces(y_norm, pred_norm, force_mean, force_std)
 
-    for split_name, gids in split_map.items():
-        graphs = _load_graphs_from_gids(cat, gids)
-        y_norm, pred_norm = _predict_graphs_with_checkpoint(
-            cat=cat,
-            graphs=graphs,
-            checkpoint_path=checkpoint_path,
-            batch_size=batch_size,
-        )
+        metrics = _force_metrics(y, pred)
+        split_data[split_name] = (y, pred, metrics)
+        metrics_out[split_name] = metrics
 
-        if y_norm.size == 0 or pred_norm.size == 0:
-            split_results[split_name] = (
-                np.asarray([], dtype=float),
-                np.asarray([], dtype=float),
-                float("nan"),
-                float("nan"),
-            )
-            continue
+        all_components.extend(y.reshape(-1).tolist())
+        all_components.extend(pred.reshape(-1).tolist())
 
-        y_eV = y_norm * target_std + target_mean
-        pred_eV = pred_norm * target_std + target_mean
-        mae, rmse = _parity_metrics(y_eV, pred_eV)
-
-        split_results[split_name] = (y_eV, pred_eV, mae, rmse)
-        all_values.extend(y_eV.tolist())
-        all_values.extend(pred_eV.tolist())
-
-    if not all_values:
-        raise RuntimeError("Could not compute any parity-plot data for training/validation/test splits.")
-
-    lo = float(min(all_values))
-    hi = float(max(all_values))
+    lo = float(min(all_components))
+    hi = float(max(all_components))
     pad = 0.05 * (hi - lo) if hi > lo else 1.0
     lo -= pad
     hi += pad
 
     fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(15, 5), sharex=True, sharey=True)
 
-    for ax, split_name in zip(axes, ["Training", "Validation", "Test"]):
-        y_eV, pred_eV, mae, rmse = split_results[split_name]
+    for ax, split_name in zip(axes, split_names):
+        y, pred, metrics = split_data[split_name]
 
-        if y_eV.size > 0:
-            ax.plot(
-                y_eV,
-                pred_eV,
-                linestyle="",
-                marker="o",
-                markeredgecolor="k",
-                markersize=5,
-                alpha=0.85,
-            )
-            ax.plot([lo, hi], [lo, hi], linestyle="-", color="r", linewidth=1.5)
-            ax.set_title(f"{split_name}\nN={len(y_eV)}, MAE={mae:.4f} eV, RMSE={rmse:.4f} eV")
-        else:
-            ax.set_title(f"{split_name}\nNo data")
-            ax.text(
-                0.5,
-                0.5,
-                "No data",
-                ha="center",
-                va="center",
-                transform=ax.transAxes,
-            )
+        ax.plot(
+            y.reshape(-1),
+            pred.reshape(-1),
+            linestyle="",
+            marker="o",
+            markersize=2.5,
+            markeredgecolor="k",
+            alpha=0.55,
+        )
 
+        ax.plot([lo, hi], [lo, hi], linestyle="-", linewidth=1.5)
         ax.set_xlim(lo, hi)
         ax.set_ylim(lo, hi)
         ax.set_aspect("equal", adjustable="box")
         ax.grid(True, alpha=0.25)
-        ax.set_xlabel("EMT energy (eV)")
+        ax.set_xlabel("EMT force component (eV/Ang)")
+        ax.set_title(
+            f"{pretty_names[split_name]}\n"
+            f"Nvec={y.shape[0]}, "
+            f"comp MAE={metrics['component_mae_eVA']:.4f}, "
+            f"vec MAE={metrics['vector_mae_eVA']:.4f}"
+        )
 
-    axes[0].set_ylabel("GNN-predicted energy (eV)")
-    fig.suptitle("Parity plots for training, validation, and test splits", y=1.02)
+    axes[0].set_ylabel("Equivariant GNN force component (eV/Ang)")
+    fig.suptitle("Force-component parity for training, validation, and test splits", y=1.02)
     plt.tight_layout()
-    plt.show()
+
+    out = main_path / "force_component_parity_train_validation_test.png"
+    fig.savefig(out, dpi=200)
+    plt.close(fig)
+    print(f"Wrote {out}")
+
+    with (main_path / "force_metrics_train_validation_test.json").open("w", encoding="utf-8") as handle:
+        json.dump(metrics_out, handle, indent=2)
+
+    print("Force metrics:")
+    print(json.dumps(metrics_out, indent=2))
 
 
 # =============================================================================
@@ -1176,7 +1113,6 @@ def main() -> None:
     cat = Catalyst()
     cat.set_params(build_catalyst_parameters(CONFIG))
 
-    # Ensure base directories exist.
     make_dir(cat.parameters["io_dict"]["main_path"])
     make_dir(cat.parameters["io_dict"]["data_dir"])
 
@@ -1210,11 +1146,10 @@ def main() -> None:
 
     if RUN_TESTING:
         cat.parameters["loader_dict"]["batch_size"] = TRAINING_BATCH_SIZE
-        cat.set_model(build_regression_model(DEVICE))
         test_model(cat)
 
     if RUN_PLOT_TEST:
-        plot_test_data(cat)
+        plot_force_parity(cat)
 
     if RUN_PREDICTIONS:
         cat.set_model(build_regression_model(DEVICE))

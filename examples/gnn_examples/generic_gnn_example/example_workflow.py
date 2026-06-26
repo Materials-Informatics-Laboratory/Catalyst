@@ -25,7 +25,7 @@ from catalyst.characterization.sodas.model.sodas import SODAS
 from catalyst.data.utils import load_dictionary, save_dictionary
 from catalyst.graph.generic_build import generic_graph_gen
 from catalyst.ml.gnn.GNN import GNN
-from catalyst.ml.gnn.modules.models.generic_gnn import build_model
+from catalyst.ml.gnn.modules.models.gnn_builder import build_model
 from catalyst.ml.inference import run_inference
 from catalyst.ml.training import run_active_learning, run_training
 from catalyst.ml.utils.distributed import cuda_destroy

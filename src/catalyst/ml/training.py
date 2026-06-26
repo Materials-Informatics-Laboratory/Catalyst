@@ -284,7 +284,8 @@ def run_training(rank,cat=None):
                       find_unused_parameters=parameters['device_dict']['find_unused_parameters'],
                       rank=rank, batchnorm=parameters['model_dict']['batchnorm'])
     else:
-        model.compile_model()
+        #model.compile_model()
+        pass
     model.set_optimizer_(parameters=parameters)
     #model.load_training_data(parameters, os.path.join(parameters['io_dict']['samples_dir'], 'train_valid_split.npy'),
     #                         format=parameters['io_dict']['graph_read_format'], rank=rank)

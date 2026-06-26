@@ -1,6 +1,12 @@
 import torch
 from torch import nn
 
+
+# =============================================================================
+# Public API
+# =============================================================================
+
+
 def accumulate_predictions(
     pred,
     data,
@@ -9,14 +15,20 @@ def accumulate_predictions(
     channel_mode="target",
     normalize_by="primary_nodes",
     legacy_multichannel_shape=False,
+    output_key=None,
+    target_key=None,
+    target_map=None,
+    prefer_equivariant_key=None,
 ):
     """
-    Aggregate per-entity predictions/features into graph-level quantities.
+    Aggregate model predictions into loss-ready tensors.
 
-    Parameters
-    ----------
-    pred : list[torch.Tensor]
-        Model outputs. Expected order:
+    This function supports both the legacy Catalyst outputs and the newer
+    generic/equivariant GNN outputs.
+
+    Legacy outputs
+    --------------
+    The old branch expects ``pred`` to be a list/tuple of entity predictions:
 
         Atomic graph:
             pred[0] -> atom/entity-G channels
@@ -28,79 +40,114 @@ def accumulate_predictions(
             pred[1] -> node_A channels
             pred[2] -> edge_A channels, optional
 
-        Each tensor may have shape:
-            [N_entity]        interpreted as [N_entity, 1]
-            [N_entity, K]     K scalar channels per entity
+    New generic/equivariant outputs
+    -------------------------------
+    The new decoder can return either a tensor directly or a dictionary:
 
-    data : torch_geometric.data.Data-like object
-        Must contain the relevant batch vectors.
+        {"scalar": scalar}
+        {"vector": vector}
+        {"scalar": scalar, "gradient": gradient}
 
-    loss_tag : str
-        "exact" or "sum".
+    For direct tensor outputs, this function treats the tensor as already
+    decoded and only finds the matching target.
 
-        "exact":
-            Aggregate each graph/sample in a batch separately.
+    New useful loss_tag values
+    --------------------------
+    "node", "raw", "direct", "none":
+        Do not graph-aggregate.  Return the decoded prediction and matching
+        target directly.  This is the correct mode for per-atom vector targets,
+        for example learning the complete force vector per atom.
 
-        "sum":
-            Aggregate globally across the whole batch.
+    "exact":
+        For legacy list outputs, graph-aggregate by sample id.
+        For new dict/tensor outputs, return direct predictions unless the output
+        is explicitly graph-level already.
 
-    return_y : bool
-        Whether to return data.y.
+    "sum":
+        For legacy list outputs, sum across the whole batch.
+        For new scalar outputs, sum the scalar output and target.
 
-    channel_mode : str
-        "target" or "latent".
+    Parameters
+    ----------
+    output_key
+        Optional key to select from dict outputs, for example "vector",
+        "scalar", or "gradient".
 
-        "target":
-            K is interpreted as the true output dimension.
-            This is the original behavior: if K > 1, the prediction is a
-            vector-valued target.
+    target_key
+        Optional explicit data attribute to use as target.
 
-        "latent":
-            K is interpreted as the number of positive learned feature
-            channels. The returned value is a pooled feature vector, not the
-            final property y. A separate readout should map it to scalar/vector y.
+    target_map
+        Optional mapping from prediction key to target attribute name, e.g.
+        {"vector": "target_vector", "scalar": "target_scalar"}.
 
-    normalize_by : str or None
-        Controls size normalization.
-
-        None:
-            Raw sums. This matches the original behavior most closely, but
-            can scale with system size.
-
-        "primary_nodes":
-            Divide every entity-type sum by the number of primary graph nodes.
-            For Atomic_Graph_Data this uses x_atm_batch.
-            For Generic_Graph_Data this uses node_G_batch.
-
-            This is recommended for intensive quantities such as energy per atom
-            or enthalpy of mixing per atom.
-
-    legacy_multichannel_shape : bool
-        If True and channel_mode == "target", return multichannel exact outputs
-        as [K, num_graphs], matching your old multichannel branch.
-
-        If False, return [num_graphs, K], which is usually easier for PyTorch loss
-        functions.
+    prefer_equivariant_key
+        Optional fallback preference for dict outputs.  Same idea as output_key,
+        but lower priority.
 
     Returns
     -------
-    If channel_mode == "target":
-        If return_y:
-            preds, y, multichannel
-        Else:
-            preds, multichannel
+    If return_y:
+        preds, y, vec
+    Else:
+        preds, vec
 
-    If channel_mode == "latent":
-        If return_y:
-            features, y, metadata
-        Else:
-            features, metadata
-
-        where features has shape:
-            exact: [num_graphs, num_entity_types * K]
-            sum:   [num_entity_types * K]
+    The third return value ``vec`` is kept for compatibility with the existing
+    high-level GNN training loop.  It is True for vector-like or multichannel
+    predictions.
     """
 
+    # ------------------------------------------------------------------
+    # New dict outputs from EquivariantDecoder(return_dict=True).
+    # ------------------------------------------------------------------
+    if isinstance(pred, dict):
+        return _accumulate_dict_prediction(
+            pred=pred,
+            data=data,
+            loss_tag=loss_tag,
+            return_y=return_y,
+            output_key=output_key,
+            target_key=target_key,
+            target_map=target_map,
+            prefer_equivariant_key=prefer_equivariant_key,
+        )
+
+    # ------------------------------------------------------------------
+    # New direct tensor outputs from EquivariantDecoder(return_dict=False).
+    # Also useful for simple scalar/vector models.
+    # ------------------------------------------------------------------
+    if torch.is_tensor(pred):
+        return _accumulate_direct_tensor_prediction(
+            pred=pred,
+            data=data,
+            loss_tag=loss_tag,
+            return_y=return_y,
+            target_key=target_key,
+            prefer_equivariant_key=prefer_equivariant_key,
+        )
+
+    # ------------------------------------------------------------------
+    # Tuple output, mainly scalar_gradient with return_dict=False:
+    #     (scalar, gradient)
+    #
+    # To stay compatible with the current high-level GNN.train implementation,
+    # select one tensor by default.  Use output_key="scalar" or "gradient".
+    # ------------------------------------------------------------------
+    if isinstance(pred, tuple):
+        pred = _tuple_to_prediction_dict(pred)
+        return _accumulate_dict_prediction(
+            pred=pred,
+            data=data,
+            loss_tag=loss_tag,
+            return_y=return_y,
+            output_key=output_key,
+            target_key=target_key,
+            target_map=target_map,
+            prefer_equivariant_key=prefer_equivariant_key,
+        )
+
+    # ------------------------------------------------------------------
+    # Legacy list output path.
+    # ------------------------------------------------------------------
     if loss_tag == "ensemble":
         raise NotImplementedError(
             "loss_tag='ensemble' was a no-op in the original function. "
@@ -108,7 +155,12 @@ def accumulate_predictions(
         )
 
     if loss_tag not in {"exact", "sum"}:
-        raise ValueError(f"Unknown loss_tag: {loss_tag}")
+        raise ValueError(
+            f"Unknown loss_tag={loss_tag!r} for legacy list outputs. "
+            "Supported legacy tags are 'exact' and 'sum'. "
+            "For direct/equivariant tensor outputs, use 'node', 'raw', 'direct', "
+            "'none', 'exact', or 'sum'."
+        )
 
     if channel_mode not in {"target", "latent"}:
         raise ValueError(
@@ -154,6 +206,332 @@ def accumulate_predictions(
             return features, y, metadata
 
         return features, metadata
+
+
+# =============================================================================
+# New generic/equivariant prediction handling
+# =============================================================================
+
+
+_DIRECT_LOSS_TAGS = {"node", "raw", "direct", "none", "exact"}
+
+
+def _tuple_to_prediction_dict(pred):
+    """
+    Convert tuple outputs to a dict.
+
+    The current EquivariantDecoder(return_dict=False) returns:
+
+        scalar_gradient -> (scalar, gradient)
+    """
+    if len(pred) == 2:
+        return {"scalar": pred[0], "gradient": pred[1]}
+
+    return {f"output_{i}": value for i, value in enumerate(pred)}
+
+
+def _accumulate_dict_prediction(
+    pred,
+    data,
+    loss_tag,
+    return_y=True,
+    output_key=None,
+    target_key=None,
+    target_map=None,
+    prefer_equivariant_key=None,
+):
+    """
+    Handle dict outputs from the new generic/equivariant decoders.
+    """
+    key = _select_prediction_key(
+        pred,
+        data=data,
+        output_key=output_key,
+        target_key=target_key,
+        target_map=target_map,
+        prefer_equivariant_key=prefer_equivariant_key,
+    )
+
+    value = pred[key]
+    target_attr = _target_key_for_prediction_key(
+        key,
+        data=data,
+        target_key=target_key,
+        target_map=target_map,
+    )
+
+    preds = _format_direct_prediction(value, loss_tag=loss_tag, key=key)
+    vec = _is_vector_like_prediction(preds, key=key)
+
+    if return_y:
+        y = _get_direct_target(
+            data,
+            target_attr=target_attr,
+            pred=preds,
+            loss_tag=loss_tag,
+            key=key,
+        )
+        return preds, y, vec
+
+    return preds, vec
+
+
+def _accumulate_direct_tensor_prediction(
+    pred,
+    data,
+    loss_tag,
+    return_y=True,
+    target_key=None,
+    prefer_equivariant_key=None,
+):
+    """
+    Handle direct tensor outputs.
+
+    This is the path used when EquivariantDecoder(return_dict=False) returns a
+    raw vector/scalar tensor.
+    """
+    key = prefer_equivariant_key or _infer_key_from_tensor_and_data(pred, data, target_key=target_key)
+
+    preds = _format_direct_prediction(pred, loss_tag=loss_tag, key=key)
+    vec = _is_vector_like_prediction(preds, key=key)
+
+    if return_y:
+        target_attr = target_key or _target_key_for_prediction_key(key, data=data)
+        y = _get_direct_target(
+            data,
+            target_attr=target_attr,
+            pred=preds,
+            loss_tag=loss_tag,
+            key=key,
+        )
+        return preds, y, vec
+
+    return preds, vec
+
+
+def _select_prediction_key(
+    pred,
+    data,
+    output_key=None,
+    target_key=None,
+    target_map=None,
+    prefer_equivariant_key=None,
+):
+    """
+    Select which dict output to use for the current loss.
+
+    Priority:
+        1. explicit output_key
+        2. prefer_equivariant_key
+        3. target_key / target_map compatibility
+        4. common single-target cases
+        5. single-key dictionary
+    """
+    if output_key is not None:
+        if output_key not in pred:
+            raise KeyError(f"Requested output_key={output_key!r}, but pred has keys {list(pred)}.")
+        return output_key
+
+    if prefer_equivariant_key is not None and prefer_equivariant_key in pred:
+        return prefer_equivariant_key
+
+    if target_map:
+        for key, mapped_target in target_map.items():
+            if key in pred and hasattr(data, mapped_target):
+                return key
+
+    if target_key is not None:
+        # Match explicit target_key to conventional prediction key.
+        reverse = {
+            "target_scalar": "scalar",
+            "y": "scalar",
+            "target_vector": "vector",
+            "forces": "vector",
+            "force": "vector",
+            "target_gradient": "gradient",
+            "gradient": "gradient",
+        }
+        candidate = reverse.get(target_key)
+        if candidate in pred:
+            return candidate
+
+    # Prefer vector if vector target exists. This is the important path for
+    # per-atom force-vector learning with {"vector": ...}.
+    if "vector" in pred and _has_any_attr(data, ("target_vector", "forces", "force", "y")):
+        return "vector"
+
+    # Prefer gradient if the graph has an explicit gradient target.
+    if "gradient" in pred and _has_any_attr(data, ("target_gradient",)):
+        return "gradient"
+
+    # If scalar and target_scalar/y exist, use scalar.
+    if "scalar" in pred and _has_any_attr(data, ("target_scalar", "y")):
+        return "scalar"
+
+    if len(pred) == 1:
+        return next(iter(pred.keys()))
+
+    # Scalar-gradient models often return both scalar and gradient. If there is
+    # no explicit request, prefer gradient when target_vector exists because in
+    # atomistic examples target_vector usually stores force-like labels.
+    if "gradient" in pred and _has_any_attr(data, ("target_vector", "forces", "force")):
+        return "gradient"
+
+    raise ValueError(
+        "Could not infer which prediction key to use. "
+        f"Prediction keys: {list(pred)}. "
+        "Pass output_key='scalar', 'vector', or 'gradient', or pass target_key=..."
+    )
+
+
+def _target_key_for_prediction_key(key, data, target_key=None, target_map=None):
+    """
+    Resolve the data target attribute for a prediction key.
+    """
+    if target_key is not None:
+        return target_key
+
+    if target_map and key in target_map:
+        return target_map[key]
+
+    candidates = {
+        "scalar": ("target_scalar", "y"),
+        "vector": ("target_vector", "forces", "force", "y"),
+        "gradient": ("target_gradient", "target_vector", "forces", "force", "y"),
+    }.get(key, ("y",))
+
+    for attr in candidates:
+        if hasattr(data, attr):
+            return attr
+
+    # Return the first conventional candidate so the error message is useful.
+    return candidates[0]
+
+
+def _infer_key_from_tensor_and_data(pred, data, target_key=None):
+    """
+    Infer semantic key for a direct tensor output.
+    """
+    if target_key is not None:
+        if target_key in {"target_vector", "forces", "force"}:
+            return "vector"
+        if target_key in {"target_gradient", "gradient"}:
+            return "gradient"
+        if target_key in {"target_scalar", "y"}:
+            # y may be scalar or vector; fall through if shape suggests vector.
+            pass
+
+    if pred.dim() >= 2 and pred.shape[-1] == 3:
+        if _has_any_attr(data, ("target_vector", "forces", "force")):
+            return "vector"
+        if _has_any_attr(data, ("target_gradient",)):
+            return "gradient"
+
+    if _has_any_attr(data, ("target_scalar",)):
+        return "scalar"
+
+    if _has_any_attr(data, ("target_vector", "forces", "force")):
+        return "vector"
+
+    return "scalar"
+
+
+def _format_direct_prediction(pred, loss_tag, key):
+    """
+    Format decoded scalar/vector prediction.
+
+    For node/raw/direct/exact, return as-is except for light scalar cleanup.
+    For sum, sum over batch/sample dimensions.
+    """
+    if not torch.is_tensor(pred):
+        raise TypeError(f"Prediction for key={key!r} must be a tensor, got {type(pred)}.")
+
+    if loss_tag in _DIRECT_LOSS_TAGS:
+        return pred
+
+    if loss_tag == "sum":
+        if pred.dim() == 0:
+            return pred
+        return pred.sum(dim=0)
+
+    raise ValueError(
+        f"Unknown loss_tag={loss_tag!r} for direct/dict prediction. "
+        "Supported: node, raw, direct, none, exact, sum."
+    )
+
+
+def _get_direct_target(data, target_attr, pred, loss_tag, key):
+    """
+    Return target tensor matched to a direct/dict prediction.
+    """
+    if not hasattr(data, target_attr):
+        raise AttributeError(
+            f"Could not find target attribute data.{target_attr}. "
+            f"Prediction key was {key!r}. Available data attributes include: "
+            f"{_safe_data_attr_preview(data)}"
+        )
+
+    y = getattr(data, target_attr)
+
+    if isinstance(y, (list, tuple)):
+        y = torch.stack(tuple(y_i for y_i in y))
+
+    if not torch.is_tensor(y):
+        y = torch.as_tensor(y)
+
+    y = y.to(device=pred.device, dtype=pred.dtype)
+
+    if loss_tag in _DIRECT_LOSS_TAGS:
+        # Try to reshape only when the number of elements is compatible. This
+        # keeps force targets [N, 3] intact and scalar graph targets flexible.
+        if y.shape != pred.shape and y.numel() == pred.numel():
+            y = y.reshape_as(pred)
+        return y
+
+    if loss_tag == "sum":
+        if y.dim() == 0:
+            return y
+        y = y.sum(dim=0)
+        if y.shape != pred.shape and y.numel() == pred.numel():
+            y = y.reshape_as(pred)
+        return y
+
+    raise ValueError(f"Unknown loss_tag: {loss_tag}")
+
+
+def _is_vector_like_prediction(pred, key=None):
+    """
+    Compatibility flag for the high-level GNN loop.
+
+    The existing trainer uses this flag to decide whether to apply the loss to
+    rows/components separately.  Returning True for vector/gradient keeps the
+    old behavior.  If you want one loss over the whole tensor, pass a custom
+    loss_fn to GNN.train.
+    """
+    if key in {"vector", "gradient"}:
+        return True
+
+    if torch.is_tensor(pred) and pred.dim() >= 2 and pred.shape[-1] > 1:
+        return True
+
+    return False
+
+
+def _has_any_attr(data, names):
+    return any(hasattr(data, name) for name in names)
+
+
+def _safe_data_attr_preview(data, max_items=40):
+    try:
+        keys = list(data.keys()) if callable(getattr(data, "keys", None)) else list(vars(data).keys())
+    except Exception:
+        keys = list(vars(data).keys()) if hasattr(data, "__dict__") else []
+    return keys[:max_items]
+
+
+# =============================================================================
+# Legacy accumulation path
+# =============================================================================
 
 
 def _get_num_channels(pred):
@@ -240,10 +618,22 @@ def _get_schema(data):
 
         return schema
 
+    # PyG/equivariant convention for legacy-style single tensor predictions.
+    # This schema is intentionally not used for direct tensor outputs above.
+    if hasattr(data, "batch"):
+        return [
+            {
+                "pred_index": 0,
+                "batch_attr": "batch",
+                "name": "node",
+                "is_primary": True,
+            }
+        ]
+
     raise AttributeError(
         "Could not determine graph type. Expected either atomic batch "
-        "attributes x_atm_batch/x_bnd_batch or generic batch attributes "
-        "node_G_batch/node_A_batch."
+        "attributes x_atm_batch/x_bnd_batch, generic batch attributes "
+        "node_G_batch/node_A_batch, or PyG batch."
     )
 
 
@@ -288,6 +678,7 @@ def _primary_node_counts(data, schema, loss_tag):
 
     For atomic graphs, primary nodes are atoms.
     For generic graphs, primary nodes are node_G.
+    For PyG/equivariant graphs, primary nodes are data.batch nodes.
     """
 
     primary_entries = [entry for entry in schema if entry["is_primary"]]
@@ -352,7 +743,7 @@ def _accumulate_as_target(
     Original interpretation:
         K channels = K output targets.
 
-    This is what you want for true vector-valued prediction.
+    This is what you want for true vector-valued graph-level prediction.
     """
 
     if loss_tag == "exact":
@@ -435,9 +826,6 @@ def _accumulate_as_latent_features(
     or:
 
         z = [z_atom, z_bond, z_angle]
-
-    If K=16 and there are two entity types, output dimension is 32.
-    If K=16 and there are three entity types, output dimension is 48.
     """
 
     pooled_by_type = []
@@ -505,7 +893,7 @@ def _accumulate_as_latent_features(
 
 def _get_y(data, loss_tag, multichannel, target_dim=None):
     """
-    Flexible target handling.
+    Flexible legacy target handling.
 
     For scalar targets:
         exact -> [num_graphs] or [num_graphs, 1]
