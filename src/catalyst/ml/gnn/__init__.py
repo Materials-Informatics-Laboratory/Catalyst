@@ -1,4 +1,6 @@
-from .modules import *
+"""Public Catalyst GNN API."""
+
+from .GNN import GNN
 from .tasks import (
     GNNTask,
     VectorChannelAdapter,
@@ -6,3 +8,59 @@ from .tasks import (
     validate_task_batch,
     task_from_parameters,
 )
+
+from .modules.models import (
+    GNNBuilder,
+    GenericGNN,
+    EquivariantGNN,
+    GNNBuilderPreset,
+    GenericGNNPreset,
+    PRESETS,
+    build_model,
+    build_model_from_config,
+    build_gnn_builder,
+    build_generic_gnn,
+    build_equivariant_gnn,
+    build_preset,
+    build_alignn_model,
+    build_mgn_model,
+    build_mesh_model,
+    build_gated_gcn_model,
+    build_gine_model,
+    build_edge_conditioned_model,
+    build_nnconv_model,
+    build_pna_model,
+    build_generic_feature_model,
+    build_straight_through_model,
+)
+
+__all__ = [
+    "GNN",
+    "GNNTask",
+    "VectorChannelAdapter",
+    "build_task_model",
+    "validate_task_batch",
+    "task_from_parameters",
+    "GNNBuilder",
+    "GenericGNN",
+    "EquivariantGNN",
+    "GNNBuilderPreset",
+    "GenericGNNPreset",
+    "PRESETS",
+    "build_model",
+    "build_model_from_config",
+    "build_gnn_builder",
+    "build_generic_gnn",
+    "build_equivariant_gnn",
+    "build_preset",
+    "build_alignn_model",
+    "build_mgn_model",
+    "build_mesh_model",
+    "build_gated_gcn_model",
+    "build_gine_model",
+    "build_edge_conditioned_model",
+    "build_nnconv_model",
+    "build_pna_model",
+    "build_generic_feature_model",
+    "build_straight_through_model",
+]

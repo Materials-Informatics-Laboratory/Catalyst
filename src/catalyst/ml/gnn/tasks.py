@@ -4,12 +4,10 @@ Task definitions for Catalyst GNN models.
 Recommended location:
     catalyst/ml/gnn/tasks.py
 
-Purpose
--------
-This file defines a small task interface that connects four things that must
-agree for a GNN training run to be valid:
+This module defines a small task interface that keeps four pieces of a GNN run
+consistent:
 
-    1. model output type and level,
+    1. model output type and output level,
     2. graph target field,
     3. Catalyst prediction/loss accumulation settings,
     4. output/target shape validation.
@@ -17,61 +15,12 @@ agree for a GNN training run to be valid:
 The task interface does not replace the Catalyst training backend. It only
 configures the existing backend consistently.
 
-Public examples
----------------
-Graph-level scalar regression:
-
-    task = GNNTask.graph_scalar(target_key="target_scalar")
-    task.apply_to_catalyst_parameters(parameters)
-
-    model = build_task_model(
-        task=task,
-        model_type="alignn",
-        num_species=1,
-        cutoff=3.35,
-        dim=128,
-        num_convs=4,
-        decoder=my_graph_scalar_decoder,
-    )
-
-Node-level vector regression:
-
-    task = GNNTask.node_vector(target_key="target_vector")
-    task.apply_to_catalyst_parameters(parameters)
-
-    model = build_task_model(
-        task=task,
-        model_type="equivariant",
-        num_species=1,
-        cutoff=3.35,
-        dim=128,
-        num_convs=4,
-    )
-
-The node_vector task learns one complete 3D vector per node. It does not define
-three independent scalar tasks.
-
-Notes on equivariant vector outputs
------------------------------------
-The equivariant vector decoder commonly represents C vector channels as:
-
-    [N, C, 3]
-
-For node_vector with one vector per node, this task builds the base equivariant
-model with out_dim=1 and wraps it with an adapter that converts:
-
-    [N, 1, 3] -> [N, 3]
-
-before the Catalyst loss sees the prediction.
-
 Task names are intentionally generic:
     graph_scalar
     node_scalar
     node_vector
     graph_vector
     scalar_gradient
-
-Do not add domain-specific names here.
 """
 
 from __future__ import annotations
@@ -108,7 +57,7 @@ OutputLevel = Literal[
 def _shape(value: Any) -> str:
     if torch.is_tensor(value):
         return str(tuple(value.shape))
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return "{" + ", ".join(str(k) for k in value.keys()) + "}"
     return str(type(value))
 
@@ -117,6 +66,7 @@ def _get_output_from_mapping(output: Mapping[str, Any], keys: Iterable[str]) -> 
     for key in keys:
         if key in output and output[key] is not None:
             return output[key]
+
     raise KeyError(
         "Could not find any expected output key in model output. "
         f"Expected one of {list(keys)}, got keys {list(output.keys())}."
@@ -129,10 +79,10 @@ class VectorChannelAdapter(nn.Module):
 
     Accepted input conventions:
         [N, 3]       -> unchanged
-        [N, 1, 3]    -> [N, 3]
+        [N, 1, 3]    -> [N, 3] when vector_channels=1
 
-    A tensor such as [N, 3, 3] is rejected by default because that represents
-    three vector channels, not one vector target per item.
+    A tensor such as [N, 3, 3] is rejected by default for node_vector because it
+    represents three vector channels, not one complete 3D vector target per node.
     """
 
     def __init__(
@@ -225,6 +175,7 @@ class GNNTask:
         target_key: str = "target_scalar",
         output_key: str = "scalar",
         accumulate_loss: str = "exact",
+        out_dim: int = 1,
     ) -> "GNNTask":
         return cls(
             name="graph_scalar",
@@ -234,7 +185,7 @@ class GNNTask:
             accumulate_loss=accumulate_loss,
             output_key=output_key,
             prefer_equivariant_key="scalar",
-            out_dim=1,
+            out_dim=int(out_dim),
         )
 
     @classmethod
@@ -244,6 +195,7 @@ class GNNTask:
         target_key: str = "target_scalar",
         output_key: str = "scalar",
         accumulate_loss: str = "node",
+        out_dim: int = 1,
     ) -> "GNNTask":
         return cls(
             name="node_scalar",
@@ -253,7 +205,7 @@ class GNNTask:
             accumulate_loss=accumulate_loss,
             output_key=output_key,
             prefer_equivariant_key="scalar",
-            out_dim=1,
+            out_dim=int(out_dim),
         )
 
     @classmethod
@@ -277,7 +229,7 @@ class GNNTask:
             out_dim=int(vector_channels),
             vector_channels=int(vector_channels),
             requires_vector_adapter=True,
-            squeeze_single_vector_channel=squeeze_single_vector_channel,
+            squeeze_single_vector_channel=bool(squeeze_single_vector_channel),
         )
 
     @classmethod
@@ -301,7 +253,7 @@ class GNNTask:
             out_dim=int(vector_channels),
             vector_channels=int(vector_channels),
             requires_vector_adapter=True,
-            squeeze_single_vector_channel=squeeze_single_vector_channel,
+            squeeze_single_vector_channel=bool(squeeze_single_vector_channel),
         )
 
     @classmethod
@@ -325,17 +277,7 @@ class GNNTask:
 
     @classmethod
     def from_name(cls, name: str, **kwargs: Any) -> "GNNTask":
-        """
-        Construct a task from its generic task name.
-
-        Valid names:
-            graph_scalar
-            node_scalar
-            node_vector
-            graph_vector
-            scalar_gradient
-        """
-        name = str(name).lower()
+        name = str(name).lower().strip()
 
         if name == "graph_scalar":
             return cls.graph_scalar(**kwargs)
@@ -362,6 +304,7 @@ class GNNTask:
         target field and uses the correct accumulation mode.
         """
         model_dict = parameters.setdefault("model_dict", {})
+        model_dict["task"] = self.name
         model_dict["accumulate_loss"] = self.accumulate_loss
 
         prediction_params = dict(model_dict.get("prediction_params", {}))
@@ -376,9 +319,6 @@ class GNNTask:
         model_dict["prediction_params"] = prediction_params
 
     def model_kwargs(self) -> Dict[str, Any]:
-        """
-        Keyword arguments that should be passed into build_model(...).
-        """
         return {
             "output_type": self.output_type,
             "output_level": self.output_level,
@@ -413,11 +353,6 @@ class GNNTask:
         *,
         allow_graph_scalar_column: bool = True,
     ) -> None:
-        """
-        Validate prediction/target shapes for this task.
-
-        This should be run on one batch before full training starts.
-        """
         if isinstance(pred, Mapping):
             pred = _get_output_from_mapping(
                 pred,
@@ -457,7 +392,6 @@ class GNNTask:
                     "graph_scalar prediction/target element counts do not match. "
                     f"Got pred={_shape(pred)}, target={_shape(target)}."
                 )
-
             return
 
         if self.name == "node_scalar":
@@ -487,7 +421,6 @@ class GNNTask:
                     f"{self.name} prediction/target shape mismatch: "
                     f"pred={_shape(pred)}, target={_shape(target)}."
                 )
-
             return
 
         if self.name == "scalar_gradient":
@@ -504,36 +437,99 @@ class GNNTask:
 def build_task_model(
     *,
     task: GNNTask,
-    model_type: str,
-    num_species: int,
-    cutoff: float,
-    dim: int,
-    num_convs: int,
+    model_type: Optional[str] = None,
+    preset: Optional[str] = None,
+    num_species: Optional[int] = None,
+    cutoff: Optional[float] = None,
+    dim: Optional[int] = None,
+    num_convs: Optional[int] = None,
     decoder: Optional[nn.Module] = None,
-    return_dict: bool = False,
+    return_dict: Optional[bool] = None,
     act: Optional[nn.Module] = None,
     apply_task_model_kwargs: bool = True,
     **kwargs: Any,
 ) -> nn.Module:
-    if act is None:
-        act = nn.SiLU()
+    """
+    Build a model through build_model(...) and apply any task wrapper.
 
-    model_kwargs: Dict[str, Any] = {
-        "model_type": model_type,
-        "return_dict": return_dict,
-        "num_species": num_species,
-        "cutoff": cutoff,
-        "dim": dim,
-        "num_convs": num_convs,
-        "act": act,
-    }
+    Two modes are supported.
+
+    Task-native mode:
+        build_task_model(
+            task=GNNTask.node_vector(...),
+            model_type="equivariant",
+            num_species=...,
+            cutoff=...,
+            dim=...,
+            num_convs=...,
+        )
+
+        The task supplies output_type, output_level, and out_dim.
+
+    Passthrough/preset mode:
+        build_task_model(
+            task=GNNTask.graph_scalar(...),
+            apply_task_model_kwargs=False,
+            preset="alignn",
+            decoder=CustomReadout(...),
+            ...
+        )
+
+        The model architecture is not modified by the task. The task still
+        configures the Catalyst backend separately via apply_to_catalyst_parameters.
+
+    Important:
+        apply_task_model_kwargs is consumed here and is never forwarded to
+        build_model(...) or build_gnn_builder(...).
+    """
+    model_kwargs: Dict[str, Any] = {}
+
+    if preset is not None:
+        # build_model(...) prioritizes model_type over preset. If the caller
+        # supplies preset="alignn" and model_type="gnn_builder", route by preset
+        # and intentionally do not forward model_type.
+        if model_type is not None and str(model_type).lower().strip() not in {
+            "gnn_builder",
+            "generic",
+            "generic_gnn",
+        }:
+            raise ValueError(
+                "Cannot combine preset with a non-generic model_type. "
+                f"Got preset={preset!r}, model_type={model_type!r}."
+            )
+        model_kwargs["preset"] = preset
+    elif model_type is not None:
+        model_kwargs["model_type"] = model_type
+
+    if return_dict is not None:
+        model_kwargs["return_dict"] = return_dict
+
+    if num_species is not None:
+        model_kwargs["num_species"] = num_species
+
+    if cutoff is not None:
+        model_kwargs["cutoff"] = cutoff
+
+    if dim is not None:
+        model_kwargs["dim"] = dim
+
+    if num_convs is not None:
+        model_kwargs["num_convs"] = num_convs
+
+    if act is not None:
+        model_kwargs["act"] = act
 
     if apply_task_model_kwargs:
-        model_kwargs.update(task.model_kwargs())
+        for key, value in task.model_kwargs().items():
+            model_kwargs.setdefault(key, value)
 
     if decoder is not None:
         model_kwargs["decoder"] = decoder
 
+    # Caller kwargs have final precedence, except for task-control keywords that
+    # must never leak to build_model(...).
+    kwargs = dict(kwargs)
+    kwargs.pop("apply_task_model_kwargs", None)
     model_kwargs.update(kwargs)
 
     model = build_model(**model_kwargs)
@@ -550,7 +546,6 @@ def validate_task_batch(
 ) -> None:
     """
     Run one batch through a model and validate output/target compatibility.
-
     This is intended as a cheap pre-training check.
     """
     if device is not None:
@@ -559,14 +554,17 @@ def validate_task_batch(
 
     model.eval()
 
-    with torch.no_grad():
+    requires_grad = task.name == "scalar_gradient"
+    context = torch.enable_grad() if requires_grad else torch.no_grad()
+
+    with context:
         pred = model(batch)
 
     if not hasattr(batch, task.target_key):
+        available = [name for name in dir(batch) if not name.startswith("_")][:50]
         raise AttributeError(
             f"Batch does not contain target field {task.target_key!r}. "
-            f"Available public fields include: "
-            f"{[name for name in dir(batch) if not name.startswith('_')][:40]}..."
+            f"Available public fields include: {available}..."
         )
 
     target = getattr(batch, task.target_key)
@@ -574,12 +572,12 @@ def validate_task_batch(
 
     if print_summary:
         print("GNN task batch validation passed.")
-        print(f"  task:        {task.name}")
-        print(f"  target_key:  {task.target_key}")
-        print(f"  output_type: {task.output_type}")
-        print(f"  output_level:{task.output_level}")
-        print(f"  pred shape:  {_shape(pred)}")
-        print(f"  target shape:{_shape(target)}")
+        print(f"  task:         {task.name}")
+        print(f"  target_key:   {task.target_key}")
+        print(f"  output_type:  {task.output_type}")
+        print(f"  output_level: {task.output_level}")
+        print(f"  pred shape:   {_shape(pred)}")
+        print(f"  target shape: {_shape(target)}")
 
 
 def task_from_parameters(parameters: Mapping[str, Any], *, default_task: str = "graph_scalar") -> GNNTask:
@@ -594,16 +592,19 @@ def task_from_parameters(parameters: Mapping[str, Any], *, default_task: str = "
 
     prediction_params = model_dict.get("prediction_params", {})
     target_key = prediction_params.get("target_key", None)
+    output_key = prediction_params.get("output_key", None)
+    prefer_key = prediction_params.get("prefer_equivariant_key", None)
+    accumulate_loss = model_dict.get("accumulate_loss", "exact")
 
     if task_name is not None:
         kwargs: Dict[str, Any] = {}
         if target_key is not None:
             kwargs["target_key"] = target_key
+        if output_key is not None:
+            kwargs["output_key"] = output_key
+        if accumulate_loss is not None:
+            kwargs["accumulate_loss"] = accumulate_loss
         return GNNTask.from_name(str(task_name), **kwargs)
-
-    output_key = prediction_params.get("output_key", None)
-    prefer_key = prediction_params.get("prefer_equivariant_key", None)
-    accumulate_loss = model_dict.get("accumulate_loss", "exact")
 
     if output_key == "vector" or prefer_key == "vector":
         if accumulate_loss == "node":

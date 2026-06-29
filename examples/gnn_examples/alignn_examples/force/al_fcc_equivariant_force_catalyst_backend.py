@@ -32,16 +32,6 @@ This trains one vector-valued model head:
 It does NOT train Fx, Fy, and Fz as separate scalar targets. The Catalyst loss is
 a single tensor MSE over the full vector field.
 
-Required package updates
-------------------------
-This assumes the updated Catalyst stack is installed:
-
-    catalyst/ml/gnn/GNN.py
-    catalyst/ml/gnn/modules/utils/predict.py
-    catalyst/ml/gnn/modules/models/gnn_builder.py
-    catalyst/ml/gnn/modules/equivariant/*
-    catalyst/ml/gnn/tasks.py
-
 Important config
 ----------------
 

@@ -287,8 +287,6 @@ def run_training(rank,cat=None):
         #model.compile_model()
         pass
     model.set_optimizer_(parameters=parameters)
-    #model.load_training_data(parameters, os.path.join(parameters['io_dict']['samples_dir'], 'train_valid_split.npy'),
-    #                         format=parameters['io_dict']['graph_read_format'], rank=rank)
     model.set_dataloader(cat=cat, epoch=ep)
 
 
