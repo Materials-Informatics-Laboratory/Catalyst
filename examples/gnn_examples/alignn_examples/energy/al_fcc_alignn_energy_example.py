@@ -13,27 +13,6 @@ This example follows the same pattern as the full random Catalyst example:
     run_distributed_or_single(cat, run_training, cat)
 
     run_inference(...)
-
-It does NOT define its own epoch loop, train_one_epoch(...), evaluate(...), or
-local validation loop. Training, retraining, checkpointing, DDP, testing, and
-prediction are delegated to the Catalyst backend:
-
-    catalyst.ml.training.run_training
-    catalyst.ml.inference.run_inference
-    catalyst.ml.gnn.GNN.GNN
-
-The only things this example owns are:
-    - generating Al FCC ASE/EMT MD frames,
-    - converting them to alignnd graphs,
-    - creating train/validation/test sample dictionaries,
-    - building the model object that Catalyst trains,
-    - optional plotting of the backend-generated inference output.
-
-Required package updates for the new builder/equivariant-compatible stack:
-    - catalyst/ml/gnn/modules/models/gnn_builder.py
-    - catalyst/ml/gnn/modules/models/__init__.py
-    - catalyst/ml/gnn/modules/utils/predict.py
-    - catalyst/ml/gnn/GNN.py
 """
 
 from __future__ import annotations
@@ -67,7 +46,7 @@ from ase.md.verlet import VelocityVerlet
 from catalyst.data.utils import load_dictionary, save_dictionary
 from catalyst.graph.alignnd import alignn_gen
 from catalyst.ml.gnn.GNN import GNN
-from catalyst.ml.gnn.modules.models.gnn_builder import build_model
+from catalyst.ml.gnn.tasks import GNNTask, build_task_model
 from catalyst.ml.inference import run_inference
 from catalyst.ml.training import run_training
 from catalyst.ml.utils.distributed import cuda_destroy
@@ -130,6 +109,20 @@ TRAINING_TOLERANCE_OVERRIDE = TRAINING_OVERRIDES["train_tolerance"]
 # =============================================================================
 
 
+def build_regression_task() -> GNNTask:
+    """
+    Build the generic task contract for this example.
+
+    This is a graph-level scalar regression task. The physical meaning of the
+    target is intentionally not encoded in the task name.
+    """
+    return GNNTask.graph_scalar(
+        target_key="target_scalar",
+        output_key="scalar",
+        accumulate_loss="exact",
+    )
+
+
 def resolve_relative_path(path_value: Optional[str]) -> Optional[str]:
     """Resolve JSON path strings relative to this example script."""
     if path_value is None:
@@ -142,10 +135,12 @@ def resolve_relative_path(path_value: Optional[str]) -> Optional[str]:
 
 def build_loss_function(loss_name: str):
     """Convert the JSON loss-function name into a PyTorch loss object."""
+    from catalyst.ml.utils.loss import MaxNpercent
     loss_functions = {
         "MSELoss": torch.nn.MSELoss,
         "L1Loss": torch.nn.L1Loss,
         "SmoothL1Loss": torch.nn.SmoothL1Loss,
+        "MaxNpercent":MaxNpercent
     }
     if loss_name not in loss_functions:
         raise ValueError(
@@ -210,12 +205,9 @@ def build_catalyst_parameters(config: Dict[str, Any]) -> Dict[str, Any]:
     model_dict["loss_params"] = loss_params
     model_dict["model"] = None
 
-    # Make sure the new predict/GNN path can handle the direct tensor output from
-    # AtomicEnergyReadout.
-    model_dict.setdefault("prediction_params", {})
-    model_dict["prediction_params"] = dict(model_dict["prediction_params"])
-    model_dict["prediction_params"].setdefault("target_key", "y")
-    model_dict["prediction_params"].setdefault("prefer_equivariant_key", "scalar")
+    # Configure the existing Catalyst backend from the formal generic task
+    # contract. This sets accumulate_loss and prediction_params consistently.
+    build_regression_task().apply_to_catalyst_parameters(parameters)
 
     return parameters
 
@@ -233,13 +225,24 @@ def scatter_sum(values: torch.Tensor, index: torch.Tensor, dim_size: int | None 
 
 class AlignnEnergyReadout(nn.Module):
     """
-    Order-aware graph-level energy decoder for ALIGNN/order models.
+    Extreme-aware order readout for graph_scalar ALIGNN energy learning.
 
-    Uses atom, bond, and angle hidden states:
-        E = f([reduce_atoms(h_atm), reduce_bonds(h_bnd), reduce_angles(h_ang)])
+    The original readout used only mean pooling over atom/bond/angle hidden
+    states. That tends to underpredict high-energy MD frames because high-energy
+    frames are often controlled by the most distorted local environments, and
+    mean pooling can average those rare distortions away.
 
-    This is much better for single-element systems because h_atm can be
-    graph-invariant while h_bnd/h_ang still contain geometry-dependent signal.
+    This decoder keeps stable mean information, but also exposes max/top-k
+    local information to the graph-level MLP.
+
+    Per order it builds:
+        mean(projected hidden)
+        max(projected hidden)
+        mean(local scalar contribution)
+        max(local scalar contribution)
+        top-k mean(local scalar contribution)
+
+    The output remains shape [B].
     """
 
     def __init__(
@@ -247,39 +250,72 @@ class AlignnEnergyReadout(nn.Module):
         dim: int,
         hidden_dim: int | None = None,
         act=nn.SiLU(),
-        reduce: str = "mean",
+        topk_fraction: float = 0.10,
+        topk_min: int = 4,
+        feature_clip: float = 50.0,
     ):
         super().__init__()
 
         hidden_dim = hidden_dim or dim
-        self.reduce = reduce
+        self.hidden_dim = int(hidden_dim)
+        self.topk_fraction = float(topk_fraction)
+        self.topk_min = int(topk_min)
+        self.feature_clip = float(feature_clip)
 
-        self.atom_proj = nn.Sequential(
-            nn.Linear(dim, hidden_dim),
-            act,
-            nn.Linear(hidden_dim, hidden_dim),
-            act,
-        )
+        def make_proj():
+            return nn.Sequential(
+                nn.Linear(dim, hidden_dim),
+                act,
+                nn.LayerNorm(hidden_dim),
+                nn.Linear(hidden_dim, hidden_dim),
+                act,
+                nn.LayerNorm(hidden_dim),
+            )
 
-        self.bond_proj = nn.Sequential(
-            nn.Linear(dim, hidden_dim),
-            act,
-            nn.Linear(hidden_dim, hidden_dim),
-            act,
-        )
+        def make_local_head():
+            return nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                act,
+                nn.LayerNorm(hidden_dim),
+                nn.Linear(hidden_dim, 1),
+            )
 
-        self.angle_proj = nn.Sequential(
-            nn.Linear(dim, hidden_dim),
-            act,
-            nn.Linear(hidden_dim, hidden_dim),
-            act,
-        )
+        self.atom_proj = make_proj()
+        self.bond_proj = make_proj()
+        self.angle_proj = make_proj()
+
+        self.atom_local = make_local_head()
+        self.bond_local = make_local_head()
+        self.angle_local = make_local_head()
+
+        # Per order: mean_h + max_h + mean_local + max_local + topk_mean_local
+        per_order_dim = 2 * hidden_dim + 3
+        final_in_dim = 3 * per_order_dim
 
         self.final = nn.Sequential(
-            nn.Linear(3 * hidden_dim, hidden_dim),
+            nn.LayerNorm(final_in_dim),
+            nn.Linear(final_in_dim, 2 * hidden_dim),
             act,
+            nn.LayerNorm(2 * hidden_dim),
+            nn.Linear(2 * hidden_dim, hidden_dim),
+            act,
+            nn.LayerNorm(hidden_dim),
             nn.Linear(hidden_dim, 1),
         )
+
+        # Start near the normalized target mean. This avoids unstable first
+        # steps but does not constrain the output range.
+        last = self.final[-1]
+        if isinstance(last, nn.Linear):
+            nn.init.zeros_(last.bias)
+
+    def _finite(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.nan_to_num(
+            x,
+            nan=0.0,
+            posinf=self.feature_clip,
+            neginf=-self.feature_clip,
+        ).clamp(min=-self.feature_clip, max=self.feature_clip)
 
     def _first_existing(self, data, names):
         for name in names:
@@ -297,28 +333,65 @@ class AlignnEnergyReadout(nn.Module):
                     return value.to(device)
         return torch.zeros(n_items, dtype=torch.long, device=device)
 
-    def _reduce(self, values, batch):
-        values = values.float()
-        batch = batch.to(values.device)
+    def _empty_order_features(self, template: torch.Tensor, n_graphs: int) -> torch.Tensor:
+        return template.new_zeros((n_graphs, 2 * self.hidden_dim + 3))
 
-        n_graphs = int(batch.max().item()) + 1 if batch.numel() > 0 else 1
-        out = values.new_zeros((n_graphs, values.size(-1)))
-        out.index_add_(0, batch, values)
+    def _topk_mean(self, values_1d: torch.Tensor) -> torch.Tensor:
+        n = int(values_1d.numel())
+        if n == 0:
+            return values_1d.new_zeros(())
+        k = max(self.topk_min, int(round(self.topk_fraction * n)))
+        k = min(k, n)
+        return torch.topk(values_1d, k=k, largest=True).values.mean()
 
-        if self.reduce == "mean":
-            counts = values.new_zeros((n_graphs, 1))
-            counts.index_add_(0, batch, values.new_ones((values.size(0), 1)))
-            out = out / counts.clamp_min(1.0)
+    def _order_features(
+        self,
+        h: torch.Tensor | None,
+        batch: torch.Tensor | None,
+        proj: nn.Module,
+        local_head: nn.Module,
+        n_graphs: int,
+        template: torch.Tensor,
+    ) -> torch.Tensor:
+        if h is None or batch is None:
+            return self._empty_order_features(template, n_graphs)
 
-        return out
+        z = self._finite(proj(self._finite(h.float())))
+        batch = batch.to(z.device)
 
-    def _pad_to(self, tensor, n_graphs):
-        if tensor.size(0) == n_graphs:
-            return tensor
-        if tensor.size(0) > n_graphs:
-            return tensor[:n_graphs]
-        pad = tensor.new_zeros((n_graphs - tensor.size(0), tensor.size(1)))
-        return torch.cat([tensor, pad], dim=0)
+        local = self._finite(local_head(z).view(-1))
+
+        graph_features = []
+        for graph_idx in range(n_graphs):
+            mask = batch == graph_idx
+            if not torch.any(mask):
+                graph_features.append(z.new_zeros((2 * self.hidden_dim + 3,)))
+                continue
+
+            z_g = z[mask]
+            local_g = local[mask]
+
+            mean_h = z_g.mean(dim=0)
+            max_h = z_g.max(dim=0).values
+
+            mean_local = local_g.mean().view(1)
+            max_local = local_g.max().view(1)
+            topk_local = self._topk_mean(local_g).view(1)
+
+            graph_features.append(
+                torch.cat(
+                    [
+                        mean_h,
+                        max_h,
+                        mean_local,
+                        max_local,
+                        topk_local,
+                    ],
+                    dim=0,
+                )
+            )
+
+        return self._finite(torch.stack(graph_features, dim=0))
 
     def forward(self, data):
         h_atom = self._first_existing(data, ["h_atm", "h_1", "h_scalar"])
@@ -336,10 +409,18 @@ class AlignnEnergyReadout(nn.Module):
             h_atom.size(0),
             device,
         )
-        atom_feat = self._reduce(self.atom_proj(h_atom), atom_batch)
+        n_graphs = int(atom_batch.max().item()) + 1 if atom_batch.numel() > 0 else 1
 
-        n_graphs = atom_feat.size(0)
+        atom_feat = self._order_features(
+            h_atom,
+            atom_batch,
+            self.atom_proj,
+            self.atom_local,
+            n_graphs,
+            h_atom,
+        )
 
+        bond_batch = None
         if h_bond is not None:
             bond_batch = self._batch(
                 data,
@@ -347,11 +428,17 @@ class AlignnEnergyReadout(nn.Module):
                 h_bond.size(0),
                 h_bond.device,
             )
-            bond_feat = self._reduce(self.bond_proj(h_bond), bond_batch)
-            bond_feat = self._pad_to(bond_feat, n_graphs)
-        else:
-            bond_feat = atom_feat.new_zeros(atom_feat.shape)
 
+        bond_feat = self._order_features(
+            h_bond,
+            bond_batch,
+            self.bond_proj,
+            self.bond_local,
+            n_graphs,
+            h_atom,
+        )
+
+        angle_batch = None
         if h_angle is not None:
             angle_batch = self._batch(
                 data,
@@ -359,27 +446,41 @@ class AlignnEnergyReadout(nn.Module):
                 h_angle.size(0),
                 h_angle.device,
             )
-            angle_feat = self._reduce(self.angle_proj(h_angle), angle_batch)
-            angle_feat = self._pad_to(angle_feat, n_graphs)
-        else:
-            angle_feat = atom_feat.new_zeros(atom_feat.shape)
+
+        angle_feat = self._order_features(
+            h_angle,
+            angle_batch,
+            self.angle_proj,
+            self.angle_local,
+            n_graphs,
+            h_atom,
+        )
 
         graph_feat = torch.cat([atom_feat, bond_feat, angle_feat], dim=-1)
         energy = self.final(graph_feat)
 
-        return energy.view(-1)
+        return torch.nan_to_num(energy.view(-1), nan=0.0, posinf=50.0, neginf=-50.0)
+
 
 
 def build_regression_model(device: str = DEVICE) -> GNN:
     """
-    Build the ALIGNN/order regression model used by Catalyst run_training.
+    Build the ALIGNN/order graph_scalar regression model used by Catalyst.
 
-    This returns the high-level GNN wrapper, matching the random example pattern:
+    The task interface owns the backend contract:
+        - target_key="target_scalar"
+        - accumulate_loss="exact"
+        - prediction_params["output_key"]="scalar"
 
-        cat.set_model(build_regression_model(DEVICE))
-        run_distributed_or_single(cat, run_training, cat)
+    Training, checkpointing, and inference are still handled by the Catalyst
+    backend.
     """
-    model = build_model(
+    task = build_regression_task()
+
+    model = build_task_model(
+        task=task,
+        model_type="gnn_builder",
+        apply_task_model_kwargs=False,
         preset="alignn",
         processor_type="order",
         conv_type=MODEL_CONFIG["conv_type"],
@@ -387,7 +488,9 @@ def build_regression_model(device: str = DEVICE) -> GNN:
             dim=MODEL_CONFIG["hidden_dim"],
             hidden_dim=MODEL_CONFIG["hidden_dim"],
             act=nn.SiLU(),
-            reduce="mean",
+            topk_fraction=0.10,
+            topk_min=4,
+            feature_clip=50.0,
         ),
         num_species=AL_CONFIG["num_species"],
         cutoff=AL_CONFIG["cutoff"],

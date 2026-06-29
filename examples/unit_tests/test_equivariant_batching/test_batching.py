@@ -35,10 +35,6 @@ and the legacy ALIGNN fields:
     x_ang
     edge_index_G
     edge_index_A
-
-Recommended location
---------------------
-examples/graphs/test_al_fcc_equivariant_alignnd_batch.py
 """
 
 from __future__ import annotations

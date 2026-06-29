@@ -14,18 +14,6 @@ Workflow
 3. Convert sampled MD frames to ALIGNN graphs with equivariant fields.
 4. Validate the graph fields needed by future equivariant GNNs.
 5. Save each graph and make NetworkX visualizations.
-
-Recommended location
---------------------
-examples/graphs/al_fcc_md_equivariant_alignnd_networkx.py
-
-Notes
------
-- EMT is used only as a lightweight demonstration calculator.
-- The NetworkX plot is a 2D projection of the equivariant atomic neighbor graph.
-- For future conservative energy/force models, an EquivariantProcessor should
-  recompute edge_vec and edge_dist from pos/cell/shifts inside forward() so
-  autograd tracks positions.
 """
 
 from __future__ import annotations

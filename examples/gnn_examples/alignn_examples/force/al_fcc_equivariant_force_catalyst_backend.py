@@ -40,26 +40,31 @@ This assumes the updated Catalyst stack is installed:
     catalyst/ml/gnn/modules/utils/predict.py
     catalyst/ml/gnn/modules/models/gnn_builder.py
     catalyst/ml/gnn/modules/equivariant/*
+    catalyst/ml/gnn/tasks.py
 
 Important config
 ----------------
-The key settings are:
 
-    model_dict.accumulate_loss = "node"
-    model_dict.prediction_params.target_key = "target_vector"
-    model_dict.prediction_params.output_key = "vector"
+    task = GNNTask.node_vector(
+        target_key="target_vector",
+        output_key="vector",
+        accumulate_loss="node",
+        vector_channels=1,
+    )
+
+    task.apply_to_catalyst_parameters(parameters)
 
 and the model is built with:
 
-    build_model(
+    build_task_model(
+        task=task,
         model_type="equivariant",
-        output_type="vector",
-        output_level="node",
-        out_dim=1,
         return_dict=False,
+        ...
     )
 
-The equivariant vector decoder emits [N_atoms, 1, 3], and the small adapter
+The task sets output_type="vector", output_level="node", and out_dim=1. The raw
+equivariant vector decoder emits [N_atoms, 1, 3], and the task's vector adapter
 squeezes that to [N_atoms, 3] before the Catalyst loss sees it.
 
 Run
@@ -91,7 +96,7 @@ from ase.md.verlet import VelocityVerlet
 from catalyst.data.utils import load_dictionary, save_dictionary
 from catalyst.graph.alignnd import alignn_gen
 from catalyst.ml.gnn.GNN import GNN
-from catalyst.ml.gnn.modules.models.gnn_builder import build_model
+from catalyst.ml.gnn.tasks import GNNTask, build_task_model
 from catalyst.ml.inference import run_inference
 from catalyst.ml.training import run_training
 from catalyst.ml.utils.distributed import cuda_destroy
@@ -153,6 +158,23 @@ TRAINING_TOLERANCE_OVERRIDE = TRAINING_OVERRIDES["train_tolerance"]
 # =============================================================================
 # PARAMETER AND MODEL BUILDERS
 # =============================================================================
+
+
+def build_regression_task() -> GNNTask:
+    """
+    Build the generic task contract for this example.
+
+    This is a node-level vector regression task. The physical meaning of the
+    target is intentionally not encoded in the task name. The task learns one
+    complete 3D vector per node, not three independent scalar targets.
+    """
+    return GNNTask.node_vector(
+        target_key="target_vector",
+        output_key="vector",
+        accumulate_loss="node",
+        vector_channels=1,
+        squeeze_single_vector_channel=True,
+    )
 
 
 def resolve_relative_path(path_value: Optional[str]) -> Optional[str]:
@@ -231,103 +253,43 @@ def build_catalyst_parameters(config: Dict[str, Any]) -> Dict[str, Any]:
     model_dict["loss_params"] = loss_params
     model_dict["model"] = None
 
-    # Critical for direct vector-field learning with the updated GNN/predict stack.
-    model_dict["accumulate_loss"] = "node"
-    model_dict.setdefault("prediction_params", {})
-    model_dict["prediction_params"] = dict(model_dict["prediction_params"])
-    model_dict["prediction_params"]["target_key"] = "target_vector"
-    model_dict["prediction_params"]["output_key"] = "vector"
-    model_dict["prediction_params"]["prefer_equivariant_key"] = "vector"
+    # Configure the existing Catalyst backend from the formal generic task
+    # contract. This sets accumulate_loss and prediction_params consistently.
+    build_regression_task().apply_to_catalyst_parameters(parameters)
 
     return parameters
 
 
-class ForceVectorOutputAdapter(torch.nn.Module):
-    """
-    Adapter for the equivariant vector backend.
-
-    The equivariant decoder represents vector-valued outputs as:
-        [N_nodes, n_vector_channels, 3]
-
-    For forces, we want exactly one 3D vector per atom:
-        [N_nodes, 3]
-
-    Therefore the underlying equivariant model should use out_dim=1, and this
-    adapter removes the singleton vector-channel dimension before the Catalyst
-    GNN loss sees the prediction.
-
-    This is still one vector-valued model head. It is not three independent
-    scalar component models.
-    """
-
-    def __init__(self, model: torch.nn.Module):
-        super().__init__()
-        self.model = model
-
-    def forward(self, data):
-        out = self.model(data)
-
-        if isinstance(out, dict):
-            if "vector" in out:
-                out = out["vector"]
-            elif "pred" in out:
-                out = out["pred"]
-            else:
-                raise KeyError(
-                    "ForceVectorOutputAdapter received a dict output, but it "
-                    "does not contain 'vector' or 'pred'."
-                )
-
-        if torch.is_tensor(out) and out.dim() == 3:
-            if out.size(1) != 1 or out.size(2) != 3:
-                raise RuntimeError(
-                    "Expected equivariant force output with shape [N, 1, 3], "
-                    f"but got {tuple(out.shape)}. For one force vector per atom, "
-                    "build the equivariant model with out_dim=1."
-                )
-            out = out[:, 0, :]
-
-        if not torch.is_tensor(out) or out.dim() != 2 or out.size(-1) != 3:
-            raise RuntimeError(
-                "ForceVectorOutputAdapter expected final force prediction shape "
-                f"[N, 3], but got {_shape_for_error(out)}."
-            )
-
-        return out
-
-
-def _shape_for_error(value) -> str:
-    if torch.is_tensor(value):
-        return str(tuple(value.shape))
-    return str(type(value))
-
-
 def build_regression_model(device: str = DEVICE) -> GNN:
     """
-    Build one equivariant vector model wrapped in the high-level Catalyst GNN.
+    Build one equivariant node_vector model wrapped in the high-level Catalyst GNN.
 
-    The underlying equivariant decoder emits one vector channel:
+    The task interface owns the model-output contract:
+        output_type="vector"
+        output_level="node"
+        out_dim=1
+
+    The raw equivariant decoder emits:
         [total_atoms_in_batch, 1, 3]
 
-    ForceVectorOutputAdapter squeezes this to:
+    GNNTask.node_vector(...) wraps the model with VectorChannelAdapter, which
+    squeezes that to:
         [total_atoms_in_batch, 3]
 
     That matches graph.target_vector and graph.y exactly.
     """
-    base_model = build_model(
+    task = build_regression_task()
+
+    model = build_task_model(
+        task=task,
         model_type="equivariant",
-        output_type="vector",
-        output_level="node",
         return_dict=False,
         num_species=AL_CONFIG["num_species"],
         cutoff=AL_CONFIG["cutoff"],
         dim=MODEL_CONFIG["hidden_dim"],
         num_convs=MODEL_CONFIG["n_convs"],
-        out_dim=1,
         act=torch.nn.SiLU(),
     )
-
-    model = ForceVectorOutputAdapter(base_model)
 
     return GNN(model=model, device=device)
 

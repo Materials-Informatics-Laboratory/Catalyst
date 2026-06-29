@@ -26,6 +26,7 @@ from catalyst.data.utils import load_dictionary, save_dictionary
 from catalyst.graph.generic_build import generic_graph_gen
 from catalyst.ml.gnn.GNN import GNN
 from catalyst.ml.gnn.modules.models.gnn_builder import build_model
+from catalyst.ml.gnn.tasks import GNNTask, build_task_model
 from catalyst.ml.inference import run_inference
 from catalyst.ml.training import run_active_learning, run_training
 from catalyst.ml.utils.distributed import cuda_destroy
@@ -113,6 +114,21 @@ ACTIVE_LEARNING_DATA_DIR = BASE_DIR / CONFIG.get("paths", {}).get(
 # =============================================================================
 # PARAMETER AND MODEL BUILDERS
 # =============================================================================
+
+
+def build_regression_task() -> GNNTask:
+    """
+    Build the generic task contract for this example.
+
+    This is a graph-level scalar regression example. If REGRESSION_OUT_DIM > 1,
+    the task still represents graph_scalar regression, but build_task_model(...)
+    below overrides out_dim so the decoder emits one scalar channel per target.
+    """
+    return GNNTask.graph_scalar(
+        target_key="y",
+        output_key="scalar",
+        accumulate_loss="exact",
+    )
 
 
 def resolve_relative_path(path_value: Optional[str]) -> Optional[str]:
@@ -211,19 +227,29 @@ def build_catalyst_parameters(config: Dict[str, Any]) -> Dict[str, Any]:
     model_dict["loss_params"] = loss_params
     model_dict["model"] = None
 
+    # Configure the existing Catalyst backend from the formal generic task
+    # contract. This sets accumulate_loss and prediction_params consistently.
+    build_regression_task().apply_to_catalyst_parameters(parameters)
+
     return parameters
 
 
 def build_regression_model(device: str = DEVICE) -> GNN:
-    """Build the GenericGNN regression model used for training/testing/prediction.
+    """Build the GenericGNN graph_scalar regression model.
 
-    This example generates Generic_Graph_Data objects, not Atomic_Graph_Data
-    objects. Therefore the new modular setup should use the generic feature
-    encoder rather than the atomic/materials encoder. The processor still follows
-    the ALIGNN-style 1/2/3-body update order through the modular
-    processors.order_processor.OrderProcessor internally.
+    The task interface owns the backend contract:
+        - target_key="y"
+        - accumulate_loss="exact"
+        - prediction_params["output_key"]="scalar"
+
+    The existing Catalyst backend still owns training, checkpointing, and
+    inference.
     """
-    model = build_model(
+    task = build_regression_task()
+
+    model = build_task_model(
+        task=task,
+        model_type="generic",
         processor_type="order",
         conv_type=CONV_TYPE,
         encoder_type="generic",

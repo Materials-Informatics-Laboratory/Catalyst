@@ -28,11 +28,6 @@ Optional deeper test:
 
     python test_catalyst_imports.py --include-examples --strict
 
-Notes
------
-By default, this script skips Catalyst examples because example modules may load
-configs, read data, train models, or execute workflow code at import time. Use
-`--include-examples` only when you want a deeper source-tree test.
 """
 
 from __future__ import annotations

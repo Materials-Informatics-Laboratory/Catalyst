@@ -20,10 +20,10 @@
     ],
     "temperature_K": 800.0,
     "timestep_fs": 1.0,
-    "md_steps": 300,
+    "md_steps": 20000,
     "sample_every": 3,
     "equilibration_steps": 20,
-    "cutoff": 3.35,
+    "cutoff": 4.0,
     "neighbor_k": -1,
     "include_dihedrals": false,
     "max_graph_attempts": 6,
@@ -82,8 +82,8 @@
         "random"
       ],
       "split": [
-        0.2,
-        0.75
+        0.4,
+        0.25
       ],
       "sampling_seed": 112358,
       "params_groups": [
@@ -111,8 +111,8 @@
       "train_delta": 0.001,
       "train_tolerance": 0.001,
       "worsen_tolerance": 2.0,
-      "patience": 5,
-      "max_deltas": 4,
+      "patience": 50,
+      "max_deltas": 40,
       "loss_params": {
         "function": "MSELoss"
       },
