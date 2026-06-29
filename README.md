@@ -7,7 +7,7 @@
 graph data -> encoder -> processor/message passing -> decoder/readout -> Catalyst training backend
 ```
 
-It is intended to make the core graph-learning workflow usable and reproducible while the package API is still being consolidated.
+It is intended to make the core graph-learning workflow usable and reproducible around a central package API.
 
 Catalyst currently supports:
 
@@ -27,6 +27,7 @@ Catalyst is a modular graph-learning framework for materials and scientific mach
 3. Training models through a shared Catalyst backend.
 4. Running inference, saving predictions, and plotting parity/performance results.
 5. Defining generic ML tasks such as graph-level scalar regression and node-level vector regression.
+6. If using CUDA, Catalyst is built with DDP support allowing you to train your GNN models in a highly parallelized GPU environment. 
 
 A typical Catalyst model is assembled from three pieces:
 
