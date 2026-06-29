@@ -373,11 +373,7 @@ conda activate catalyst-dev
 
 python -m pip install --upgrade pip
 python -m pip install -e .
-```
 
-Depending on which examples you want to run, you may also need:
-
-```bash
 python -m pip install numpy scipy matplotlib scikit-learn networkx ase
 python -m pip install torch torch-geometric
 ```
