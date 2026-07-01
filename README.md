@@ -57,6 +57,45 @@ from catalyst.ml.gnn import build_model
 
 ---
 
+## Installation
+
+The recommended installation mode for the v2.1 is editable installation from the repository root.
+
+```bash
+git clone <your-catalyst-repository-url>
+cd catalyst
+python -m pip install -e .
+```
+
+For a fresh conda environment, a typical setup is:
+
+```bash
+conda create -n catalyst-dev python=3.12.4 -y
+conda activate catalyst-dev
+
+python -m pip install --upgrade pip
+python -m pip install -e .
+
+python -m pip install numpy scipy matplotlib scikit-learn networkx ase
+python -m pip install torch torch-geometric
+```
+
+If you are using CUDA-enabled PyTorch, install the PyTorch build that matches your CUDA version using the official PyTorch installation instructions. Note, Catalyst is supported on Python 3.10 and up, but your version of PyTorch will dictate your python version.
+
+For development and testing:
+
+```bash
+python -m pip install pytest
+```
+
+Then run:
+
+```bash
+python -m pytest
+```
+
+---
+
 ## What graph types does Catalyst support?
 
 Catalyst currently supports three broad graph families.
@@ -353,45 +392,6 @@ This task is experimental in the current release.
 | `node_vector` | Node | `[N, 3]` | Forces, local vector field | `node` |
 | `graph_vector` | Graph | `[B, 3]` | Dipole, polarization, global vector | `exact` |
 | `scalar_gradient` | Node/gradient | Usually `[N, 3]` target | Forces from scalar potential | `node` |
-
----
-
-## Installation
-
-The recommended installation mode for the v2.1 is editable installation from the repository root.
-
-```bash
-git clone <your-catalyst-repository-url>
-cd catalyst
-python -m pip install -e .
-```
-
-For a fresh conda environment, a typical setup is:
-
-```bash
-conda create -n catalyst-dev python=3.12.4 -y
-conda activate catalyst-dev
-
-python -m pip install --upgrade pip
-python -m pip install -e .
-
-python -m pip install numpy scipy matplotlib scikit-learn networkx ase
-python -m pip install torch torch-geometric
-```
-
-If you are using CUDA-enabled PyTorch, install the PyTorch build that matches your CUDA version using the official PyTorch installation instructions. Note, Catalyst is supposerted on Python 3.10 and up, but your version of PyTorch will dictate your python version.
-
-For development and testing:
-
-```bash
-python -m pip install pytest
-```
-
-Then run:
-
-```bash
-python -m pytest
-```
 
 ---
 
