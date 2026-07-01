@@ -369,7 +369,7 @@ python -m pip install -e .
 For a fresh conda environment, a typical setup is:
 
 ```bash
-conda create -n catalyst-dev python=3.10 -y
+conda create -n catalyst-dev python=3.12.4 -y
 conda activate catalyst-dev
 
 python -m pip install --upgrade pip
@@ -379,7 +379,7 @@ python -m pip install numpy scipy matplotlib scikit-learn networkx ase
 python -m pip install torch torch-geometric
 ```
 
-If you are using CUDA-enabled PyTorch, install the PyTorch build that matches your CUDA version using the official PyTorch installation instructions.
+If you are using CUDA-enabled PyTorch, install the PyTorch build that matches your CUDA version using the official PyTorch installation instructions. Note, Catalyst is supposerted on Python 3.10 and up, but your version of PyTorch will dictate your python version.
 
 For development and testing:
 
