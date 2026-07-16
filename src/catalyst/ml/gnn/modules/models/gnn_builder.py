@@ -191,16 +191,26 @@ def attach_order_hidden_aliases(data):
 
 def attach_equivariant_hidden_aliases(data):
     """
-    Attach equivariant hidden aliases from generic/order hidden fields.
+    Attach equivariant hidden aliases without overwriting existing states.
+
+    This helper is used immediately after the encoder, where it is safe to
+    create compatibility aliases.  It deliberately fills only missing fields:
+    after message passing, ``h_1`` and ``h_scalar`` may represent outputs from
+    different processor families, so blindly copying one over the other can
+    discard the newly processed representation.
     """
     if not _has_attr(data, "h_scalar"):
         value = _first_attr(data, "h_1", "h_atm", "h_g_node", "h_node")
         if value is not None:
             data.h_scalar = value
 
-    if _has_attr(data, "h_scalar"):
+    if not _has_attr(data, "h_1") and _has_attr(data, "h_scalar"):
         data.h_1 = data.h_scalar
-        data.h_node = data.h_scalar
+
+    if not _has_attr(data, "h_node"):
+        value = _first_attr(data, "h_scalar", "h_1", "h_atm", "h_g_node")
+        if value is not None:
+            data.h_node = value
 
     return data
 
@@ -211,16 +221,64 @@ def attach_hidden_aliases(data):
     return data
 
 
-def backfill_legacy_hidden_names(data):
+def synchronize_hidden_aliases_after_processor(data, processor):
     """
-    Backfill old Catalyst names from order-style/equivariant hidden names.
+    Synchronize compatibility aliases from the processor's authoritative state.
 
-    This keeps existing decoders/readout utilities working while the package is
-    migrated to the new modular names.
+    ``OrderProcessor`` and ``ScalarProcessor`` update ``h_1`` during message
+    passing, so their processed ``h_1`` must be copied outward to
+    ``h_scalar``/``h_node``.  Equivariant processors update ``h_scalar``, so the
+    synchronization direction is reversed for that branch.
+
+    This processor-aware step prevents a stale pre-message-passing alias from
+    overwriting a newly computed hidden representation.
     """
+    if isinstance(processor, (OrderProcessor, ScalarProcessor)):
+        if not _has_attr(data, "h_1"):
+            raise AttributeError(
+                f"{processor.__class__.__name__} did not produce data.h_1."
+            )
+
+        # Order/scalar processors make h_1 authoritative.
+        data.h_scalar = data.h_1
+        data.h_node = data.h_1
+        return data
+
+    # Equivariant processors make h_scalar authoritative.  This branch also
+    # provides a safe fallback for custom processors that expose only h_1.
     if _has_attr(data, "h_scalar"):
         data.h_1 = data.h_scalar
         data.h_node = data.h_scalar
+    elif _has_attr(data, "h_1"):
+        data.h_scalar = data.h_1
+        data.h_node = data.h_1
+    else:
+        raise AttributeError(
+            f"{processor.__class__.__name__} did not produce data.h_scalar "
+            "or data.h_1."
+        )
+
+    return data
+
+
+def backfill_legacy_hidden_names(data):
+    """
+    Backfill old Catalyst names from canonical processed hidden states.
+
+    Canonical fields are only filled when missing; existing processor outputs
+    are never overwritten.  ``synchronize_hidden_aliases_after_processor``
+    should be called first so all aliases refer to the current processed state.
+    """
+    if not _has_attr(data, "h_1") and _has_attr(data, "h_scalar"):
+        data.h_1 = data.h_scalar
+
+    if not _has_attr(data, "h_scalar") and _has_attr(data, "h_1"):
+        data.h_scalar = data.h_1
+
+    if not _has_attr(data, "h_node"):
+        value = _first_attr(data, "h_scalar", "h_1")
+        if value is not None:
+            data.h_node = value
 
     if _has_attr(data, "h_1"):
         if _has_attr(data, "x_atm"):
@@ -343,7 +401,10 @@ class GNNBuilder(nn.Module):
         data = attach_hidden_aliases(data)
 
         data = self.processor(data)
-        data = attach_hidden_aliases(data)
+        data = synchronize_hidden_aliases_after_processor(
+            data,
+            self.processor,
+        )
         data = backfill_legacy_hidden_names(data)
 
         return self.decoder(data)
@@ -1268,6 +1329,7 @@ __all__ = [
     "attach_order_hidden_aliases",
     "attach_equivariant_hidden_aliases",
     "attach_hidden_aliases",
+    "synchronize_hidden_aliases_after_processor",
     "backfill_legacy_hidden_names",
     "prepare_gradient_input",
     "build_default_encoder",
