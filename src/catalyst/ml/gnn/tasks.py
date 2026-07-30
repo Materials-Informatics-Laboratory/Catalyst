@@ -17,6 +17,7 @@ configures the existing backend consistently.
 
 Task names are intentionally generic:
     graph_scalar
+    graph_multiscalar
     node_scalar
     node_vector
     graph_vector
@@ -36,6 +37,7 @@ from catalyst.ml.gnn.modules.models.gnn_builder import build_model
 
 TaskName = Literal[
     "graph_scalar",
+    "graph_multiscalar",
     "node_scalar",
     "node_vector",
     "graph_vector",
@@ -144,6 +146,127 @@ class VectorChannelAdapter(nn.Module):
         )
 
 
+class GraphMultiScalarAdapter(nn.Module):
+    """
+    Convert order-wise K-channel decoder outputs into ``[B, K]`` predictions.
+
+    Standard Catalyst order decoders return a list containing atom-, bond-, and
+    optionally angle-level contributions.  For a graph multiscalar task, every
+    last-dimension channel is an independent invariant scalar target.  This
+    adapter graph-pools those contributions without treating the channels as a
+    geometric vector.
+
+    Direct tensor or mapping outputs from an equivariant/custom decoder are
+    accepted unchanged after shape validation.
+    """
+
+    def __init__(
+        self,
+        model: nn.Module,
+        *,
+        num_targets: int,
+        normalize_by: Optional[str] = "primary_nodes",
+        output_keys: tuple[str, ...] = ("scalar", "pred", "output"),
+    ):
+        super().__init__()
+        self.model = model
+        self.num_targets = int(num_targets)
+        self.normalize_by = normalize_by
+        self.output_keys = tuple(output_keys)
+
+        if self.num_targets < 2:
+            raise ValueError(
+                "GraphMultiScalarAdapter requires num_targets >= 2. "
+                "Use graph_scalar for a single scalar target."
+            )
+
+    @staticmethod
+    def _num_graphs(data) -> Optional[int]:
+        explicit = getattr(data, "num_graphs", None)
+        if explicit is not None:
+            return int(explicit)
+
+        for batch_attr in ("x_atm_batch", "node_G_batch", "batch"):
+            batch = getattr(data, batch_attr, None)
+            if torch.is_tensor(batch):
+                if batch.numel() == 0:
+                    return 0
+                return int(batch.max().item()) + 1
+
+        return None
+
+    def _validate_tensor(
+        self,
+        output: torch.Tensor,
+        *,
+        data: Any = None,
+    ) -> torch.Tensor:
+        if output.dim() == 1:
+            if output.numel() != self.num_targets:
+                raise RuntimeError(
+                    "A one-dimensional graph_multiscalar output must contain "
+                    f"exactly {self.num_targets} values. Got {_shape(output)}."
+                )
+            output = output.reshape(1, self.num_targets)
+
+        if output.dim() != 2 or output.size(-1) != self.num_targets:
+            raise RuntimeError(
+                "graph_multiscalar expects graph-level output shape [B, K], "
+                f"with K={self.num_targets}. Got {_shape(output)}."
+            )
+
+        if data is not None:
+            num_graphs = self._num_graphs(data)
+            if num_graphs is not None and output.size(0) != num_graphs:
+                raise RuntimeError(
+                    "graph_multiscalar received a tensor whose first dimension "
+                    "does not match the number of graphs in the batch. This often "
+                    "means an entity-level ScalarDecoder output was used instead "
+                    "of MultiScalarDecoder. "
+                    f"Expected B={num_graphs}, got {_shape(output)}."
+                )
+
+        return output
+
+    def forward(self, data):
+        output = self.model(data)
+
+        if isinstance(output, Mapping):
+            output = _get_output_from_mapping(output, self.output_keys)
+
+        if torch.is_tensor(output):
+            return self._validate_tensor(output, data=data)
+
+        if isinstance(output, (list, tuple)):
+            # Import lazily to keep the task module lightweight and avoid
+            # imposing the legacy accumulator on direct/equivariant tasks.
+            from catalyst.ml.gnn.modules.utils.predict import accumulate_predictions
+
+            pooled, multichannel = accumulate_predictions(
+                output,
+                data,
+                loss_tag="exact",
+                return_y=False,
+                channel_mode="target",
+                normalize_by=self.normalize_by,
+                legacy_multichannel_shape=False,
+            )
+
+            if not multichannel:
+                raise RuntimeError(
+                    "graph_multiscalar received a single-channel decoder output. "
+                    f"Expected {self.num_targets} independent scalar channels."
+                )
+
+            return self._validate_tensor(pooled, data=data)
+
+        raise TypeError(
+            "GraphMultiScalarAdapter expected the wrapped model to return a "
+            "tensor, mapping, or list/tuple of order contributions. "
+            f"Got {_shape(output)}."
+        )
+
+
 @dataclass(frozen=True)
 class GNNTask:
     """
@@ -166,7 +289,10 @@ class GNNTask:
     out_dim: int = 1
     vector_channels: int = 1
     requires_vector_adapter: bool = False
+    requires_graph_multiscalar_adapter: bool = False
     squeeze_single_vector_channel: bool = True
+    normalize_by: Optional[str] = "primary_nodes"
+    target_names: Optional[tuple[str, ...]] = None
 
     @classmethod
     def graph_scalar(
@@ -187,6 +313,55 @@ class GNNTask:
             prefer_equivariant_key="scalar",
             out_dim=int(out_dim),
         )
+
+    @classmethod
+    def graph_multiscalar(
+        cls,
+        *,
+        num_targets: int,
+        target_key: str = "target_scalars",
+        output_key: str = "scalar",
+        accumulate_loss: str = "exact",
+        normalize_by: Optional[str] = "primary_nodes",
+        target_names: Optional[Iterable[str]] = None,
+    ) -> "GNNTask":
+        num_targets = int(num_targets)
+        if num_targets < 2:
+            raise ValueError(
+                "graph_multiscalar requires num_targets >= 2. "
+                "Use graph_scalar for a single target."
+            )
+
+        names = None if target_names is None else tuple(str(name) for name in target_names)
+        if names is not None and len(names) != num_targets:
+            raise ValueError(
+                "target_names must contain exactly num_targets entries. "
+                f"Got {len(names)} names for {num_targets} targets."
+            )
+
+        return cls(
+            name="graph_multiscalar",
+            target_key=target_key,
+            output_type="scalar",
+            output_level="graph",
+            accumulate_loss=accumulate_loss,
+            output_key=output_key,
+            prefer_equivariant_key="scalar",
+            out_dim=num_targets,
+            requires_graph_multiscalar_adapter=True,
+            normalize_by=normalize_by,
+            target_names=names,
+        )
+
+    @classmethod
+    def graph_scalar_multichannel(cls, **kwargs: Any) -> "GNNTask":
+        """Alias for :meth:`graph_multiscalar`."""
+        return cls.graph_multiscalar(**kwargs)
+
+    @classmethod
+    def scalar_multichannel(cls, **kwargs: Any) -> "GNNTask":
+        """Backward-friendly graph-level alias for :meth:`graph_multiscalar`."""
+        return cls.graph_multiscalar(**kwargs)
 
     @classmethod
     def node_scalar(
@@ -281,6 +456,14 @@ class GNNTask:
 
         if name == "graph_scalar":
             return cls.graph_scalar(**kwargs)
+        if name in {
+            "graph_multiscalar",
+            "graph_multi_scalar",
+            "graph_scalar_multichannel",
+            "scalar_multichannel",
+            "multiscalar",
+        }:
+            return cls.graph_multiscalar(**kwargs)
         if name == "node_scalar":
             return cls.node_scalar(**kwargs)
         if name == "node_vector":
@@ -292,7 +475,8 @@ class GNNTask:
 
         raise ValueError(
             f"Unknown GNN task {name!r}. Valid options are: "
-            "graph_scalar, node_scalar, node_vector, graph_vector, scalar_gradient."
+            "graph_scalar, graph_multiscalar, node_scalar, node_vector, "
+            "graph_vector, scalar_gradient."
         )
 
     def with_target_key(self, target_key: str) -> "GNNTask":
@@ -305,7 +489,11 @@ class GNNTask:
         """
         model_dict = parameters.setdefault("model_dict", {})
         model_dict["task"] = self.name
+        model_dict["task_out_dim"] = self.out_dim
         model_dict["accumulate_loss"] = self.accumulate_loss
+
+        if self.target_names is not None:
+            model_dict["task_target_names"] = list(self.target_names)
 
         prediction_params = dict(model_dict.get("prediction_params", {}))
         prediction_params["target_key"] = self.target_key
@@ -315,6 +503,11 @@ class GNNTask:
 
         if self.prefer_equivariant_key is not None:
             prediction_params["prefer_equivariant_key"] = self.prefer_equivariant_key
+
+        if self.name == "graph_multiscalar":
+            prediction_params["channel_mode"] = "target"
+            prediction_params["legacy_multichannel_shape"] = False
+            prediction_params["normalize_by"] = self.normalize_by
 
         model_dict["prediction_params"] = prediction_params
 
@@ -326,6 +519,24 @@ class GNNTask:
         }
 
     def wrap_model_if_needed(self, model: nn.Module) -> nn.Module:
+        if self.requires_graph_multiscalar_adapter:
+            return GraphMultiScalarAdapter(
+                model,
+                num_targets=self.out_dim,
+                normalize_by=self.normalize_by,
+                output_keys=tuple(
+                    key
+                    for key in (
+                        self.output_key,
+                        self.prefer_equivariant_key,
+                        "scalar",
+                        "pred",
+                        "output",
+                    )
+                    if key is not None
+                ),
+            )
+
         if not self.requires_vector_adapter:
             return model
 
@@ -391,6 +602,29 @@ class GNNTask:
                 raise RuntimeError(
                     "graph_scalar prediction/target element counts do not match. "
                     f"Got pred={_shape(pred)}, target={_shape(target)}."
+                )
+            return
+
+        if self.name == "graph_multiscalar":
+            if pred.dim() != 2 or pred.size(-1) != self.out_dim:
+                raise RuntimeError(
+                    "graph_multiscalar expects prediction shape [B, K], "
+                    f"with K={self.out_dim}. Got pred={_shape(pred)}."
+                )
+
+            if target.dim() == 1 and target.numel() == pred.numel():
+                target = target.reshape_as(pred)
+
+            if target.dim() != 2 or target.size(-1) != self.out_dim:
+                raise RuntimeError(
+                    f"graph_multiscalar expects target {self.target_key!r} shape "
+                    f"[B, K], with K={self.out_dim}. Got target={_shape(target)}."
+                )
+
+            if pred.shape != target.shape:
+                raise RuntimeError(
+                    "graph_multiscalar prediction/target shape mismatch: "
+                    f"pred={_shape(pred)}, target={_shape(target)}."
                 )
             return
 
@@ -523,6 +757,20 @@ def build_task_model(
         for key, value in task.model_kwargs().items():
             model_kwargs.setdefault(key, value)
 
+        if task.name == "graph_multiscalar" and decoder is None:
+            route = str(preset or model_type or "").lower().strip()
+            equivariant_route = (
+                route in {"equivariant", "egnn", "equivariant_gnn"}
+                or route.startswith("equivariant_")
+                or str(kwargs.get("processor_type", "")).lower().strip() == "equivariant"
+                or "equivariant"
+                in str(kwargs.get("encoder_type", "")).lower().strip()
+                or str(kwargs.get("decoder_type", "")).lower().strip()
+                in {"equivariant", "equivariant_decoder", "generic_equivariant"}
+            )
+            if not equivariant_route:
+                model_kwargs.setdefault("decoder_type", "multiscalar")
+
     if decoder is not None:
         model_kwargs["decoder"] = decoder
 
@@ -595,6 +843,8 @@ def task_from_parameters(parameters: Mapping[str, Any], *, default_task: str = "
     output_key = prediction_params.get("output_key", None)
     prefer_key = prediction_params.get("prefer_equivariant_key", None)
     accumulate_loss = model_dict.get("accumulate_loss", "exact")
+    task_out_dim = int(model_dict.get("task_out_dim", 1))
+    task_target_names = model_dict.get("task_target_names", None)
 
     if task_name is not None:
         kwargs: Dict[str, Any] = {}
@@ -604,6 +854,21 @@ def task_from_parameters(parameters: Mapping[str, Any], *, default_task: str = "
             kwargs["output_key"] = output_key
         if accumulate_loss is not None:
             kwargs["accumulate_loss"] = accumulate_loss
+        if str(task_name).lower().strip() in {
+            "graph_multiscalar",
+            "graph_multi_scalar",
+            "graph_scalar_multichannel",
+            "scalar_multichannel",
+            "multiscalar",
+        }:
+            kwargs["num_targets"] = task_out_dim
+            if task_target_names is not None:
+                kwargs["target_names"] = task_target_names
+            kwargs["normalize_by"] = prediction_params.get(
+                "normalize_by", "primary_nodes"
+            )
+        elif str(task_name).lower().strip() in {"graph_scalar", "node_scalar"}:
+            kwargs["out_dim"] = task_out_dim
         return GNNTask.from_name(str(task_name), **kwargs)
 
     if output_key == "vector" or prefer_key == "vector":

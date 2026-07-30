@@ -4,6 +4,7 @@ from .standard_decoders import (
     ScalarDecoder,
     Decoder,
     PositiveScalarsDecoder,
+    MultiScalarDecoder,
     PositiveKChannelDecoder,
     PositiveFeatureReadout,
 )
@@ -21,10 +22,10 @@ __all__ = [
     "ScalarDecoder",
     "Decoder",
     "PositiveScalarsDecoder",
+    "MultiScalarDecoder",
     "PositiveKChannelDecoder",
     "PositiveFeatureReadout",
 ]
-
 for _name in ("EquivariantDecoder", "GenericEquivariantDecoder", "ScalarGradientDecoder"):
     if _name in globals():
         __all__.append(_name)

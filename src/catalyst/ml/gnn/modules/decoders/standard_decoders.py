@@ -158,6 +158,76 @@ class PositiveScalarsDecoder(nn.Module):
         return outputs
 
 
+class MultiScalarDecoder(nn.Module):
+    """
+    Decode ``K`` independent invariant scalar channels for each graph order.
+
+    The output shape for every available order is ``[N_order, K]``.  Channels
+    share the upstream GNN representation but are ordinary scalar regression
+    targets: they have no Cartesian/equivariant interpretation and are never
+    passed through ``VectorChannelAdapter``.
+
+    Parameters
+    ----------
+    dim
+        Hidden feature dimension.
+    num_targets
+        Number of independent scalar properties to predict.
+    positive
+        Apply Softplus to every output channel when all targets are known to be
+        nonnegative.  The default is signed/unconstrained regression.
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        num_targets: int,
+        act=nn.SiLU(),
+        positive: bool = False,
+    ):
+        super().__init__()
+        self.dim = int(dim)
+        self.num_targets = int(num_targets)
+        self.out_dim = self.num_targets
+        self.K = self.num_targets  # Compatibility with PositiveKChannelDecoder.
+        self.act_func = act
+        self.positive = bool(positive)
+
+        if self.num_targets < 2:
+            raise ValueError(
+                "MultiScalarDecoder requires num_targets >= 2. "
+                "Use ScalarDecoder/PositiveScalarsDecoder for one target."
+            )
+
+        def make_transform():
+            layers = [MLP([self.dim, self.dim, self.num_targets], act=self.act_func)]
+            if self.positive:
+                layers.append(nn.Softplus())
+            return nn.Sequential(*layers)
+
+        self.transform_1 = make_transform()
+        self.transform_2 = make_transform()
+        self.transform_3 = make_transform()
+
+        # Legacy/order aliases used by downstream analysis code.
+        self.transform_g_node = self.transform_1
+        self.transform_a_node = self.transform_2
+        self.transform_a_edge = self.transform_3
+
+    def forward(self, data):
+        h = _order_hidden_features(data)
+
+        outputs = [
+            self.transform_1(h[0]),
+            self.transform_2(h[1]),
+        ]
+
+        if len(h) > 2:
+            outputs.append(self.transform_3(h[2]))
+
+        return outputs
+
+
 class PositiveKChannelDecoder(nn.Module):
     """
     Generic positive K-channel decoder for hidden graph orders.
@@ -299,6 +369,7 @@ __all__ = [
     "ScalarDecoder",
     "Decoder",
     "PositiveScalarsDecoder",
+    "MultiScalarDecoder",
     "PositiveKChannelDecoder",
     "PositiveFeatureReadout",
 ]

@@ -438,6 +438,7 @@ def _lazy_import_default_components():
     from ..decoders.standard_decoders import ScalarDecoder
     from ..decoders.standard_decoders import Decoder
     from ..decoders.standard_decoders import PositiveScalarsDecoder
+    from ..decoders.standard_decoders import MultiScalarDecoder
     from ..decoders.standard_decoders import PositiveKChannelDecoder
     from ..decoders.standard_decoders import PositiveFeatureReadout
 
@@ -460,6 +461,7 @@ def _lazy_import_default_components():
         "ScalarDecoder": ScalarDecoder,
         "Decoder": Decoder,
         "PositiveScalarsDecoder": PositiveScalarsDecoder,
+        "MultiScalarDecoder": MultiScalarDecoder,
         "PositiveKChannelDecoder": PositiveKChannelDecoder,
         "PositiveFeatureReadout": PositiveFeatureReadout,
         "EquivariantAtomicEncoder": EquivariantAtomicEncoder,
@@ -573,6 +575,19 @@ def build_default_decoder(
             **decoder_kwargs,
         )
 
+    if decoder_type in {
+        "multiscalar",
+        "multi_scalar",
+        "scalar_channels",
+        "independent_scalars",
+    }:
+        return components["MultiScalarDecoder"](
+            dim=dim,
+            num_targets=out_dim,
+            act=act,
+            **decoder_kwargs,
+        )
+
     if decoder_type in {"positive_k", "positive_k_channel", "positive_kchannel"}:
         return components["PositiveKChannelDecoder"](
             dim=dim,
@@ -603,7 +618,8 @@ def build_default_decoder(
 
     raise ValueError(
         f"Unsupported decoder_type={decoder_type!r}. "
-        "Supported defaults are: 'scalar', 'positive', 'positive_k', and 'equivariant'."
+        "Supported defaults are: 'scalar', 'positive', 'multiscalar', "
+        "'positive_k', and 'equivariant'."
     )
 
 
