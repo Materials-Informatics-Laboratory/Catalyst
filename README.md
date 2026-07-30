@@ -1,4 +1,4 @@
-![Screenshot](https://github.com/Materials-Informatics-Laboratory/Catalyst/blob/main/visuals/catalyst2.png?raw=true)
+![Screenshot](https://github.com/Materials-Informatics-Laboratory/Catalyst/blob/main/visuals/catalyst_logo_3.png?raw=true)
 
 
 **Catalyst** is a research-oriented Python package for building, training, and analyzing graph neural networks on atomistic and generic materials graphs. It is designed around a modular pipeline:
