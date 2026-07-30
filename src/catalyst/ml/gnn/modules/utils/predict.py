@@ -460,6 +460,25 @@ def _format_direct_prediction(pred, loss_tag, key):
     )
 
 
+def _coerce_target_tensor(value):
+    """Convert scalar/list/tuple target data to a tensor safely."""
+    if torch.is_tensor(value):
+        return value
+
+    if isinstance(value, (list, tuple)):
+        if len(value) == 0:
+            return torch.as_tensor(value)
+
+        converted = [_coerce_target_tensor(item) for item in value]
+        try:
+            return torch.stack(converted)
+        except RuntimeError:
+            # Preserve PyTorch's normal failure for genuinely ragged targets.
+            return torch.as_tensor(value)
+
+    return torch.as_tensor(value)
+
+
 def _get_direct_target(data, target_attr, pred, loss_tag, key):
     """
     Return target tensor matched to a direct/dict prediction.
@@ -471,13 +490,7 @@ def _get_direct_target(data, target_attr, pred, loss_tag, key):
             f"{_safe_data_attr_preview(data)}"
         )
 
-    y = getattr(data, target_attr)
-
-    if isinstance(y, (list, tuple)):
-        y = torch.stack(tuple(y_i for y_i in y))
-
-    if not torch.is_tensor(y):
-        y = torch.as_tensor(y)
+    y = _coerce_target_tensor(getattr(data, target_attr))
 
     y = y.to(device=pred.device, dtype=pred.dtype)
 
@@ -647,30 +660,58 @@ def _reshape_prediction(p, n_channels):
     return p.reshape(-1, n_channels)
 
 
-def _sum_by_batch(values, batch):
+def _num_graphs_from_schema(data, schema):
+    """Return one shared graph count for every entity type in a batch."""
+    explicit = getattr(data, "num_graphs", None)
+    if explicit is not None:
+        return int(explicit)
+
+    primary_entries = [entry for entry in schema if entry["is_primary"]]
+    if len(primary_entries) != 1:
+        raise RuntimeError("Expected exactly one primary node entry in schema.")
+
+    primary_batch = data[primary_entries[0]["batch_attr"]]
+    if primary_batch.numel() == 0:
+        return 0
+
+    return int(primary_batch.max().item()) + 1
+
+
+def _sum_by_batch(values, batch, num_graphs=None):
+    """Sum values by their original graph/sample ids.
+
+    Passing one shared ``num_graphs`` keeps rows aligned across primary and
+    secondary entity tensors, including graphs that contain no bonds/angles.
     """
-    Sum values by graph/sample id.
+    batch = batch.to(device=values.device, dtype=torch.long).reshape(-1)
 
-    values: [N_entity, K]
-    batch:  [N_entity]
+    if values.shape[0] != batch.numel():
+        raise ValueError(
+            "values and batch must describe the same number of entities. "
+            f"Got {values.shape[0]} values and {batch.numel()} batch ids."
+        )
 
-    returns:
-        [num_graphs, K]
-    """
+    if num_graphs is None:
+        num_graphs = 0 if batch.numel() == 0 else int(batch.max().item()) + 1
+    num_graphs = int(num_graphs)
 
-    batch = batch.to(device=values.device)
+    if num_graphs < 0:
+        raise ValueError(f"num_graphs must be non-negative, got {num_graphs}.")
 
-    unique_batch, inverse = torch.unique(
-        batch,
-        sorted=True,
-        return_inverse=True,
-    )
+    if batch.numel() > 0:
+        min_id = int(batch.min().item())
+        max_id = int(batch.max().item())
+        if min_id < 0 or max_id >= num_graphs:
+            raise ValueError(
+                "batch contains graph ids outside the requested output range: "
+                f"min={min_id}, max={max_id}, num_graphs={num_graphs}."
+            )
 
-    out = values.new_zeros((unique_batch.numel(), values.shape[1]))
-    out.index_add_(0, inverse, values)
+    out = values.new_zeros((num_graphs, values.shape[1]))
+    if batch.numel() > 0:
+        out.index_add_(0, batch, values)
 
     return out
-
 
 def _primary_node_counts(data, schema, loss_tag):
     """
@@ -695,7 +736,12 @@ def _primary_node_counts(data, schema, loss_tag):
     ).reshape(-1, 1)
 
     if loss_tag == "exact":
-        return _sum_by_batch(ones, primary_batch).clamp_min(1.0)
+        num_graphs = _num_graphs_from_schema(data, schema)
+        return _sum_by_batch(
+            ones,
+            primary_batch,
+            num_graphs=num_graphs,
+        ).clamp_min(1.0)
 
     if loss_tag == "sum":
         return ones.sum().clamp_min(1.0)
@@ -748,6 +794,7 @@ def _accumulate_as_target(
 
     if loss_tag == "exact":
         total = None
+        num_graphs = _num_graphs_from_schema(data, schema)
 
         for entry in schema:
             pred_index = entry["pred_index"]
@@ -756,7 +803,11 @@ def _accumulate_as_target(
             values = _reshape_prediction(pred[pred_index], n_channels)
             batch = data[batch_attr]
 
-            summed = _sum_by_batch(values, batch)
+            summed = _sum_by_batch(
+                values,
+                batch,
+                num_graphs=num_graphs,
+            )
 
             if total is None:
                 total = summed
@@ -832,6 +883,7 @@ def _accumulate_as_latent_features(
     entity_names = []
 
     if loss_tag == "exact":
+        num_graphs = _num_graphs_from_schema(data, schema)
         for entry in schema:
             pred_index = entry["pred_index"]
             batch_attr = entry["batch_attr"]
@@ -840,7 +892,11 @@ def _accumulate_as_latent_features(
             values = _reshape_prediction(pred[pred_index], n_channels)
             batch = data[batch_attr]
 
-            summed = _sum_by_batch(values, batch)
+            summed = _sum_by_batch(
+                values,
+                batch,
+                num_graphs=num_graphs,
+            )
 
             summed = _apply_size_normalization(
                 summed,
@@ -907,13 +963,7 @@ def _get_y(data, loss_tag, multichannel, target_dim=None):
     if not hasattr(data, "y"):
         return None
 
-    y = data.y
-
-    if isinstance(y, (list, tuple)):
-        y = torch.stack(tuple(y_i for y_i in y))
-
-    if not torch.is_tensor(y):
-        y = torch.as_tensor(y)
+    y = _coerce_target_tensor(data.y)
 
     # Make vector targets easier to compare to predictions.
     if target_dim is not None and target_dim > 1:

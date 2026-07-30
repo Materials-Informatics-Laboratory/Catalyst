@@ -663,14 +663,22 @@ class GNN:
             if load_training:
                 self.training_samples = samples["training"]
 
-            self.validation_samples = samples.get("validation") or samples.get("gids")
+            self.validation_samples = samples.get("validation")
+            if self.validation_samples is None:
+                self.validation_samples = samples.get("gids")
+            if self.validation_samples is None:
+                raise KeyError(
+                    "Samples dictionary must contain either a 'validation' or 'gids' entry."
+                )
 
             if format == 0:
                 gids = [PurePath(graph).parts[-1].split(".")[0] for graph in graph_files]
 
                 if len(gids) == 0:
-                    print("Error: no graph files found...")
-                    exit(0)
+                    raise FileNotFoundError(
+                        "No graph files were found in "
+                        f"{params['io_dict']['data_dir']!r}."
+                    )
             else:
                 gids = [torch.load(gname)["gid"] for gname in graph_files]
 
@@ -936,10 +944,11 @@ class GNN:
             self.scaler.update()
 
         if parameters["device_dict"]["run_ddp"]:
+            # reduce_tensor already returns the cross-rank mean. Dividing by
+            # world_size again would under-report the loss by that factor.
             loss = reduce_tensor(torch.tensor(loss, device=self.device)).item()
 
-        world_size = parameters["device_dict"]["world_size"]
-        return loss / (len(self.training_loader) * world_size)
+        return loss / len(self.training_loader)
 
     def validate(self, parameters, rank=0):
         """
@@ -1011,10 +1020,10 @@ class GNN:
                 )
 
         if parameters["device_dict"]["run_ddp"]:
-            loss = reduce_tensor(torch.tensor(loss).to(parameters["device_dict"]["device"])).item()
+            # reduce_tensor already returns the cross-rank mean.
+            loss = reduce_tensor(torch.tensor(loss, device=self.device)).item()
 
-        world_size = parameters["device_dict"]["world_size"]
-        return loss / (len(self.validation_loader) * world_size)
+        return loss / len(self.validation_loader)
 
     def predict(self, parameters, rank=0):
         """

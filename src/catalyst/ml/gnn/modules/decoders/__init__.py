@@ -26,6 +26,7 @@ __all__ = [
     "PositiveKChannelDecoder",
     "PositiveFeatureReadout",
 ]
+
 for _name in ("EquivariantDecoder", "GenericEquivariantDecoder", "ScalarGradientDecoder"):
     if _name in globals():
         __all__.append(_name)

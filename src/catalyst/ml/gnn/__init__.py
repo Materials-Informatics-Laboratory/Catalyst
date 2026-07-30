@@ -9,6 +9,7 @@ from .tasks import (
     validate_task_batch,
     task_from_parameters,
 )
+
 from .modules.models import (
     GNNBuilder,
     GenericGNN,
@@ -33,6 +34,7 @@ from .modules.models import (
     build_generic_feature_model,
     build_straight_through_model,
 )
+
 __all__ = [
     "GNN",
     "GNNTask",
