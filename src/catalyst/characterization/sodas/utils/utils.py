@@ -14,7 +14,7 @@ import networkx as nx
 import numpy as np
 import random
 import math
-
+ 
 __all__ = [
     'nearest_path_node',
     'generate_latent_space_path',
