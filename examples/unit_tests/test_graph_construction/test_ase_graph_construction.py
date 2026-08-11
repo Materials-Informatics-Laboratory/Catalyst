@@ -10,12 +10,13 @@ from ase.build import bulk
 from catalyst.graph.alignnd import alignn_gen
 
 
-def _alignn_graph(atoms, *, include_angs=True):
+def _alignn_graph(atoms, *, include_angs=True, k=12, element_list=None):
     return alignn_gen(
         {
             "type": "alignnd",
             "raw_data": atoms.copy(),
-            "neighbor_params": [3.2, 12],
+            "neighbor_params": [3.2, k],
+            "element_list": element_list,
             "include_angs": include_angs,
             "is_dihedral": False,
             "store_raw_data": False,
@@ -45,11 +46,10 @@ def test_fcc_al_first_neighbor_graph_has_expected_coordination_and_distance():
     assert graph.x_ang is not None
     assert graph.edge_index_A.shape[1] == graph.x_ang.numel()
 
-    # The radius is between the first and second FCC neighbor shells. Catalyst's
-    # global bond graph stores each physical pair once, so counting each endpoint
-    # should recover the FCC coordination number of 12 for every atom.
-    src, dst = graph.edge_index_G
-    coordination = torch.bincount(torch.cat([src, dst]), minlength=n_atoms)
+    # Catalyst stores a directed neighbor graph. Each FCC atom therefore appears
+    # as the source of exactly 12 first-neighbor edges.
+    src, _ = graph.edge_index_G
+    coordination = torch.bincount(src, minlength=n_atoms)
     assert torch.equal(coordination, torch.full_like(coordination, 12))
 
     expected_distance = lattice_constant / math.sqrt(2.0)
@@ -148,3 +148,101 @@ def test_realignnd_tracks_structure_boundaries_for_multiple_ase_structures():
     counts = torch.bincount(graph.atom_graph_batch, minlength=3)
     assert counts.tolist() == [n_per_structure, n_per_structure, n_per_structure]
     assert graph.edge_graph_batch.shape[0] == graph.edge_index.size(1)
+
+
+def test_primitive_fcc_cell_retains_periodic_image_neighbors():
+    """A 4-atom conventional FCC cell still has 12 physical neighbors/atom."""
+    atoms = bulk("Al", "fcc", a=4.05, cubic=True)
+    atoms.pbc = True
+    graph = _alignn_graph(atoms, include_angs=False, k=-1, element_list=["Al"])
+
+    src = graph.edge_index_G[0]
+    coordination = torch.bincount(src, minlength=len(atoms))
+    assert coordination.tolist() == [12, 12, 12, 12]
+    assert graph.shifts.shape == (48, 3)
+    assert torch.any(graph.shifts != 0)
+
+    # Same atom-index pair can occur through several legitimate images. The
+    # (src, dst, shift) identity must nevertheless be unique.
+    keys = {
+        (int(i), int(j), int(s[0]), int(s[1]), int(s[2]))
+        for (i, j), s in zip(graph.edge_index_G.T.tolist(), graph.shifts.tolist())
+    }
+    assert len(keys) == graph.edge_index_G.shape[1]
+
+
+def test_explicit_element_list_has_stable_channels_across_separate_graphs():
+    from ase import Atoms
+
+    fe = Atoms("Fe2", positions=[[0, 0, 0], [1.5, 0, 0]], pbc=False)
+    ni = Atoms("Ni2", positions=[[0, 0, 0], [1.5, 0, 0]], pbc=False)
+
+    # Deliberately reverse atomic-number order to prove element_list, rather
+    # than a per-structure sort, defines the feature-channel semantics.
+    basis = ["Ni", "Fe"]
+
+    graph_fe = _alignn_graph(fe, include_angs=False, k=-1, element_list=basis)
+    graph_ni = _alignn_graph(ni, include_angs=False, k=-1, element_list=basis)
+
+    assert graph_fe.x_atm.shape[1] == graph_ni.x_atm.shape[1] == 2
+    torch.testing.assert_close(graph_fe.x_atm, torch.tensor([[0.0, 1.0], [0.0, 1.0]]))
+    torch.testing.assert_close(graph_ni.x_atm, torch.tensor([[1.0, 0.0], [1.0, 0.0]]))
+
+
+def test_explicit_element_list_rejects_an_undeclared_species():
+    from ase import Atoms
+    import pytest
+
+    atoms = Atoms("Cu2", positions=[[0, 0, 0], [1.5, 0, 0]], pbc=False)
+    with pytest.raises(ValueError, match="element_list"):
+        _alignn_graph(atoms, include_angs=False, k=-1, element_list=["Fe", "Ni"])
+
+
+def test_periodic_shifts_are_kept_when_equivariant_fields_are_disabled():
+    atoms = bulk("Al", "fcc", a=4.05, cubic=True)
+    atoms.pbc = True
+    graph = alignn_gen(
+        {
+            "type": "alignnd",
+            "raw_data": atoms,
+            "element_list": ["Al"],
+            "neighbor_params": [3.2, -1],
+            "include_angs": False,
+            "include_equivariant_fields": False,
+            "auto_retry_graph": False,
+            "require_bonds": True,
+            "require_angles": False,
+            "retry_verbose": False,
+        }
+    )
+    assert graph.shifts.shape == (graph.edge_index_G.shape[1], 3)
+    assert torch.any(graph.shifts != 0)
+
+
+def test_dihedral_graph_construction_executes_and_returns_dihedrals():
+    from ase import Atoms
+
+    atoms = Atoms(
+        "CCCC",
+        positions=[[0, 0, 0], [1, 0, 0], [2, 1, 0], [3, 1, 1]],
+        pbc=False,
+    )
+    graph = alignn_gen(
+        {
+            "type": "alignnd",
+            "raw_data": atoms,
+            "element_list": ["C"],
+            "neighbor_params": [1.6, -1],
+            "include_angs": True,
+            "is_dihedral": True,
+            "include_equivariant_fields": True,
+            "auto_retry_graph": False,
+            "require_bonds": True,
+            "require_angles": True,
+            "require_dihedrals": True,
+            "retry_verbose": False,
+        }
+    )
+    assert graph.mask_dih_ang is not None
+    assert bool(graph.mask_dih_ang.any())
+    assert torch.isfinite(graph.x_ang).all()

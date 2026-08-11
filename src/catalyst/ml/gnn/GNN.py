@@ -2,7 +2,7 @@ from ..utils.loss import loss_setup
 from ..utils.distributed import reduce_tensor, combine_dicts_across_gpus
 from ..utils.memory import optimizer_to
 from .modules.utils.predict import accumulate_predictions
-from ...data.utils import load_dictionary, save_dictionary
+from ...data.utils import load_dictionary, save_dictionary, safe_torch_load
 from .modules.utils.data_manager import setup_dataloader
 from ..utils.optimizer import set_optimizer
 
@@ -680,14 +680,14 @@ class GNN:
                         f"{params['io_dict']['data_dir']!r}."
                     )
             else:
-                gids = [torch.load(gname)["gid"] for gname in graph_files]
+                gids = [safe_torch_load(gname, map_location="cpu")["gid"] for gname in graph_files]
 
             if load_training:
                 _, _, c = np.intersect1d(self.training_samples, gids, return_indices=True)
                 selected_graphs = [graph_files[cc] for cc in c]
 
                 if format == 0:
-                    self.training_graphs = [torch.load(g) for g in selected_graphs]
+                    self.training_graphs = [safe_torch_load(g, map_location="cpu") for g in selected_graphs]
                 else:
                     self.training_graphs = selected_graphs
 
@@ -695,7 +695,7 @@ class GNN:
             selected_graphs = [graph_files[cc] for cc in c]
 
             if format == 0:
-                self.validation_graphs = [torch.load(g) for g in selected_graphs]
+                self.validation_graphs = [safe_torch_load(g, map_location="cpu") for g in selected_graphs]
             else:
                 self.validation_graphs = selected_graphs
 

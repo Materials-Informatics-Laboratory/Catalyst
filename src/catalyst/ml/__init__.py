@@ -1,7 +1,7 @@
 """Machine-learning entry points."""
 
 try:
-    from .training import run_training, run_active_learning, setup_training
+    from .training import run_training, setup_training
 except Exception:
     pass
 

@@ -21,23 +21,44 @@ def active_learning_setup(params,model_dict):
         return None
 
 class MaxNpercent(nn.Module):
+    """Apply a base loss to the worst-error fraction of samples.
+
+    Ranking is performed on the first (sample) dimension using mean absolute
+    prediction error across any remaining scalar/vector channels.  The selected
+    samples retain their original shape when passed to ``sub_function``.
+    """
     def __init__(self, percent, sub_function):
         super(MaxNpercent, self).__init__()
+        percent = float(percent)
+        if not (0.0 < percent <= 1.0):
+            raise ValueError("MaxNpercent percent must satisfy 0 < percent <= 1.")
+        if not callable(sub_function):
+            raise TypeError("MaxNpercent sub_function must be callable.")
         self.percent = percent
         self.sub_function = sub_function
+
     def forward(self, input, target):
-        # Compute the loss
-        n = math.ceil(self.percent*float(len(input)))
-        stacked_tensor = torch.stack([input,target])
-        diff_tensor = torch.diff(stacked_tensor, dim=0)
-        sorted_indices = torch.argsort(diff_tensor,descending=True)[:n]
+        if input.shape != target.shape:
+            raise ValueError(
+                "MaxNpercent requires input and target to have identical shapes; "
+                f"received {tuple(input.shape)} and {tuple(target.shape)}."
+            )
+        if input.ndim == 0 or input.shape[0] == 0:
+            raise ValueError("MaxNpercent requires at least one sample.")
 
-        sorted_inputs = input[sorted_indices]
-        sorted_targets = target[sorted_indices]
+        n_samples = int(input.shape[0])
+        n_select = min(n_samples, max(1, math.ceil(self.percent * n_samples)))
+        per_sample_error = torch.abs(input - target)
+        if per_sample_error.ndim > 1:
+            per_sample_error = per_sample_error.reshape(n_samples, -1).mean(dim=1)
 
-        loss = self.sub_function(sorted_inputs,sorted_targets)
-
-        return loss
+        selected = torch.topk(
+            per_sample_error,
+            k=n_select,
+            largest=True,
+            sorted=False,
+        ).indices
+        return self.sub_function(input.index_select(0, selected), target.index_select(0, selected))
 
 class EWC:
     def __init__(self, model, dataloader, loss_fn,loss_accum, device='cpu'):

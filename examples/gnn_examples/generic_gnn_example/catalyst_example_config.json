@@ -1,7 +1,5 @@
 {
-  "paths": {
-    "active_learning_data_dir": "active_learning_data"
-  },
+  "paths": {},
   "workflow": {
     "generate_graphs": false,
     "project_graphs": false,
@@ -13,7 +11,6 @@
     "plot_training": false,
     "ranking": false,
     "predictions": false,
-    "active_learning": false,
     "visualize_final_graph": true
   },
   "synthetic_data": {
@@ -27,10 +24,6 @@
     "neighbor_range": [
       3,
       9
-    ],
-    "active_neighbor_range": [
-      10,
-      50
     ]
   },
   "model_architecture": {
@@ -52,10 +45,6 @@
     "training_batch_size": [
       10,
       10
-    ],
-    "active_learning_batch_size": [
-      1,
-      1
     ],
     "num_epochs": 10,
     "train_delta": 0.001,
@@ -136,22 +125,6 @@
           "lr": 0.001,
           "lr_decay_factor": 0.95
         }
-      },
-      "active_learning": true,
-      "active_learning_params_group": {
-        "sampling_params_group": {
-          "algorithm": "property",
-          "exploration_weight": 0.5,
-          "samples_per_iteration": 10,
-          "exploitation_strategy": "greedy"
-        },
-        "training_params_group": {
-          "train_with_previous": true,
-          "percent_use_previous": 0.01,
-          "epochs_per_iteration": 50,
-          "iterations": 10
-        },
-        "training_data_dir": "data"
       }
     }
   }

@@ -20,7 +20,7 @@ def get_3body_angle(data,edge_index_G, edge_index_A):
         v1 = data[indice[0]] - data[indice[1]]
         v2 = data[indice[2]] - data[indice[1]]
         angles.append(angle_between(v1, v2))
-    return np.radians(angles)
+    return np.asarray(angles, dtype=np.float32)
 
 def get_bnd_angs(atoms, edge_index_G, edge_index_A_bnd_ang, mic=True):
     """Return the bond angles, in radians, for angular line-graph edges."""

@@ -32,11 +32,6 @@ def check_generic_params(target_dict: Mapping[str, Any]) -> Dict[str, Any]:
 
     generic_pairwise_atomic
         Builds a center-node star graph from one local neighborhood.
-
-    generic_nbody
-        Builds generic n-body topology/features as a dictionary. This is useful
-        for development of 4-body+ graph containers without forcing those fields
-        into the current Generic_Graph_Data schema.
     """
     source_dict: Dict[str, Any] = {
         "type": None,
@@ -91,21 +86,11 @@ def generic_graph_gen(data: Mapping[str, Any]):
             include_equivariant_fields=bool(data["include_equivariant_fields"]),
         )
 
-    if graph_type == "generic_nbody":
-        return generic_nbody(
-            data=data["raw_data"],
-            data_params=data["params"],
-            max_body_order=int(data["max_body_order"]),
-            feature_fns=data["feature_fns"],
-            include_self_edges=bool(data["include_self_edges"]),
-            source_from_neighbor_table=bool(data["source_from_neighbor_table"]),
-            dtype=data["dtype"],
-            strict=bool(data["strict"]),
-        )
+
 
     raise ValueError(
         f"Unsupported generic graph type {graph_type!r}. Supported types are "
-        "'generic_pairwise', 'generic_pairwise_atomic', and 'generic_nbody'."
+        "'generic_pairwise' and 'generic_pairwise_atomic'."
     )
 
 

@@ -20,6 +20,54 @@ import numpy as np
 from ase.geometry import get_distances
 
 
+def _ase_neighbor_candidates(atoms, search_cutoff, dtype=np.float32):
+    """Return directed ASE neighbor candidates including periodic image shifts.
+
+    ``shifts`` follows ASE's convention: the image position of destination ``j``
+    is ``pos[j] + shifts @ cell``.  Keeping this integer shift is essential for
+    small periodic cells, where the same atom index can legitimately appear
+    several times in one coordination shell through different periodic images.
+    """
+    if search_cutoff is None or not np.isfinite(search_cutoff) or search_cutoff <= 0:
+        raise ValueError("search_cutoff must be a positive finite value.")
+
+    i, j, shifts, distances = neighbor_list(
+        "ijSd",
+        atoms,
+        float(search_cutoff),
+        self_interaction=False,
+    )
+    i = np.asarray(i, dtype=np.int64)
+    j = np.asarray(j, dtype=np.int64)
+    shifts = np.asarray(shifts, dtype=np.int64).reshape(-1, 3)
+    distances = np.asarray(distances, dtype=dtype).reshape(-1)
+
+    # Guard against a zero-distance self edge while retaining periodic self-image
+    # neighbors such as those that occur in one-atom primitive cells.
+    keep = ~((i == j) & np.all(shifts == 0, axis=1))
+    keep &= distances > np.finfo(np.dtype(dtype)).eps
+    return i[keep], j[keep], shifts[keep], distances[keep]
+
+
+def _initial_knn_search_cutoff(atoms):
+    """Choose a finite initial radius when kNN is requested without a cutoff."""
+    positions = np.asarray(atoms.get_positions(), dtype=np.float64)
+    if len(positions) <= 1:
+        span = 1.0
+    else:
+        span = float(np.linalg.norm(np.ptp(positions, axis=0)))
+
+    periodic_lengths = [
+        float(np.linalg.norm(atoms.cell.array[axis]))
+        for axis, periodic in enumerate(np.asarray(atoms.pbc, dtype=bool))
+        if periodic and np.linalg.norm(atoms.cell.array[axis]) > 0
+    ]
+    if periodic_lengths:
+        span = max(span, max(periodic_lengths))
+
+    return max(span, 1.0)
+
+
 def build_knn_edges_from_atoms(
     atoms,
     k,
@@ -28,121 +76,107 @@ def build_knn_edges_from_atoms(
     dtype=np.float32,
     require_full_k=False,
     symmetrize=False,
+    return_shifts=False,
 ):
+    """Build a periodic-image-aware k-nearest-neighbor graph from ASE Atoms.
+
+    Unlike a minimum-image distance matrix over only the atoms in the reference
+    cell, this implementation selects from ASE neighbor-list entries identified
+    by ``(source, destination, cell_shift)``.  Consequently a small periodic cell
+    can still represent a complete coordination shell even when several physical
+    neighbors correspond to the same destination atom index in different images.
+
+    Returns ``(edge_index, distances)`` by default.  With ``return_shifts=True``
+    it returns ``(edge_index, distances, shifts)`` where ``shifts`` has shape
+    ``(n_edges, 3)`` and integer ASE cell offsets.
     """
-    Build a robust k-nearest-neighbor graph from an ASE Atoms object.
-
-    This uses ASE's minimum-image convention, so it works for arbitrary
-    triclinic cells, orthorhombic cells, partial PBC, full PBC, and
-    nonperiodic structures.
-
-    Parameters
-    ----------
-    atoms : ase.Atoms
-        Atomic structure.
-    k : int
-        Number of nearest neighbors requested per atom.
-    cutoff : float or None
-        If provided, only neighbors within cutoff_multiplier * cutoff are kept.
-        If None, no distance upper bound is applied.
-    cutoff_multiplier : float
-        Multiplier used for the distance upper bound.
-    dtype : dtype
-        Output distance dtype.
-    require_full_k : bool
-        If True, raise an error if any atom has fewer than k valid neighbors.
-        If False, return fewer edges for those atoms.
-    symmetrize : bool
-        If True, add reverse edges j -> i as well.
-
-    Returns
-    -------
-    edge_index : np.ndarray, shape (2, n_edges)
-        Directed edge indices.
-    edge_distances : np.ndarray, shape (n_edges,)
-        Edge distances.
-    """
-
     if k < 1:
         raise ValueError("k must be >= 1.")
+    if cutoff_multiplier <= 0:
+        raise ValueError("cutoff_multiplier must be > 0.")
 
     n_atoms = len(atoms)
     if n_atoms == 0:
         raise ValueError("Cannot build a kNN graph for an empty Atoms object.")
 
-    if n_atoms == 1:
-        if require_full_k:
-            raise ValueError("Cannot find neighbors for a single-atom structure.")
-        return np.empty((2, 0), dtype=int), np.empty((0,), dtype=dtype)
-
     atoms = atoms.copy()
     atoms.wrap()
 
-    positions = atoms.get_positions()
-    cell = atoms.cell
-    pbc = atoms.pbc
-
-    max_neighbors = min(k, n_atoms - 1)
-
-    distance_upper_bound = None
     if cutoff is not None:
-        distance_upper_bound = cutoff_multiplier * cutoff
+        search_cutoff = float(cutoff_multiplier) * float(cutoff)
+        max_search_attempts = 1
+    else:
+        search_cutoff = _initial_knn_search_cutoff(atoms)
+        # When no upper bound is requested, increase the radius until every atom
+        # has k periodic-image candidates or a conservative attempt limit is hit.
+        max_search_attempts = 10
 
-    all_i = []
-    all_j = []
-    all_d = []
+    candidates = None
+    counts = None
+    for _ in range(max_search_attempts):
+        i, j, shifts, distances = _ase_neighbor_candidates(
+            atoms, search_cutoff, dtype=dtype
+        )
+        counts = np.bincount(i, minlength=n_atoms) if len(i) else np.zeros(n_atoms, dtype=int)
+        candidates = (i, j, shifts, distances)
+        if np.all(counts >= k) or cutoff is not None:
+            break
+        search_cutoff *= 1.5
+
+    i, j, shifts, distances = candidates
+    all_i, all_j, all_s, all_d = [], [], [], []
 
     for atom_i in range(n_atoms):
-        _, distances = get_distances(
-            positions[atom_i],
-            positions,
-            cell=cell,
-            pbc=pbc,
-        )
+        idx = np.flatnonzero(i == atom_i)
+        if idx.size:
+            # Stable lexicographic tie-breaking makes equal-distance shells
+            # deterministic across platforms.
+            order = np.lexsort((
+                shifts[idx, 2], shifts[idx, 1], shifts[idx, 0], j[idx], distances[idx]
+            ))
+            idx = idx[order[:k]]
 
-        distances = np.asarray(distances).reshape(-1)
-
-        # Remove self-neighbor.
-        distances[atom_i] = np.inf
-
-        # Apply optional upper-bound cutoff.
-        if distance_upper_bound is not None:
-            distances[distances > distance_upper_bound] = np.inf
-
-        order = np.argsort(distances)
-        chosen = order[:max_neighbors]
-        chosen_dists = distances[chosen]
-
-        valid = np.isfinite(chosen_dists)
-        chosen = chosen[valid]
-        chosen_dists = chosen_dists[valid]
-
-        if require_full_k and len(chosen) < k:
-            raise ValueError(
-                f"Atom {atom_i} only has {len(chosen)} valid neighbors, "
-                f"but k={k} was requested."
+        if len(idx) < k:
+            message = (
+                f"Atom {atom_i} only has {len(idx)} valid periodic-image neighbors "
+                f"within search cutoff {search_cutoff:.6g}, but k={k} was requested."
             )
+            if require_full_k:
+                raise ValueError(message)
+            warnings.warn(message + " Returning fewer than k edges for this atom.", RuntimeWarning)
 
-        if len(chosen) < k:
-            warnings.warn(
-                f"Atom {atom_i} only has {len(chosen)} valid neighbors "
-                f"within the requested search range. Returning fewer than k edges "
-                f"for this atom.",
-                RuntimeWarning,
-            )
+        all_i.extend(i[idx].tolist())
+        all_j.extend(j[idx].tolist())
+        all_s.extend(shifts[idx].tolist())
+        all_d.extend(distances[idx].tolist())
 
-        all_i.extend([atom_i] * len(chosen))
-        all_j.extend(chosen.tolist())
-        all_d.extend(chosen_dists.tolist())
-
-    edge_index = np.array([all_i, all_j], dtype=int)
-    edge_distances = np.array(all_d, dtype=dtype)
+    edge_index = np.asarray([all_i, all_j], dtype=np.int64)
+    edge_shifts = np.asarray(all_s, dtype=np.int64).reshape(-1, 3)
+    edge_distances = np.asarray(all_d, dtype=dtype)
 
     if symmetrize and edge_index.shape[1] > 0:
-        rev_edge_index = edge_index[::-1]
-        edge_index = np.concatenate([edge_index, rev_edge_index], axis=1)
-        edge_distances = np.concatenate([edge_distances, edge_distances], axis=0)
+        rev_index = edge_index[::-1]
+        rev_shifts = -edge_shifts
+        edge_index = np.concatenate((edge_index, rev_index), axis=1)
+        edge_shifts = np.concatenate((edge_shifts, rev_shifts), axis=0)
+        edge_distances = np.concatenate((edge_distances, edge_distances), axis=0)
 
+        # Remove only exact periodic-image duplicates, never distinct images.
+        seen = set()
+        keep = []
+        for edge_id, (src, dst) in enumerate(edge_index.T):
+            shift = edge_shifts[edge_id]
+            key = (int(src), int(dst), int(shift[0]), int(shift[1]), int(shift[2]))
+            if key not in seen:
+                seen.add(key)
+                keep.append(edge_id)
+        keep = np.asarray(keep, dtype=np.int64)
+        edge_index = edge_index[:, keep]
+        edge_shifts = edge_shifts[keep]
+        edge_distances = edge_distances[keep]
+
+    if return_shifts:
+        return edge_index, edge_distances, edge_shifts
     return edge_index, edge_distances
 
 
@@ -221,14 +255,38 @@ def _infer_integer_shifts(edge_vec, raw_vec, cell, pbc):
         return np.zeros((edge_vec.shape[0], 3), dtype=np.int64)
 
 
-def _edge_geometry_from_atoms(atoms, edge_index, dtype=np.float32):
-    """Compute MIC edge vectors, distances, and integer image shifts for edges."""
+def _edge_geometry_from_atoms(atoms, edge_index, dtype=np.float32, shifts=None):
+    """Compute edge vectors/distances and integer periodic-image shifts.
+
+    If explicit ASE image shifts are supplied they are treated as authoritative.
+    This preserves distinct periodic images that share the same ``(src, dst)``
+    atom indices.  Without shifts, the function falls back to minimum-image
+    geometry for backward compatibility.
+    """
     edge_index = _normalize_edge_index_array(edge_index, dtype=np.int64)
     positions = np.asarray(atoms.get_positions(), dtype=np.float64)
     cell = np.asarray(atoms.cell.array, dtype=np.float64).reshape(3, 3)
     pbc = np.asarray(atoms.pbc, dtype=bool).reshape(3)
-
     n_edges = edge_index.shape[1]
+
+    if shifts is not None:
+        shifts = np.asarray(shifts, dtype=np.int64).reshape(-1, 3)
+        if shifts.shape[0] != n_edges:
+            raise ValueError(
+                "shifts and edge_index must contain the same number of edges: "
+                f"{shifts.shape[0]} versus {n_edges}."
+            )
+        shifts = shifts.copy()
+        shifts[:, ~pbc] = 0
+        raw_vec = positions[edge_index[1]] - positions[edge_index[0]]
+        edge_vec = raw_vec + shifts @ cell
+        edge_dist = np.linalg.norm(edge_vec, axis=1)
+        return (
+            np.asarray(edge_vec, dtype=dtype),
+            np.asarray(edge_dist, dtype=dtype),
+            shifts,
+        )
+
     edge_vec = np.empty((n_edges, 3), dtype=dtype)
     edge_dist = np.empty((n_edges,), dtype=dtype)
     raw_vec = np.empty((n_edges, 3), dtype=np.float64)
@@ -237,18 +295,14 @@ def _edge_geometry_from_atoms(atoms, edge_index, dtype=np.float32):
         src = int(src)
         dst = int(dst)
         raw_vec[edge_id] = positions[dst] - positions[src]
-
         vectors, distances = get_distances(
-            positions[src],
-            positions[dst],
-            cell=cell,
-            pbc=pbc,
+            positions[src], positions[dst], cell=cell, pbc=pbc
         )
         edge_vec[edge_id] = np.asarray(vectors, dtype=dtype).reshape(-1, 3)[0]
         edge_dist[edge_id] = np.asarray(distances, dtype=dtype).reshape(-1)[0]
 
-    shifts = _infer_integer_shifts(edge_vec, raw_vec, cell, pbc)
-    return edge_vec, edge_dist, shifts
+    inferred_shifts = _infer_integer_shifts(edge_vec, raw_vec, cell, pbc)
+    return edge_vec, edge_dist, inferred_shifts
 
 
 def build_equivariant_atomic_fields(
@@ -258,6 +312,7 @@ def build_equivariant_atomic_fields(
     *,
     dtype=np.float32,
     include_edge_geometry=True,
+    shifts=None,
 ):
     """Build standardized equivariant fields for an ASE-atom graph.
 
@@ -328,6 +383,7 @@ def build_equivariant_atomic_fields(
             atoms,
             edge_index_global,
             dtype=dtype,
+            shifts=shifts,
         )
         fields["edge_vec"] = torch.as_tensor(edge_vec, dtype=torch.float)
         fields["edge_dist"] = torch.as_tensor(edge_dist, dtype=torch.float)
@@ -741,36 +797,37 @@ def atoms2graph(atoms, cutoff, k=5):
     return np.stack((edge_i, edge_j)), edge_d.astype(np.float32)
 
 '''
-def atoms2graph(atoms, cutoff,k=5):
-    """Convert an ASE `Atoms` object into a graph based on a radius cutoff.
-    Returns the graph (in COO format) and its edge attributes (format
-    determined by `edge_dist`).
+def atoms2graph(atoms, cutoff, k=5, return_shifts=False):
+    """Convert ASE Atoms to a directed periodic-image-aware neighbor graph.
 
-    Args:
-        atoms (ase.Atoms): Collection of atoms to be converted to a graph.
-        cutoff (float): Cutoff radius for nearest neighbor search.
-        edge_dist (bool, optional): Set to `True` to output edge distances.
-            Otherwise, output edge vectors.
+    Radius graphs (``k < 0``) use ASE's ``(i, j, S, d)`` neighbor-list output so
+    distinct periodic images are retained.  kNN graphs use the same image-aware
+    candidate representation and select the nearest ``k`` entries per source.
 
-    Returns:
-       tuple: Tuple of (edge_index, edge_attr) that describes the atomic graph.
-
-    :rtype: (ndarray, ndarray)
+    With ``return_shifts=True`` the third return value is an integer ``(E, 3)``
+    array of ASE cell shifts satisfying
+    ``edge_vec = pos[j] + shifts @ cell - pos[i]``.
     """
     if k < 0:
-        i, j, d = neighbor_list('ijd', atoms, cutoff)
-        return np.stack((i, j)), np.array(d).astype(np.float32)
-    else:
-        edge_index, edge_distances = build_knn_edges_from_atoms(
-            atoms=atoms,
-            k=k,
-            cutoff=cutoff,
-            cutoff_multiplier=2.0,
-            require_full_k=False,
-            symmetrize=False,
+        i, j, shifts, distances = _ase_neighbor_candidates(
+            atoms, float(cutoff), dtype=np.float32
         )
+        edge_index = np.stack((i, j)) if len(i) else np.empty((2, 0), dtype=np.int64)
+        if return_shifts:
+            return edge_index, distances.astype(np.float32, copy=False), shifts
+        return edge_index, distances.astype(np.float32, copy=False)
 
-        return edge_index, edge_distances
+    result = build_knn_edges_from_atoms(
+        atoms=atoms,
+        k=k,
+        cutoff=cutoff,
+        cutoff_multiplier=2.0,
+        require_full_k=False,
+        symmetrize=False,
+        return_shifts=return_shifts,
+    )
+    return result
+
 
 permute_2 = partial(itertools.permutations, r=2)
 def line_graph(edge_index_G):

@@ -28,7 +28,7 @@ from catalyst.ml.gnn.GNN import GNN
 from catalyst.ml.gnn.modules.models.gnn_builder import build_model
 from catalyst.ml.gnn.tasks import GNNTask, build_task_model
 from catalyst.ml.inference import run_inference
-from catalyst.ml.training import run_active_learning, run_training
+from catalyst.ml.training import run_training
 from catalyst.ml.utils.distributed import cuda_destroy
 from catalyst.observer.params import Catalyst
 import catalyst.utilities.sampling as sampling
@@ -96,20 +96,12 @@ RUN_PLOT_TEST = CONFIG["workflow"]["plot_test"]
 RUN_PLOT_TRAINING = CONFIG["workflow"]["plot_training"]
 RUN_RANKING = CONFIG["workflow"]["ranking"]
 RUN_PREDICTIONS = CONFIG["workflow"]["predictions"]
-RUN_ACTIVE_LEARNING = CONFIG["workflow"].get("active_learning", False)
 VISUALIZE_FINAL_GRAPH = CONFIG["workflow"]["visualize_final_graph"]
 
 TRAINING_BATCH_SIZE = CONFIG["training_overrides"]["training_batch_size"]
-ACTIVE_LEARNING_BATCH_SIZE = CONFIG["training_overrides"].get(
-    "active_learning_batch_size", TRAINING_BATCH_SIZE
-)
 TRAINING_NUM_EPOCHS_OVERRIDE = CONFIG["training_overrides"]["num_epochs"]
 TRAINING_DELTA_OVERRIDE = CONFIG["training_overrides"]["train_delta"]
 TRAINING_TOLERANCE_OVERRIDE = CONFIG["training_overrides"]["train_tolerance"]
-
-ACTIVE_LEARNING_DATA_DIR = BASE_DIR / CONFIG.get("paths", {}).get(
-    "active_learning_data_dir", "active_learning_data"
-)
 
 # =============================================================================
 # PARAMETER AND MODEL BUILDERS
@@ -197,27 +189,10 @@ def build_catalyst_parameters(config: Dict[str, Any]) -> Dict[str, Any]:
     model_dict["optimizer_params"]["params_group"] = dict(
         model_dict["optimizer_params"]["params_group"]
     )
-    model_dict["active_learning_params_group"] = dict(
-        model_dict.get("active_learning_params_group", {})
-    )
-    if model_dict["active_learning_params_group"]:
-        model_dict["active_learning_params_group"]["sampling_params_group"] = dict(
-            model_dict["active_learning_params_group"].get("sampling_params_group", {})
-        )
-        model_dict["active_learning_params_group"]["training_params_group"] = dict(
-            model_dict["active_learning_params_group"].get("training_params_group", {})
-        )
-
     # Resolve paths relative to the script location.
     io_dict = parameters["io_dict"]
     for key in ["main_path", "data_dir", "model_dir", "results_dir", "samples_dir", "projection_dir"]:
         io_dict[key] = resolve_relative_path(io_dict.get(key))
-
-    active_learning_group = model_dict.get("active_learning_params_group", {})
-    if active_learning_group and "training_data_dir" in active_learning_group:
-        active_learning_group["training_data_dir"] = resolve_relative_path(
-            active_learning_group.get("training_data_dir")
-        )
 
     # Reconstruct non-JSON Python objects.
     loss_params = dict(model_dict["loss_params"])
@@ -400,7 +375,7 @@ def run_distributed_or_single(cat: Catalyst, target, *args) -> None:
         cuda_destroy()
     else:
         # Pass rank positionally to match Catalyst functions such as
-        # run_training(rank, cat), run_active_learning(rank, cat), etc.
+        # run_training(rank, cat).
         # Using target(rank=0, *args) causes Python to expand *args first,
         # which can assign the first positional argument to rank and then
         # pass rank again as a keyword.
@@ -699,13 +674,6 @@ def retrain_model(cat: Catalyst, use_latest_checkpoint: bool = False) -> None:
         }
     )
     run_distributed_or_single(cat, run_training, cat)
-
-
-def active_learning_model(cat: Catalyst) -> None:
-    """Run Catalyst active learning if enabled by the config."""
-    cat.parameters["loader_dict"]["batch_size"] = ACTIVE_LEARNING_BATCH_SIZE
-    cat.set_model(build_regression_model(DEVICE))
-    run_distributed_or_single(cat, run_active_learning, cat)
 
 
 def plot_training_results(cat: Catalyst) -> None:
@@ -1053,10 +1021,7 @@ def main() -> None:
         cat.parameters["model_dict"]["restart_training"] = True
         retrain_model(cat, use_latest_checkpoint=True)
 
-    if RUN_ACTIVE_LEARNING:
-        active_learning_model(cat)
-
-    if RUN_TESTING and not RUN_ACTIVE_LEARNING:
+    if RUN_TESTING:
         cat.parameters["loader_dict"]["batch_size"] = TRAINING_BATCH_SIZE
         cat.set_model(regression_model)
         test_model(cat)
