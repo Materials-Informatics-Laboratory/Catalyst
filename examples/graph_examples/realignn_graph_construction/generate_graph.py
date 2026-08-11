@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
-from ase.io import read
+from ase.build import bulk
 
 from catalyst.graph.alignnd import alignn_gen
 
@@ -154,14 +154,38 @@ def visualize_graph(data):
     plt.show()
 
 
-print("Reading data and generating realignnd graph...")
+def build_realignnd_structures(lattice_constant=4.05, repeat=(2, 2, 2)):
+    """Build three related periodic Al FCC structures entirely with ASE.
+
+    The three states are intentionally different so the realignnd example still
+    demonstrates combining multiple structures:
+
+      1. pristine FCC Al
+      2. 3% isotropically expanded FCC Al
+      3. sheared FCC Al
+
+    No external VASP files are needed.
+    """
+    pristine = bulk("Al", "fcc", a=lattice_constant, cubic=True).repeat(repeat)
+    pristine.pbc = True
+
+    expanded = pristine.copy()
+    expanded.set_cell(expanded.cell * 1.03, scale_atoms=True)
+
+    sheared = pristine.copy()
+    sheared_cell = sheared.cell.array.copy()
+    sheared_cell[0] += 0.08 * sheared_cell[1]
+    sheared.set_cell(sheared_cell, scale_atoms=True)
+
+    return [pristine, expanded, sheared]
+
+
+print("Building ASE structures and generating realignnd graph...")
 start = time.time()
 
-structures = [
-    read(path / "OUTCAR-0", index=0, format="vasp-out"),
-    read(path / "OUTCAR-1", index=0, format="vasp-out"),
-    read(path / "OUTCAR-2", index=0, format="vasp-out"),
-]
+structures = build_realignnd_structures()
+for idx, structure in enumerate(structures):
+    print(f"  structure {idx}: {len(structure)} Al atoms, cell={structure.cell.lengths()}")
 
 data = {
     "type": "realignnd",

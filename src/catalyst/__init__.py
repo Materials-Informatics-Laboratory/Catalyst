@@ -1,6 +1,6 @@
 """Catalyst public package namespace."""
 
-__version__ = "0.1.0-alpha"
+from ._version import __version__
 
 # Keep the top-level namespace light and tolerant. Most users should import from
 # subpackages directly, for example:

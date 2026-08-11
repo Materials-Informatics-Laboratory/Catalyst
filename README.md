@@ -1,23 +1,5 @@
 ![Screenshot](https://github.com/Materials-Informatics-Laboratory/Catalyst/blob/main/visuals/catalyst_logo.png?raw=true)
 
-
-**Catalyst** is a research-oriented Python package for building, training, and analyzing graph neural networks on atomistic and generic materials graphs. It is designed around a modular pipeline:
-
-```text
-graph data -> encoder -> processor/message passing -> decoder/readout -> Catalyst training backend
-```
-
-It is intended to make the core graph-learning workflow usable and reproducible around a central package API.
-
-Catalyst currently supports:
-
-- Generic graph data for non-atomistic or abstract graph-learning tasks.
-- Atomistic ALIGNN-style graph data with atom, bond, and angle/order features.
-- Equivariant atomistic graph models for vector-valued node targets such as force fields.
-- A task interface that keeps model outputs, graph target fields, and Catalyst backend loss/prediction settings consistent.
-
----
-
 ## What is Catalyst?
 
 Catalyst is a modular graph-learning framework for materials and scientific machine learning. It provides tools for:
@@ -59,36 +41,39 @@ from catalyst.ml.gnn import build_model
 
 ## Installation
 
-The recommended installation mode for the v2.1 is editable installation from the repository root.
+For a standard installation:
 
 ```bash
-git clone <your-catalyst-repository-url>
-cd catalyst
-python -m pip install -e .
+python -m pip install catalyst-gnn
 ```
 
-For a fresh conda environment, a typical setup is:
+For plotting helpers and the repository examples:
 
 ```bash
-conda create -n catalyst-dev python=3.12.4 -y
-conda activate catalyst-dev
-
-python -m pip install --upgrade pip
-python -m pip install -e .
-
-python -m pip install numpy scipy matplotlib scikit-learn networkx ase
-python -m pip install torch torch-geometric
+python -m pip install "catalyst-gnn[examples]"
 ```
 
-If you are using CUDA-enabled PyTorch, install the PyTorch build that matches your CUDA version using the official PyTorch installation instructions. Note, Catalyst is supported on Python 3.10 and up, but your version of PyTorch will dictate your python version.
+If you need a particular CUDA-enabled PyTorch build, install the appropriate
+PyTorch build for your system first, then install Catalyst. An already-installed
+compatible PyTorch satisfies Catalyst's dependency and will not be replaced.
+Catalyst supports Python 3.10 and newer; the Python versions supported by a
+specific PyTorch release may be more restrictive.
 
-For development and testing:
+For development from a local clone:
 
 ```bash
-python -m pip install pytest
+git clone https://github.com/Materials-Informatics-Laboratory/Catalyst.git
+cd Catalyst
+python -m pip install -e ".[dev]"
 ```
 
-Then run:
+To verify the installation:
+
+```bash
+python -c "import catalyst; print(catalyst.__version__)"
+```
+
+Then run the test suite from the repository root with:
 
 ```bash
 python -m pytest
@@ -187,7 +172,7 @@ model = build_model(
 )
 ```
 
-For force learning, the recommended route is now through the task interface:
+For vector learning, the recommended route is now through the task interface:
 
 ```python
 task = GNNTask.node_vector(target_key="target_vector")

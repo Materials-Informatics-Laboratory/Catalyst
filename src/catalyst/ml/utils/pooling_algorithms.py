@@ -1,12 +1,25 @@
-# scatter_utils.py
+"""Extended scatter/pooling utilities used by Catalyst models.
+
+Catalyst previously imported :mod:`torch_scatter` directly. Modern PyTorch
+Geometric exposes a compatible ``scatter`` helper and can use native PyTorch
+reductions when the optional compiled ``torch-scatter`` extension is absent.
+Using the PyG interface keeps Catalyst installable with a standard ``pip``
+workflow while preserving the same pooling API.
+"""
+
 import torch
-import torch_scatter
+from torch_geometric.utils import scatter as pyg_scatter
+
+
+def _scatter(src, index, *, dim=-1, dim_size=None, reduce="sum"):
+    """Thin wrapper around :func:`torch_geometric.utils.scatter`."""
+    return pyg_scatter(src, index, dim=dim, dim_size=dim_size, reduce=reduce)
 
 
 def scatter_(src, index, dim=-1, reduce="mean", dim_size=None, eps=1e-9, weights=None):
     """
-    Extended scatter function with the same signature as
-    torch_geometric.utils.scatter, plus many new reduce options.
+    Extended scatter function with the same core signature as
+    :func:`torch_geometric.utils.scatter`, plus additional reduction modes.
 
     Args:
         src (Tensor): Source tensor.
@@ -45,135 +58,118 @@ def scatter_(src, index, dim=-1, reduce="mean", dim_size=None, eps=1e-9, weights
         Tensor
     """
 
-    # alias normalization
     if reduce == "add":
         reduce = "sum"
     if reduce in ["var", "variance"]:
         reduce = "variance"
 
-    # --- Native ops ---
+    # Native reductions.
     if reduce in ["sum", "mean", "min", "max"]:
-        op = getattr(torch_scatter, f"scatter_{reduce}")
-        out = op(src, index, dim=dim, dim_size=dim_size)
-        out = out[0] if isinstance(out, tuple) else out
-        return out
+        return _scatter(src, index, dim=dim, dim_size=dim_size, reduce=reduce)
 
-    # --- Extended ops ---
-
-    # count
     if reduce == "count":
         ones = torch.ones_like(src)
-        return torch_scatter.scatter_add(ones, index, dim=dim, dim_size=dim_size)
+        return _scatter(ones, index, dim=dim, dim_size=dim_size, reduce="sum")
 
-    # variance
     if reduce == "variance":
-        mean = torch_scatter.scatter_mean(src, index, dim=dim, dim_size=dim_size)
-        mean_sq = torch_scatter.scatter_mean(src**2, index, dim=dim, dim_size=dim_size)
+        mean = _scatter(src, index, dim=dim, dim_size=dim_size, reduce="mean")
+        mean_sq = _scatter(src**2, index, dim=dim, dim_size=dim_size, reduce="mean")
         return mean_sq - mean**2
 
-    # std
     if reduce == "std":
         var = scatter_(src, index, dim=dim, reduce="variance", dim_size=dim_size, eps=eps)
         return torch.sqrt(var + eps)
 
-    # range
     if reduce == "range":
-        max_vals = torch_scatter.scatter_max(src, index, dim=dim, dim_size=dim_size)[0]
-        min_vals = torch_scatter.scatter_min(src, index, dim=dim, dim_size=dim_size)[0]
+        max_vals = _scatter(src, index, dim=dim, dim_size=dim_size, reduce="max")
+        min_vals = _scatter(src, index, dim=dim, dim_size=dim_size, reduce="min")
         return max_vals - min_vals
 
-    # softmax pooling
     if reduce == "softmax":
-        max_vals = torch_scatter.scatter_max(src, index, dim=dim, dim_size=dim_size)[0]
+        max_vals = _scatter(src, index, dim=dim, dim_size=dim_size, reduce="max")
         max_per_elem = max_vals.index_select(dim, index)
         src_exp = torch.exp(src - max_per_elem)
-        denom = torch_scatter.scatter_add(src_exp, index, dim=dim, dim_size=dim_size)
+        denom = _scatter(src_exp, index, dim=dim, dim_size=dim_size, reduce="sum")
         denom_per_elem = denom.index_select(dim, index)
         weights_ = src_exp / (denom_per_elem + eps)
-        return torch_scatter.scatter_add(src * weights_, index, dim=dim, dim_size=dim_size)
+        return _scatter(src * weights_, index, dim=dim, dim_size=dim_size, reduce="sum")
 
-    # z-score pooling
     if reduce == "normalized":
-        mean = torch_scatter.scatter_mean(src, index, dim=dim, dim_size=dim_size)
+        mean = _scatter(src, index, dim=dim, dim_size=dim_size, reduce="mean")
         std = scatter_(src, index, dim=dim, reduce="std", dim_size=dim_size, eps=eps)
         return (src - mean.index_select(dim, index)) / (std.index_select(dim, index) + eps)
 
-    # sum of squares
     if reduce == "sum_of_squares":
-        return torch_scatter.scatter_add(src**2, index, dim=dim, dim_size=dim_size)
+        return _scatter(src**2, index, dim=dim, dim_size=dim_size, reduce="sum")
 
-    # mean absolute value
     if reduce == "mean_abs":
-        return torch_scatter.scatter_mean(torch.abs(src), index, dim=dim, dim_size=dim_size)
+        return _scatter(torch.abs(src), index, dim=dim, dim_size=dim_size, reduce="mean")
 
-    # L1 norm
     if reduce == "l1":
-        return torch_scatter.scatter_add(torch.abs(src), index, dim=dim, dim_size=dim_size)
+        return _scatter(torch.abs(src), index, dim=dim, dim_size=dim_size, reduce="sum")
 
-    # L2 norm
     if reduce == "l2":
         sum_sq = scatter_(src, index, dim=dim, reduce="sum_of_squares", dim_size=dim_size)
         return torch.sqrt(sum_sq + eps)
 
-    # geometric mean
     if reduce == "geometric_mean":
         safe_src = torch.clamp(src, min=eps)
         log_vals = torch.log(safe_src)
-        mean_log = torch_scatter.scatter_mean(log_vals, index, dim=dim, dim_size=dim_size)
+        mean_log = _scatter(log_vals, index, dim=dim, dim_size=dim_size, reduce="mean")
         return torch.exp(mean_log)
 
-    # harmonic mean
     if reduce == "harmonic_mean":
         safe_src = torch.clamp(src, min=eps)
         inv = 1.0 / safe_src
-        inv_sum = torch_scatter.scatter_add(inv, index, dim=dim, dim_size=dim_size)
+        inv_sum = _scatter(inv, index, dim=dim, dim_size=dim_size, reduce="sum")
         count = scatter_(src, index, dim=dim, reduce="count", dim_size=dim_size)
         return count / (inv_sum + eps)
 
-    # midrange = (max + min)/2
     if reduce == "midrange":
-        max_vals = torch_scatter.scatter_max(src, index, dim=dim, dim_size=dim_size)[0]
-        min_vals = torch_scatter.scatter_min(src, index, dim=dim, dim_size=dim_size)[0]
+        max_vals = _scatter(src, index, dim=dim, dim_size=dim_size, reduce="max")
+        min_vals = _scatter(src, index, dim=dim, dim_size=dim_size, reduce="min")
         return 0.5 * (max_vals + min_vals)
 
-    # amplitude = max(abs(x))
     if reduce == "amplitude":
-        return torch_scatter.scatter_max(torch.abs(src), index, dim=dim, dim_size=dim_size)[0]
+        return _scatter(torch.abs(src), index, dim=dim, dim_size=dim_size, reduce="max")
 
-    # logsumexp
     if reduce == "logsumexp":
-        max_vals = torch_scatter.scatter_max(src, index, dim=dim, dim_size=dim_size)[0]
+        max_vals = _scatter(src, index, dim=dim, dim_size=dim_size, reduce="max")
         max_per_elem = max_vals.index_select(dim, index)
-        sum_exp = torch_scatter.scatter_add(torch.exp(src - max_per_elem), index, dim=dim, dim_size=dim_size)
+        sum_exp = _scatter(
+            torch.exp(src - max_per_elem),
+            index,
+            dim=dim,
+            dim_size=dim_size,
+            reduce="sum",
+        )
         return max_vals + torch.log(sum_exp + eps)
 
-    # softmin
     if reduce == "softmin":
         return -scatter_(-src, index, dim=dim, reduce="softmax", dim_size=dim_size, eps=eps)
 
-    # attention pooling (requires weights)
     if reduce == "attention":
         if weights is None:
             raise ValueError("weights tensor must be provided for attention pooling")
-        weighted_sum = torch_scatter.scatter_add(src * weights, index, dim=dim, dim_size=dim_size)
-        weight_sum = torch_scatter.scatter_add(weights, index, dim=dim, dim_size=dim_size)
+        weighted_sum = _scatter(src * weights, index, dim=dim, dim_size=dim_size, reduce="sum")
+        weight_sum = _scatter(weights, index, dim=dim, dim_size=dim_size, reduce="sum")
         return weighted_sum / (weight_sum + eps)
 
-    # normalized sum (sum / L2 norm of group)
     if reduce == "normalized_sum":
-        summed = torch_scatter.scatter_add(src, index, dim=dim, dim_size=dim_size)
-        norm = torch.sqrt(torch_scatter.scatter_add(src**2, index, dim=dim, dim_size=dim_size) + eps)
+        summed = _scatter(src, index, dim=dim, dim_size=dim_size, reduce="sum")
+        norm = torch.sqrt(
+            _scatter(src**2, index, dim=dim, dim_size=dim_size, reduce="sum") + eps
+        )
         return summed / norm
 
-    # boolean-style
     if reduce == "any":
-        return (torch_scatter.scatter_max(src, index, dim=dim, dim_size=dim_size)[0] > 0).to(src.dtype)
+        return (_scatter(src, index, dim=dim, dim_size=dim_size, reduce="max") > 0).to(src.dtype)
 
     if reduce == "all":
-        return (torch_scatter.scatter_min(src, index, dim=dim, dim_size=dim_size)[0] > 0).to(src.dtype)
+        return (_scatter(src, index, dim=dim, dim_size=dim_size, reduce="min") > 0).to(src.dtype)
 
     if reduce == "xor":
-        counts = torch_scatter.scatter_add(src, index, dim=dim, dim_size=dim_size)
+        counts = _scatter(src, index, dim=dim, dim_size=dim_size, reduce="sum")
         return (counts % 2).to(src.dtype)
 
     raise ValueError(f"Unsupported reduce method: {reduce}")

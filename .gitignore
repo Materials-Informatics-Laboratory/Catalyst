@@ -8,3 +8,10 @@
 *.png
 /examples/local_examples/
 /examples/preprocess_data/data/graphs
+
+# Python packaging / test artifacts
+/build/
+/dist/
+*.egg-info/
+.pytest_cache/
+.venv/
