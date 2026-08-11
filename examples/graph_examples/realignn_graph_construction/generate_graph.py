@@ -3,6 +3,8 @@ import time
 
 import numpy as np
 import torch
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
 from ase.build import bulk
@@ -11,6 +13,8 @@ from catalyst.graph.alignnd import alignn_gen
 
 
 path = Path(__file__).parent
+figures_dir = path / "figures"
+figures_dir.mkdir(parents=True, exist_ok=True)
 
 
 def _get_plot_positions(data):
@@ -151,7 +155,10 @@ def visualize_graph(data):
         ax[1].axis("off")
 
     plt.tight_layout()
-    plt.show()
+    output_path = figures_dir / "realignn_graph_visualization.png"
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Wrote {output_path}")
 
 
 def build_realignnd_structures(lattice_constant=4.05, repeat=(2, 2, 2)):

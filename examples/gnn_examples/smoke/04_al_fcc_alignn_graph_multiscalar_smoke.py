@@ -18,6 +18,8 @@ from __future__ import annotations
 import torch
 from torch import nn
 
+from catalyst.observer import Catalyst
+
 from catalyst.ml.gnn import GNNTask, GraphMultiScalarAdapter, build_task_model, validate_task_batch
 from catalyst.ml.gnn.modules.decoders import MultiScalarDecoder
 
@@ -77,8 +79,8 @@ def main() -> None:
         target_names=["energy_per_atom", "volume_per_atom", "lattice_constant"],
     )
 
-    parameters = {"model_dict": {"prediction_params": {}}}
-    task.apply_to_catalyst_parameters(parameters)
+    cat = Catalyst(task=task)
+    parameters = cat.parameters
 
     model = build_task_model(
         task=task,

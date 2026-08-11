@@ -246,3 +246,14 @@ def test_dihedral_graph_construction_executes_and_returns_dihedrals():
     assert graph.mask_dih_ang is not None
     assert bool(graph.mask_dih_ang.any())
     assert torch.isfinite(graph.x_ang).all()
+
+
+def test_primitive_fcc_knn_retains_twelve_periodic_image_neighbors():
+    """The optimized kNN selector must preserve the Pass-1 periodic semantics."""
+    atoms = bulk("Al", "fcc", a=4.05, cubic=True)
+    atoms.pbc = True
+    graph = _alignn_graph(atoms, include_angs=False, k=12, element_list=["Al"])
+    coordination = torch.bincount(graph.edge_index_G[0], minlength=len(atoms))
+    assert coordination.tolist() == [12, 12, 12, 12]
+    assert graph.edge_index_G.shape[1] == 48
+    assert torch.any(graph.shifts != 0)

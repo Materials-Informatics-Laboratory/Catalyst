@@ -1,13 +1,30 @@
 import torch.nn as nn
 import torch
 import math
-from ..gnn.modules.utils.predict import accumulate_predictions
+
 def loss_setup(params):
-    if isinstance(params['function'],str):
-        if params['function'] == 'MaxNpercent':
-            return MaxNpercent(percent=params['percent'],sub_function=params['sub_function'])
-    else:
-        return params['function']
+    """Construct a Catalyst loss from a callable/module or a JSON-friendly name."""
+    function = params.get('function')
+    if isinstance(function, str):
+        if function == 'MaxNpercent':
+            sub_function = params.get('sub_function')
+            if isinstance(sub_function, str):
+                if not hasattr(nn, sub_function):
+                    raise ValueError(f"Unknown torch.nn loss function {sub_function!r}.")
+                sub_function = getattr(nn, sub_function)()
+            return MaxNpercent(percent=params['percent'], sub_function=sub_function)
+        if not hasattr(nn, function):
+            raise ValueError(
+                f"Unknown torch.nn loss function {function!r}. "
+                "Use a torch.nn loss class name such as 'MSELoss' or pass a callable."
+            )
+        loss_cls = getattr(nn, function)
+        if not isinstance(loss_cls, type) or not issubclass(loss_cls, nn.Module):
+            raise ValueError(f"torch.nn.{function} is not a loss module class.")
+        return loss_cls()
+    if callable(function):
+        return function
+    raise ValueError("loss_params['function'] must be a callable/module or torch.nn loss name string.")
 
 def active_learning_setup(params,model_dict):
     if 'loss_regularization' in params['model_dict']['active_learning_params_group']['training_params_group']:
@@ -71,6 +88,7 @@ class EWC:
         self.params = {n: p.clone().detach() for n, p in model.named_parameters() if p.requires_grad}
         self.fisher = self._compute_fisher()
     def _compute_fisher(self):
+        from ..gnn.modules.utils.predict import accumulate_predictions
         fisher = {n: torch.zeros_like(p, device=self.device) for n, p in self.model.named_parameters() if p.requires_grad}
         self.model.eval()
 

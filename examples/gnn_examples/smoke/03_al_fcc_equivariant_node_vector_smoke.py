@@ -21,6 +21,8 @@ from __future__ import annotations
 import torch
 from torch import nn
 
+from catalyst.observer import Catalyst
+
 from catalyst.ml.gnn.tasks import GNNTask, build_task_model, validate_task_batch
 
 
@@ -87,8 +89,8 @@ def main() -> None:
         squeeze_single_vector_channel=True,
     )
 
-    parameters = {"model_dict": {"prediction_params": {}}}
-    task.apply_to_catalyst_parameters(parameters)
+    cat = Catalyst(task=task)
+    parameters = cat.parameters
 
     model = build_task_model(
         task=task,

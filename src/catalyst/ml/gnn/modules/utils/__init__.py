@@ -7,9 +7,6 @@ from .edges import add_edges, mask_edges
 from .basis import bessel, gaussian, scalar2basis, GaussianRandomFourierFeatures
 from .data_manager import setup_dataloader
 
-try:
-    from .predict import accumulate_predictions
-except Exception:
-    pass
+from .predict import accumulate_predictions
 
 __all__ = [name for name in globals() if not name.startswith("_")]

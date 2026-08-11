@@ -3,7 +3,7 @@ Smoke example 01: generic graph_scalar task.
 
 This is a minimal developer smoke test for the public task API. It validates:
     - GNNTask.graph_scalar(...)
-    - task.apply_to_catalyst_parameters(...)
+    - Catalyst(task=...) staged task/configuration validation
     - validate_task_batch(...)
 
 It intentionally uses a tiny dummy model so it can run even when the full graph
@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import torch
 from torch import nn
+
+from catalyst.observer import Catalyst
 
 from catalyst.ml.gnn.tasks import GNNTask, validate_task_batch
 
@@ -49,8 +51,8 @@ class TinyBatch:
 def main() -> None:
     task = GNNTask.graph_scalar(target_key="target_scalar")
 
-    parameters = {"model_dict": {"prediction_params": {}}}
-    task.apply_to_catalyst_parameters(parameters)
+    cat = Catalyst(task=task)
+    parameters = cat.parameters
 
     assert parameters["model_dict"]["task"] == "graph_scalar"
     assert parameters["model_dict"]["accumulate_loss"] == "exact"

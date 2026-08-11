@@ -9,6 +9,8 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
@@ -57,7 +59,6 @@ def load_json_config(config_path: Path = CONFIG_PATH) -> Dict[str, Any]:
 
 
 CONFIG = load_json_config()
-BASE_DIR = Path(__file__).resolve().parent
 
 # Frequently used settings are unpacked once for readability. Edit the JSON file,
 # not this script, to change these values.
@@ -109,43 +110,28 @@ TRAINING_TOLERANCE_OVERRIDE = CONFIG["training_overrides"]["train_tolerance"]
 
 
 def build_regression_task() -> GNNTask:
-    """
-    Build the generic task contract for this example.
+    """Build the graph-level regression contract used by this example.
 
-    This is a graph-level scalar regression example. If REGRESSION_OUT_DIM > 1,
-    the task still represents graph_scalar regression, but build_task_model(...)
-    below overrides out_dim so the decoder emits one scalar channel per target.
+    A single target uses ``graph_scalar``. Multiple independent scalar targets use
+    the canonical ``graph_multiscalar`` task instead of overloading vector or
+    single-scalar semantics.
     """
-    return GNNTask.graph_scalar(
+    if REGRESSION_OUT_DIM == 1:
+        return GNNTask.graph_scalar(
+            target_key="y",
+            output_key="scalar",
+            accumulate_loss="exact",
+        )
+    return GNNTask.graph_multiscalar(
+        num_targets=REGRESSION_OUT_DIM,
         target_key="y",
         output_key="scalar",
         accumulate_loss="exact",
     )
 
 
-def resolve_relative_path(path_value: Optional[str]) -> Optional[str]:
-    """Resolve JSON path strings relative to this example script."""
-    if path_value is None:
-        return None
-    path = Path(path_value)
-    if path.is_absolute():
-        return str(path)
-    return str(BASE_DIR / path)
 
 
-def build_loss_function(loss_name: str):
-    """Convert the JSON loss-function name into a PyTorch loss object."""
-    loss_functions = {
-        "MSELoss": torch.nn.MSELoss,
-        "L1Loss": torch.nn.L1Loss,
-        "SmoothL1Loss": torch.nn.SmoothL1Loss,
-    }
-    if loss_name not in loss_functions:
-        raise ValueError(
-            f"Unsupported loss function {loss_name!r}. "
-            f"Supported options are: {sorted(loss_functions)}"
-        )
-    return loss_functions[loss_name]()
 
 
 def latest_checkpoint(checkpoint_dir: Path, checkpoint_pattern: str = "checkpoint_epoch_*.pt") -> str:
@@ -173,44 +159,10 @@ def latest_checkpoint(checkpoint_dir: Path, checkpoint_pattern: str = "checkpoin
     return str(latest_path)
 
 
-def build_catalyst_parameters(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Build the Catalyst runtime parameter dictionary from JSON."""
-    parameters = dict(config["catalyst_parameters"])
-
-    # Copy nested dictionaries so runtime edits do not mutate CONFIG unexpectedly.
-    parameters["device_dict"] = dict(parameters["device_dict"])
-    parameters["io_dict"] = dict(parameters["io_dict"])
-    parameters["sampling_dict"] = dict(parameters["sampling_dict"])
-    parameters["loader_dict"] = dict(parameters["loader_dict"])
-    parameters["model_dict"] = dict(parameters["model_dict"])
-
-    model_dict = parameters["model_dict"]
-    model_dict["optimizer_params"] = dict(model_dict["optimizer_params"])
-    model_dict["optimizer_params"]["params_group"] = dict(
-        model_dict["optimizer_params"]["params_group"]
-    )
-    # Resolve paths relative to the script location.
-    io_dict = parameters["io_dict"]
-    for key in ["main_path", "data_dir", "model_dir", "results_dir", "samples_dir", "projection_dir"]:
-        io_dict[key] = resolve_relative_path(io_dict.get(key))
-
-    # Reconstruct non-JSON Python objects.
-    loss_params = dict(model_dict["loss_params"])
-    loss_params["function"] = build_loss_function(loss_params["function"])
-    if "sub_function" in loss_params and loss_params["sub_function"] is not None:
-        loss_params["sub_function"] = build_loss_function(loss_params["sub_function"])
-    model_dict["loss_params"] = loss_params
-    model_dict["model"] = None
-
-    # Configure the existing Catalyst backend from the formal generic task
-    # contract. This sets accumulate_loss and prediction_params consistently.
-    build_regression_task().apply_to_catalyst_parameters(parameters)
-
-    return parameters
 
 
 def build_regression_model(device: str = DEVICE) -> GNN:
-    """Build the GenericGNN graph_scalar regression model.
+    """Build the GenericGNN graph scalar/multiscalar regression model.
 
     The task interface owns the backend contract:
         - target_key="y"
@@ -228,13 +180,12 @@ def build_regression_model(device: str = DEVICE) -> GNN:
         processor_type="order",
         conv_type=CONV_TYPE,
         encoder_type="generic",
-        decoder_type="positive",
+        decoder_type="positive" if REGRESSION_OUT_DIM == 1 else "multiscalar",
         encode_3body=True,
         num_species=N_TYPES,      # accepted for compatibility; ignored by generic encoder
         cutoff=CUTOFF,            # accepted for compatibility; ignored by generic encoder
         dim=REGRESSION_IN_DIM,
         num_convs=N_CONVS,
-        out_dim=REGRESSION_OUT_DIM,
         act=nn.SiLU(),
         aggr_scheme="add",
     )
@@ -291,6 +242,11 @@ def make_dir(path: os.PathLike[str] | str) -> Path:
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def get_figures_dir(cat: Catalyst) -> Path:
+    """Return the example figure directory, creating it if needed."""
+    return make_dir(Path(cat.parameters["io_dict"]["main_path"]) / "figures")
 
 
 def first_match(pattern: os.PathLike[str] | str) -> str:
@@ -386,7 +342,7 @@ def run_distributed_or_single(cat: Catalyst, target, *args) -> None:
 # =============================================================================
 
 
-def visualize_graph(data, atomic: bool = False) -> None:
+def visualize_graph(data, output_path: Path, atomic: bool = False) -> None:
     del atomic  # Retained for compatibility with the original function signature.
     data = ensure_generic_order_aliases(data)
 
@@ -459,7 +415,10 @@ def visualize_graph(data, atomic: bool = False) -> None:
         ax[1].axis("off")
 
     plt.tight_layout()
-    plt.show()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Wrote {output_path}")
 
 
 def generate_random_generic_graph(raw_data: np.ndarray, g_node_labels: np.ndarray, k: int):
@@ -530,7 +489,11 @@ def generate_data(cat: Catalyst, visualize_final: bool = False) -> None:
         last_graph = graph
 
     if visualize_final and last_graph is not None:
-        visualize_graph(last_graph, atomic=False)
+        visualize_graph(
+            last_graph,
+            output_path=get_figures_dir(cat) / "generic_graph_visualization.png",
+            atomic=False,
+        )
 
 
 def project_data(cat: Catalyst):
@@ -545,8 +508,8 @@ def project_data(cat: Catalyst):
     print("Performing graph projections...")
     projection_dir = reset_dir(Path(cat.parameters["io_dict"]["main_path"]) / "projections")
     samples_dir = reset_dir(Path(cat.parameters["io_dict"]["main_path"]) / "samples")
-    cat.parameters["io_dict"]["projection_dir"] = str(projection_dir)
-    cat.parameters["io_dict"]["samples_dir"] = str(samples_dir)
+    cat.set_params({'io_dict': {'projection_dir': str(projection_dir)}}, save_params=False)
+    cat.set_params({'io_dict': {'samples_dir': str(samples_dir)}}, save_params=False)
 
     gids = [data.gid for data in graph_data]
     follow_batch = make_follow_batch_fields(graph_data[0])
@@ -612,8 +575,9 @@ def sample_data(cat: Catalyst, graph_data: Sequence[Any], projected_data: np.nda
         )
     ax[1].set_title("Test data")
 
-    model_dir = reset_dir(Path(cat.parameters["io_dict"]["samples_dir"]) / "model_samples")
-    cat.parameters["io_dict"]["model_dir"] = str(model_dir)
+    model_samples_dir = reset_dir(
+        Path(cat.parameters["io_dict"]["samples_dir"]) / "model_samples"
+    )
 
     train_idx, valid_idx = sampling.run_sampling(
         projected_remaining,
@@ -631,7 +595,7 @@ def sample_data(cat: Catalyst, graph_data: Sequence[Any], projected_data: np.nda
     }
 
     print("Using the remaining", len(partitioned_data["validation"]), "for validation")
-    save_dictionary(model_dir / "train_valid_split.npy", partitioned_data)
+    save_dictionary(model_samples_dir / "train_valid_split.npy", partitioned_data)
 
     if len(partitioned_data["training_projections"]) > 0:
         training_projection_array = np.asarray(partitioned_data["training_projections"])
@@ -645,20 +609,52 @@ def sample_data(cat: Catalyst, graph_data: Sequence[Any], projected_data: np.nda
         )
     ax[2].set_title("Training data")
     plt.tight_layout()
-    plt.show()
+    output_path = get_figures_dir(cat) / "sampling_projection_split.png"
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Wrote {output_path}")
+
+
+def training_split_path(cat: Catalyst) -> Path:
+    """Return the Catalyst training/validation split expected by GNN.load_data."""
+    return (
+        Path(cat.parameters["io_dict"]["main_path"])
+        / "samples"
+        / "model_samples"
+        / "train_valid_split.npy"
+    )
+
+
+def require_training_split(cat: Catalyst) -> Path:
+    """Fail early with an actionable error when training samples are absent."""
+    split_path = training_split_path(cat)
+    if not split_path.is_file():
+        raise FileNotFoundError(
+            "Training split is missing: " + str(split_path) + "\n"
+            "For a fresh run, enable workflow.generate_graphs, "
+            "workflow.project_graphs, and workflow.generate_samples in "
+            "catalyst_example_config.json. Those stages create the graph data, "
+            "projection, and train/validation split required by the Catalyst backend."
+        )
+    return split_path
 
 
 def train_model(cat: Catalyst) -> None:
-    cat.parameters["io_dict"]["samples_dir"] = str(
-        Path(cat.parameters["io_dict"]["main_path"]) / "samples" / "model_samples"
+    split_path = require_training_split(cat)
+    samples_dir = split_path.parent
+    cat.set_params(
+        {"io_dict": {"samples_dir": str(samples_dir)}},
+        save_params=False,
     )
     cat.set_model(build_regression_model(DEVICE))
     run_distributed_or_single(cat, run_training, cat)
 
 
 def retrain_model(cat: Catalyst, use_latest_checkpoint: bool = False) -> None:
-    cat.parameters["io_dict"]["samples_dir"] = str(
-        Path(cat.parameters["io_dict"]["main_path"]) / "samples" / "model_samples"
+    split_path = require_training_split(cat)
+    cat.set_params(
+        {"io_dict": {"samples_dir": str(split_path.parent)}},
+        save_params=False,
     )
     model_pattern = "checkpoint_epoch_*.pt"
     model_dir = Path(cat.parameters["io_dict"]["main_path"]) / "models" / "training"
@@ -667,18 +663,13 @@ def retrain_model(cat: Catalyst, use_latest_checkpoint: bool = False) -> None:
         if use_latest_checkpoint
         else first_match(model_dir / model_pattern)
     )
-    cat.parameters["io_dict"].update(
-        {
-            "model_dir": str(model_dir),
-            "loaded_model_name": loaded_model_name,
-        }
-    )
+    cat.set_params({'io_dict': {'model_dir': str(model_dir), 'loaded_model_name': loaded_model_name}}, save_params=False)
     run_distributed_or_single(cat, run_training, cat)
 
 
 def plot_training_results(cat: Catalyst) -> None:
     model_dir = Path(cat.parameters["io_dict"]["main_path"]) / "models" / "training"
-    cat.parameters["io_dict"]["model_dir"] = str(model_dir)
+    cat.set_params({'io_dict': {'model_dir': str(model_dir)}}, save_params=False)
 
     run_data = load_dictionary(model_dir / "run_information.npy")
     training_loss = run_data["training_loss"]
@@ -691,7 +682,11 @@ def plot_training_results(cat: Catalyst) -> None:
     ax.plot(epochs, training_loss, color="b", marker="o", label="Training loss")
     ax.plot(epochs, validation_loss, color="r", marker="o", label="Validation loss")
     ax.legend(loc="upper right")
-    plt.show()
+    plt.tight_layout()
+    output_path = get_figures_dir(cat) / "training_loss.png"
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Wrote {output_path}")
 
 
 def run_testing_for_model(
@@ -707,14 +702,7 @@ def run_testing_for_model(
         else first_match(model_dir / model_pattern)
     )
 
-    cat.parameters["io_dict"].update(
-        {
-            "write_indv_pred": True,
-            "results_dir": str(reset_dir(results_dir)),
-            "model_dir": str(model_dir),
-            "loaded_model_name": loaded_model_name,
-        }
-    )
+    cat.set_params({'io_dict': {'write_indv_pred': True, 'results_dir': str(reset_dir(results_dir)), 'model_dir': str(model_dir), 'loaded_model_name': loaded_model_name}}, save_params=False)
 
     if cat.parameters["device_dict"]["run_ddp"]:
         processes = []
@@ -731,7 +719,7 @@ def run_testing_for_model(
 
 def test_model(cat: Catalyst) -> None:
     main_path = Path(cat.parameters["io_dict"]["main_path"])
-    cat.parameters["io_dict"]["samples_dir"] = str(main_path / "samples")
+    cat.set_params({'io_dict': {'samples_dir': str(main_path / 'samples')}}, save_params=False)
 
     try:
         run_testing_for_model(
@@ -873,7 +861,7 @@ def _append_by_target(target_lists: list[list[float]], value: Any, n_targets: in
 
 def plot_test_data(cat: Catalyst) -> None:
     results_dir = Path(cat.parameters["io_dict"]["main_path"]) / "testing" / "training"
-    cat.parameters["io_dict"]["results_dir"] = str(results_dir)
+    cat.set_params({'io_dict': {'results_dir': str(results_dir)}}, save_params=False)
 
     run_data = load_dictionary(results_dir / "indv_pred.data")
     records = _flatten_prediction_records(run_data)
@@ -942,7 +930,10 @@ def plot_test_data(cat: Catalyst) -> None:
         axis.set_title(f"Target {target_idx}")
 
     plt.tight_layout()
-    plt.show()
+    output_path = get_figures_dir(cat) / "prediction_parity.png"
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Wrote {output_path}")
 
 def predict(cat: Catalyst, interpretable: bool) -> None:
     del interpretable  # retained for config compatibility
@@ -951,14 +942,7 @@ def predict(cat: Catalyst, interpretable: bool) -> None:
     results_dir = main_path / "testing" / "predict"
     loaded_model_name = latest_checkpoint(model_dir, "checkpoint_epoch_*.pt")
 
-    cat.parameters["io_dict"].update(
-        {
-            "write_indv_pred": False,
-            "results_dir": str(reset_dir(results_dir)),
-            "model_dir": str(model_dir),
-            "loaded_model_name": loaded_model_name,
-        }
-    )
+    cat.set_params({'io_dict': {'write_indv_pred': False, 'results_dir': str(reset_dir(results_dir)), 'model_dir': str(model_dir), 'loaded_model_name': loaded_model_name}}, save_params=False)
 
     if cat.parameters["device_dict"]["run_ddp"]:
         processes = []
@@ -978,8 +962,19 @@ def predict(cat: Catalyst, interpretable: bool) -> None:
 
 
 def main() -> None:
-    cat = Catalyst()
-    cat.set_params(build_catalyst_parameters(CONFIG))
+    task = build_regression_task()
+    cat = Catalyst(
+        parameter_file=CONFIG_PATH,
+        parameters={
+            "loader_dict": {"batch_size": TRAINING_BATCH_SIZE},
+            "model_dict": {
+                "num_epochs": TRAINING_NUM_EPOCHS_OVERRIDE,
+                "train_delta": TRAINING_DELTA_OVERRIDE,
+                "train_tolerance": TRAINING_TOLERANCE_OVERRIDE,
+            },
+        },
+        task=task,
+    )
 
     projection_model = build_projection_model()
     regression_model = build_regression_model(DEVICE)
@@ -1003,26 +998,17 @@ def main() -> None:
         sample_data(cat, graph_data=raw_data, projected_data=projections)
 
     if RUN_TRAINING:
-        cat.parameters["loader_dict"]["batch_size"] = TRAINING_BATCH_SIZE
-        cat.parameters["model_dict"]["num_epochs"] = TRAINING_NUM_EPOCHS_OVERRIDE
-        cat.parameters["model_dict"]["train_delta"] = TRAINING_DELTA_OVERRIDE
-        cat.parameters["model_dict"]["train_tolerance"] = TRAINING_TOLERANCE_OVERRIDE
         train_model(cat)
 
         if RUN_PLOT_TRAINING:
             plot_training_results(cat)
 
     if RUN_RETRAINING:
-        cat.parameters["loader_dict"]["batch_size"] = TRAINING_BATCH_SIZE
-        cat.parameters["model_dict"]["num_epochs"] = TRAINING_NUM_EPOCHS_OVERRIDE
-        cat.parameters["model_dict"]["train_delta"] = TRAINING_DELTA_OVERRIDE
-        cat.parameters["model_dict"]["train_tolerance"] = TRAINING_TOLERANCE_OVERRIDE
         cat.set_model(regression_model)
-        cat.parameters["model_dict"]["restart_training"] = True
+        cat.set_params({"model_dict": {"restart_training": True}}, save_params=False)
         retrain_model(cat, use_latest_checkpoint=True)
 
     if RUN_TESTING:
-        cat.parameters["loader_dict"]["batch_size"] = TRAINING_BATCH_SIZE
         cat.set_model(regression_model)
         test_model(cat)
 

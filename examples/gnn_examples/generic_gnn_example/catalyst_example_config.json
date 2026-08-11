@@ -1,14 +1,14 @@
 {
   "paths": {},
   "workflow": {
-    "generate_graphs": false,
-    "project_graphs": false,
-    "generate_samples": false,
+    "generate_graphs": true,
+    "project_graphs": true,
+    "generate_samples": true,
     "train": true,
-    "retrain": true,
+    "retrain": false,
     "test": true,
-    "plot_test": false,
-    "plot_training": false,
+    "plot_test": true,
+    "plot_training": true,
     "ranking": false,
     "predictions": false,
     "visualize_final_graph": true
@@ -112,7 +112,6 @@
       "loss_params": {
         "function": "MSELoss"
       },
-      "accumulate_loss": "exact",
       "model": null,
       "strict_loss_policy": false,
       "batchnorm": false,

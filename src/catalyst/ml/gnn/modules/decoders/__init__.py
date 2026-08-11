@@ -9,14 +9,11 @@ from .standard_decoders import (
     PositiveFeatureReadout,
 )
 
-try:
-    from .equivariant_decoders import (
-        EquivariantDecoder,
-        GenericEquivariantDecoder,
-        ScalarGradientDecoder,
-    )
-except Exception:
-    pass
+from .equivariant_decoders import (
+    EquivariantDecoder,
+    GenericEquivariantDecoder,
+    ScalarGradientDecoder,
+)
 
 __all__ = [
     "ScalarDecoder",
@@ -27,6 +24,4 @@ __all__ = [
     "PositiveFeatureReadout",
 ]
 
-for _name in ("EquivariantDecoder", "GenericEquivariantDecoder", "ScalarGradientDecoder"):
-    if _name in globals():
-        __all__.append(_name)
+__all__.extend(["EquivariantDecoder", "GenericEquivariantDecoder", "ScalarGradientDecoder"])

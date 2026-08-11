@@ -9,14 +9,11 @@ from .atomic_encoders import (
     backfill_hidden_aliases,
 )
 
-try:
-    from .equivariant_encoders import (
-        EquivariantAtomicEncoder,
-        EquivariantEncoder,
-        AtomicEquivariantEncoder,
-    )
-except Exception:
-    pass
+from .equivariant_encoders import (
+    EquivariantAtomicEncoder,
+    EquivariantEncoder,
+    AtomicEquivariantEncoder,
+)
 
 __all__ = [
     "AtomicGraphEncoder",
@@ -27,6 +24,4 @@ __all__ = [
     "backfill_hidden_aliases",
 ]
 
-for _name in ("EquivariantAtomicEncoder", "EquivariantEncoder", "AtomicEquivariantEncoder"):
-    if _name in globals():
-        __all__.append(_name)
+__all__.extend(["EquivariantAtomicEncoder", "EquivariantEncoder", "AtomicEquivariantEncoder"])

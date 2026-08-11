@@ -124,35 +124,50 @@ def build_knn_edges_from_atoms(
         search_cutoff *= 1.5
 
     i, j, shifts, distances = candidates
-    all_i, all_j, all_s, all_d = [], [], [], []
 
+    # Sort the complete candidate table once.  The previous implementation did
+    # ``flatnonzero(i == atom_i)`` plus a separate sort for every atom, which
+    # repeatedly scanned the full edge list and became expensive for large
+    # structures.  One lexicographic sort gives O(E log E + N) selection while
+    # preserving the same deterministic distance/destination/image tie-breaks.
+    if len(i):
+        order = np.lexsort((
+            shifts[:, 2], shifts[:, 1], shifts[:, 0], j, distances, i
+        ))
+        sorted_i = i[order]
+        sorted_j = j[order]
+        sorted_s = shifts[order]
+        sorted_d = distances[order]
+        source_counts = np.bincount(sorted_i, minlength=n_atoms)
+        source_starts = np.concatenate(([0], np.cumsum(source_counts[:-1])))
+    else:
+        sorted_i = i
+        sorted_j = j
+        sorted_s = shifts
+        sorted_d = distances
+        source_counts = np.zeros(n_atoms, dtype=np.int64)
+        source_starts = np.zeros(n_atoms, dtype=np.int64)
+
+    selected = []
     for atom_i in range(n_atoms):
-        idx = np.flatnonzero(i == atom_i)
-        if idx.size:
-            # Stable lexicographic tie-breaking makes equal-distance shells
-            # deterministic across platforms.
-            order = np.lexsort((
-                shifts[idx, 2], shifts[idx, 1], shifts[idx, 0], j[idx], distances[idx]
-            ))
-            idx = idx[order[:k]]
-
-        if len(idx) < k:
+        available = int(source_counts[atom_i])
+        take = min(available, k)
+        if take < k:
             message = (
-                f"Atom {atom_i} only has {len(idx)} valid periodic-image neighbors "
+                f"Atom {atom_i} only has {take} valid periodic-image neighbors "
                 f"within search cutoff {search_cutoff:.6g}, but k={k} was requested."
             )
             if require_full_k:
                 raise ValueError(message)
             warnings.warn(message + " Returning fewer than k edges for this atom.", RuntimeWarning)
+        start = int(source_starts[atom_i])
+        if take:
+            selected.extend(range(start, start + take))
 
-        all_i.extend(i[idx].tolist())
-        all_j.extend(j[idx].tolist())
-        all_s.extend(shifts[idx].tolist())
-        all_d.extend(distances[idx].tolist())
-
-    edge_index = np.asarray([all_i, all_j], dtype=np.int64)
-    edge_shifts = np.asarray(all_s, dtype=np.int64).reshape(-1, 3)
-    edge_distances = np.asarray(all_d, dtype=dtype)
+    selected = np.asarray(selected, dtype=np.int64)
+    edge_index = np.asarray([sorted_i[selected], sorted_j[selected]], dtype=np.int64)
+    edge_shifts = np.asarray(sorted_s[selected], dtype=np.int64).reshape(-1, 3)
+    edge_distances = np.asarray(sorted_d[selected], dtype=dtype)
 
     if symmetrize and edge_index.shape[1] > 0:
         rev_index = edge_index[::-1]
@@ -251,7 +266,7 @@ def _infer_integer_shifts(edge_vec, raw_vec, cell, pbc):
         shifts = np.rint(frac_shift).astype(np.int64)
         shifts[:, ~pbc] = 0
         return shifts
-    except Exception:
+    except (np.linalg.LinAlgError, ValueError):
         return np.zeros((edge_vec.shape[0], 3), dtype=np.int64)
 
 

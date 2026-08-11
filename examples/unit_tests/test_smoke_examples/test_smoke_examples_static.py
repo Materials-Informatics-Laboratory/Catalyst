@@ -7,8 +7,10 @@ import runpy
 import pytest
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-SMOKE_DIR = REPO_ROOT / "examples" / "gnn_examples" / "smoke"
+# Anchor to the examples tree rather than assuming a repository checkout.
+# This supports both repo/examples/unit_tests/... and standalone unit_tests/... layouts.
+EXAMPLES_ROOT = Path(__file__).resolve().parents[2]
+SMOKE_DIR = EXAMPLES_ROOT / "gnn_examples" / "smoke"
 SMOKE_SCRIPTS = sorted(SMOKE_DIR.glob("*.py"))
 
 

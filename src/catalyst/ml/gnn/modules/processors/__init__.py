@@ -5,11 +5,8 @@ from .order_processor import Processor as OrderProcessorAlias
 from .scalar_processor import ScalarProcessor
 from .scalar_processor import Processor as ScalarProcessorAlias
 
-try:
-    from .equivariant_processor import EquivariantProcessor
-    from .equivariant_processor import Processor as EquivariantProcessorAlias
-except Exception:
-    pass
+from .equivariant_processor import EquivariantProcessor
+from .equivariant_processor import Processor as EquivariantProcessorAlias
 
 __all__ = [
     "OrderProcessor",
@@ -18,6 +15,4 @@ __all__ = [
     "ScalarProcessorAlias",
 ]
 
-for _name in ("EquivariantProcessor", "EquivariantProcessorAlias"):
-    if _name in globals():
-        __all__.append(_name)
+__all__.extend(["EquivariantProcessor", "EquivariantProcessorAlias"])

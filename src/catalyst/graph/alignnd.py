@@ -559,7 +559,7 @@ def _build_graph_components_with_retry(atoms, neighbor_params, include_angs, dih
                     f"attempts using cutoff={cutoff:.6g}, k={k}."
                 )
             return components
-        except Exception as exc:
+        except (ValueError, RuntimeError) as exc:
             last_error = exc
             if not auto_retry_graph or attempt == max_graph_attempts - 1:
                 break
@@ -1462,7 +1462,7 @@ def atomic_alignnd(atoms, neighbor_params, dihedral=False, all_elements=None,
                     f"{attempt + 1} attempts using cutoff={cutoff:.6g}, k={k}."
                 )
             return graph_data
-        except Exception as exc:
+        except (ValueError, RuntimeError) as exc:
             last_error = exc
             if not auto_retry_graph or attempt == max_graph_attempts - 1:
                 break

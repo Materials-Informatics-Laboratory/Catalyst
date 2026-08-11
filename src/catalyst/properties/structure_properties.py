@@ -4,8 +4,12 @@ import torch
 from ..utilities.data_tools import unique_lists_2d
 
 def unit_vector(vector):
-    """ Returns the unit vector of the vector.  """
-    return vector / np.linalg.norm(vector)
+    """Return a unit vector, rejecting zero-length geometry explicitly."""
+    vector = np.asarray(vector, dtype=float)
+    norm = np.linalg.norm(vector)
+    if not np.isfinite(norm) or norm <= np.finfo(float).eps:
+        raise ValueError("Cannot normalize a zero-length or non-finite vector.")
+    return vector / norm
 
 def angle_between(v1, v2):
     v1_u = unit_vector(v1)

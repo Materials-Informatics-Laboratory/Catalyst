@@ -81,6 +81,192 @@ python -m pytest
 
 ---
 
+## Configuration and staged validation
+
+Catalyst 2.2 uses one validated configuration path. Runtime parameters may be
+read directly from JSON, supplied as a Python mapping, or combined. Explicit
+constructor overrides take precedence over JSON values:
+
+```python
+from catalyst.observer import Catalyst
+from catalyst.ml.gnn import GNNTask
+
+task = GNNTask.graph_scalar(target_key="target_scalar")
+
+cat = Catalyst(
+    parameter_file="parameters.json",
+    parameters={
+        "loader_dict": {"batch_size": [8, 8]},
+        "model_dict": {"num_epochs": 100},
+    },
+    task=task,
+)
+```
+
+A JSON file may either contain Catalyst parameters directly or place them under
+a top-level `catalyst_parameters` key, as the repository workflow examples do.
+Relative I/O paths are resolved relative to the JSON file location.
+
+Validation is staged because a model does not need to exist when Catalyst is
+constructed:
+
+```text
+Catalyst(...)          -> configuration validation
+cat.set_task(task)     -> task/configuration validation
+build_task_model(...) -> task/model construction validation
+run_training(...)      -> final configuration/task/model/runtime preflight
+```
+
+The task may therefore be created before or after Catalyst:
+
+```python
+cat = Catalyst(parameter_file="parameters.json")
+task = GNNTask.graph_multiscalar(num_targets=3)
+cat.set_task(task)
+```
+
+Task-owned settings such as `target_key`, `accumulate_loss`, `output_type`,
+`output_level`, and multiscalar channel metadata are authoritative. If JSON or
+constructor parameters explicitly contradict the selected task, Catalyst raises
+`CatalystParameterError` rather than silently overriding either value. Unknown
+parameter names are also rejected, including suggestions for likely typos.
+
+Post-construction parameter changes should use the atomic validator:
+
+```python
+cat.set_params(
+    {"model_dict": {"validation_interval": 5}},
+    save_params=False,
+)
+```
+
+Invalid updates leave the existing configuration unchanged. Direct mutation of
+`cat.parameters` is not the supported public configuration path. The final
+effective configuration can be inspected with `cat.print_parameters()` or saved
+with `cat.save_parameters("effective_parameters.json")`.
+
+---
+
+## Training performance controls
+
+Catalyst keeps performance-sensitive behavior backward compatible by default, but exposes opt-in controls for larger CPU/GPU workloads. These settings live in the ordinary Catalyst parameter dictionary.
+
+### Mixed precision
+
+```python
+cat = Catalyst(parameters={
+    "device_dict": {"use_amp": True, "amp_dtype": "float16"}
+})
+```
+
+CUDA FP16 uses gradient scaling. BF16 does not require gradient scaling and is useful on hardware with native BF16 support.
+
+### `torch.compile`
+
+```python
+cat = Catalyst(parameters={
+    "model_dict": {
+        "compile_model": True,
+        "compile_backend": "inductor",
+        "compile_mode": "default",
+        "compile_dynamic": True,
+    }
+})
+```
+
+Catalyst uses dynamic compilation by default when compilation is enabled because atomistic graph batches naturally vary in their numbers of nodes and edges. Compilation remains disabled by default so users can benchmark it for their own model and PyTorch/PyG versions.
+
+### Data loading and GPU prefetch
+
+```python
+cat = Catalyst(parameters={
+    "device_dict": {"device": "cuda", "pin_memory": True},
+    "loader_dict": {
+        "num_workers": 4,
+        "persistent_workers": True,
+        "prefetch_factor": 2,
+        "prefetch_to_device": True,
+    },
+})
+```
+
+`prefetch_to_device` uses PyTorch Geometric's `PrefetchLoader` for single-GPU CUDA training. It is intentionally disabled for Catalyst DDP because DDP needs direct access to its distributed sampler.
+
+### Dynamic node/edge-budget batching
+
+For datasets containing structures with very different sizes, a fixed number of graphs per mini-batch can lead to highly variable GPU memory use. Catalyst can instead batch to a node or edge budget:
+
+```python
+cat = Catalyst(parameters={
+    "loader_dict": {"batch_mode": "nodes", "max_nodes": 12000}
+})
+```
+
+or:
+
+```python
+cat = Catalyst(parameters={
+    "loader_dict": {"batch_mode": "edges", "max_edges": 150000}
+})
+```
+
+The default remains `batch_mode="graphs"`. Dynamic node/edge batching is currently a single-device feature.
+
+### Optimizer implementation
+
+```python
+cat = Catalyst(parameters={
+    "model_dict": {"optimizer_params": {"implementation": "auto"}}
+})
+```
+
+Accepted values are `default`, `auto`, `fused`, `foreach`, and `for_loop`. `auto` prefers a supported fused implementation on CUDA and otherwise uses a supported foreach implementation. The default is `default` to preserve ordinary PyTorch optimizer selection.
+
+### FP32 matmul/TF32 controls
+
+```python
+cat = Catalyst(parameters={
+    "device_dict": {
+        "float32_matmul_precision": "high",
+        "allow_tf32": True,
+    }
+})
+```
+
+These controls are opt-in because they can change floating-point numerics slightly.
+
+### Less-frequent validation
+
+```python
+cat = Catalyst(parameters={
+    "model_dict": {"validation_interval": 5}
+})
+```
+
+This trains every epoch but runs the full validation loader every five epochs, plus the final epoch. The default value is `1`. Ordinary validation no longer copies all predictions and targets back to the CPU unless `io_dict["write_indv_pred"]` is enabled.
+
+### Distributed training
+
+Catalyst 2.2 validates its DDP path as CUDA/NCCL multi-GPU training. Optional DDP performance controls include:
+
+```python
+cat = Catalyst(parameters={
+    "device_dict": {
+        "device": "cuda",
+        "run_ddp": True,
+        "world_size": 2,
+        "ddp_backend": "nccl",
+        "ddp_gradient_as_bucket_view": True,
+        "ddp_static_graph": True,
+        "ddp_bucket_cap_mb": 25,
+    }
+})
+```
+
+Only enable `ddp_static_graph` when the model uses the same parameter graph on every iteration.
+
+---
+
 ## What graph types does Catalyst support?
 
 Catalyst currently supports three broad graph families.
@@ -220,11 +406,13 @@ A task controls four things that must agree during training:
 For example:
 
 ```python
+from catalyst.observer import Catalyst
+
 task = GNNTask.graph_scalar(target_key="target_scalar")
-task.apply_to_catalyst_parameters(parameters)
+cat = Catalyst(parameter_file="parameters.json", task=task)
 ```
 
-sets the Catalyst backend so it knows where to find the target and how to accumulate the loss.
+The task configures the Catalyst backend contract during staged validation so it knows where to find the target and how to accumulate the loss.
 
 ---
 
@@ -364,6 +552,8 @@ Example:
 task = GNNTask.node_vector(target_key="target_vector")
 ```
 
+Catalyst 2.2 supports one geometric vector channel for `node_vector` and `graph_vector`, so `vector_channels` must be `1`. Multiple independent scalar outputs belong in `graph_multiscalar`; a true multi-vector task is not part of the supported 2.2 API.
+
 This does **not** define three independent scalar tasks. It defines one vector-valued task per node.
 
 For equivariant models, the raw decoder may emit:
@@ -438,17 +628,11 @@ This task is experimental in the current release.
 This example shows the core task pattern without tying the task name to a physical property.
 
 ```python
+from catalyst.observer import Catalyst
 from catalyst.ml.gnn import GNNTask, build_task_model
 
 task = GNNTask.graph_scalar(target_key="target_scalar")
-
-parameters = {
-    "model_dict": {
-        "prediction_params": {}
-    }
-}
-
-task.apply_to_catalyst_parameters(parameters)
+cat = Catalyst(parameter_file="parameters.json", task=task)
 
 model = build_task_model(
     task=task,
@@ -461,15 +645,7 @@ model = build_task_model(
 )
 ```
 
-This does two separate things.
-
-First, the task configures the Catalyst backend:
-
-```python
-task.apply_to_catalyst_parameters(parameters)
-```
-
-Second, the model is built:
+The Catalyst constructor validates the general configuration and binds the task contract. The model is then built independently:
 
 ```python
 model = build_task_model(...)
@@ -490,6 +666,7 @@ This preserves the exact model architecture and uses the task only for backend c
 Use `graph_multiscalar` when one graph should produce several independent scalar predictions.
 
 ```python
+from catalyst.observer import Catalyst
 from catalyst.ml.gnn import GNNTask, build_task_model
 
 task = GNNTask.graph_multiscalar(
@@ -497,14 +674,7 @@ task = GNNTask.graph_multiscalar(
     target_key="target_scalars",
     target_names=["property_a", "property_b", "property_c"],
 )
-
-parameters = {
-    "model_dict": {
-        "prediction_params": {}
-    }
-}
-
-task.apply_to_catalyst_parameters(parameters)
+cat = Catalyst(parameter_file="parameters.json", task=task)
 
 model = build_task_model(
     task=task,
@@ -552,20 +722,14 @@ task = GNNTask.graph_multiscalar(
 This is the recommended pattern for direct force-like vector prediction.
 
 ```python
+from catalyst.observer import Catalyst
 from catalyst.ml.gnn import GNNTask, build_task_model
 
 task = GNNTask.node_vector(
     target_key="target_vector",
     vector_channels=1,
 )
-
-parameters = {
-    "model_dict": {
-        "prediction_params": {}
-    }
-}
-
-task.apply_to_catalyst_parameters(parameters)
+cat = Catalyst(parameter_file="parameters.json", task=task)
 
 model = build_task_model(
     task=task,
@@ -607,12 +771,14 @@ batch.target_vector
 
 ## Running smoke examples
 
-v2.2 includes three smoke examples:
+v2.2 includes five smoke examples:
 
 ```bash
 python examples/gnn_examples/smoke/01_generic_graph_scalar_smoke.py
 python examples/gnn_examples/smoke/02_al_fcc_alignn_graph_scalar_smoke.py
 python examples/gnn_examples/smoke/03_al_fcc_equivariant_node_vector_smoke.py
+python examples/gnn_examples/smoke/04_al_fcc_alignn_graph_multiscalar_smoke.py
+python examples/gnn_examples/smoke/05_al_fcc_train_checkpoint_inference_smoke.py
 ```
 
 The examples are intended to check that the public API works, not to train a production model.
@@ -623,7 +789,7 @@ This validates:
 
 ```python
 GNNTask.graph_scalar(...)
-task.apply_to_catalyst_parameters(...)
+cat.set_task(task)
 validate_task_batch(...)
 ```
 
@@ -659,18 +825,25 @@ model = build_task_model(
 
 This is the recommended route for direct vector-field prediction.
 
+### Smoke example 4: Al FCC graph multiscalar
+
+This exercises `GNNTask.graph_multiscalar`, `MultiScalarDecoder`, `GraphMultiScalarAdapter`, and the final `[B, K]` task contract on real ASE-generated atomic graphs.
+
+### Smoke example 5: training, checkpoint, reload, and inference
+
+This exercises the high-level Catalyst training backend end to end: graph input, optimization, loss decrease, checkpoint serialization, checkpoint reload, and inference consistency.
+
 ---
 
 ## Running tests
 
-From the repository root:
+From the repository root, run the complete suite with:
 
 ```bash
-python -m pytest \
-    examples/unit_tests/test_gnn_tasks/test_gnn_tasks.py \
-    examples/unit_tests/test_gnn_tasks/test_graph_multiscalar_task.py \
-    examples/unit_tests/test_smoke_examples/test_smoke_examples_static.py
+python -m pytest -q
 ```
+
+The functional GitHub Actions workflow runs the same suite on Python 3.10, 3.12, and 3.13. The suite includes task contracts, executable smoke examples, ASE graph-construction regressions, periodic-neighbor checks, equivariance/invariance checks, checkpoint/restart tests, staged parameter-validation tests, and Pass 1/Pass 2 release regressions.
 
 The task tests check that:
 

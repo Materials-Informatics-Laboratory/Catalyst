@@ -381,16 +381,8 @@ def _lazy_import_default_components():
     from ..decoders.standard_decoders import PositiveKChannelDecoder
     from ..decoders.standard_decoders import PositiveFeatureReadout
 
-    # Optional until the equivariant files are installed.
-    try:
-        from ..encoders.equivariant_encoders import EquivariantAtomicEncoder
-    except Exception:
-        EquivariantAtomicEncoder = None
-
-    try:
-        from ..decoders.equivariant_decoders import EquivariantDecoder
-    except Exception:
-        EquivariantDecoder = None
+    from ..encoders.equivariant_encoders import EquivariantAtomicEncoder
+    from ..decoders.equivariant_decoders import EquivariantDecoder
 
     return {
         "AtomicGraphEncoder": AtomicGraphEncoder,
@@ -620,13 +612,7 @@ def build_default_processor(
         )
 
     if processor_type in {"equivariant", "egnn", "equivariant_processor"}:
-        try:
-            from ..processors.equivariant_processor import EquivariantProcessor
-        except Exception as exc:
-            raise ImportError(
-                "EquivariantProcessor is not available. Install:\n"
-                "  catalyst/ml/gnn/modules/processors/equivariant_processor.py"
-            ) from exc
+        from ..processors.equivariant_processor import EquivariantProcessor
 
         return EquivariantProcessor(
             dim=dim,

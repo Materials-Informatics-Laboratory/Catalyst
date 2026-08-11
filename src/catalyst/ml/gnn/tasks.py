@@ -98,6 +98,13 @@ class VectorChannelAdapter(nn.Module):
         super().__init__()
         self.model = model
         self.vector_channels = int(vector_channels)
+        if self.vector_channels != 1:
+            raise ValueError(
+                "Catalyst 2.2 supports exactly one geometric vector channel per "
+                "node_vector/graph_vector task. Use graph_multiscalar for multiple "
+                "independent scalar targets. A true multivector task is not yet "
+                "part of the supported API."
+            )
         self.squeeze_single_channel = bool(squeeze_single_channel)
         self.output_keys = tuple(output_keys)
 
@@ -393,6 +400,12 @@ class GNNTask:
         vector_channels: int = 1,
         squeeze_single_vector_channel: bool = True,
     ) -> "GNNTask":
+        if int(vector_channels) != 1:
+            raise ValueError(
+                "vector_channels > 1 is not supported by Catalyst 2.2 task validation. "
+                "Use vector_channels=1 for a single geometric vector, or "
+                "GNNTask.graph_multiscalar(...) for independent scalar channels."
+            )
         return cls(
             name="node_vector",
             target_key=target_key,
@@ -417,6 +430,12 @@ class GNNTask:
         vector_channels: int = 1,
         squeeze_single_vector_channel: bool = True,
     ) -> "GNNTask":
+        if int(vector_channels) != 1:
+            raise ValueError(
+                "vector_channels > 1 is not supported by Catalyst 2.2 task validation. "
+                "Use vector_channels=1 for a single geometric vector, or "
+                "GNNTask.graph_multiscalar(...) for independent scalar channels."
+            )
         return cls(
             name="graph_vector",
             target_key=target_key,
@@ -483,10 +502,18 @@ class GNNTask:
         return replace(self, target_key=target_key)
 
     def apply_to_catalyst_parameters(self, parameters: MutableMapping[str, Any]) -> None:
+        """Apply the task-owned backend contract.
+
+        ``parameters`` may be a plain mutable mapping (legacy/internal use) or a
+        :class:`catalyst.observer.Catalyst` object.  Passing a Catalyst object is
+        preferred for user code because ``Catalyst.set_task`` applies the task
+        atomically and performs conflict validation against explicitly supplied
+        JSON/constructor parameters.
         """
-        Mutate a Catalyst parameter dictionary so the backend reads the correct
-        target field and uses the correct accumulation mode.
-        """
+        if hasattr(parameters, "set_task") and hasattr(parameters, "parameters"):
+            parameters.set_task(self)
+            return
+
         model_dict = parameters.setdefault("model_dict", {})
         model_dict["task"] = self.name
         model_dict["task_out_dim"] = self.out_dim
@@ -504,8 +531,13 @@ class GNNTask:
         if self.prefer_equivariant_key is not None:
             prediction_params["prefer_equivariant_key"] = self.prefer_equivariant_key
 
+        # GNNTask describes supervised prediction semantics. Legacy list-output
+        # models need channel_mode="target" so their entity/order channels are
+        # accumulated into loss-ready target predictions. Direct tensor/dict
+        # outputs ignore this option, so making it explicit is harmless there.
+        prediction_params["channel_mode"] = "target"
+
         if self.name == "graph_multiscalar":
-            prediction_params["channel_mode"] = "target"
             prediction_params["legacy_multichannel_shape"] = False
             prediction_params["normalize_by"] = self.normalize_by
 
@@ -668,6 +700,57 @@ class GNNTask:
         raise RuntimeError(f"No validation rule implemented for task {self.name!r}.")
 
 
+def _validate_task_model_request(
+    task: GNNTask,
+    *,
+    model_type: Optional[str],
+    preset: Optional[str],
+    decoder: Optional[nn.Module],
+    apply_task_model_kwargs: bool,
+    kwargs: Mapping[str, Any],
+) -> None:
+    """Validate task/model-builder compatibility before model construction."""
+    if not isinstance(task, GNNTask):
+        raise TypeError("build_task_model(task=...) requires a GNNTask instance.")
+
+    if apply_task_model_kwargs:
+        expected = task.model_kwargs()
+        for key, required in expected.items():
+            if key in kwargs and kwargs[key] != required:
+                raise ValueError(
+                    f"Task {task.name!r} requires {key}={required!r}, but "
+                    f"build_task_model received {key}={kwargs[key]!r}. "
+                    "Task-controlled model settings must not be overridden."
+                )
+
+    route = str(preset or model_type or "").lower().strip()
+    equivariant_route = (
+        route in {"equivariant", "egnn", "equivariant_gnn"}
+        or route.startswith("equivariant_")
+        or str(kwargs.get("processor_type", "")).lower().strip() == "equivariant"
+        or "equivariant" in str(kwargs.get("encoder_type", "")).lower().strip()
+        or str(kwargs.get("decoder_type", "")).lower().strip()
+        in {"equivariant", "equivariant_decoder", "generic_equivariant"}
+    )
+
+    if task.name in {"node_vector", "graph_vector", "scalar_gradient"}:
+        if not equivariant_route and decoder is None:
+            raise ValueError(
+                f"Task {task.name!r} requires an equivariant/vector-capable model route "
+                "or an explicitly supplied compatible custom decoder."
+            )
+
+    if task.name == "graph_multiscalar" and apply_task_model_kwargs and decoder is None:
+        decoder_type = kwargs.get("decoder_type")
+        if decoder_type is not None and not equivariant_route:
+            if str(decoder_type).lower().strip() not in {"multiscalar", "multi_scalar"}:
+                raise ValueError(
+                    "graph_multiscalar requires decoder_type='multiscalar' for the "
+                    "standard non-equivariant route when no custom decoder is supplied."
+                )
+
+
+
 def build_task_model(
     *,
     task: GNNTask,
@@ -716,6 +799,15 @@ def build_task_model(
         apply_task_model_kwargs is consumed here and is never forwarded to
         build_model(...) or build_gnn_builder(...).
     """
+    _validate_task_model_request(
+        task,
+        model_type=model_type,
+        preset=preset,
+        decoder=decoder,
+        apply_task_model_kwargs=apply_task_model_kwargs,
+        kwargs=kwargs,
+    )
+
     model_kwargs: Dict[str, Any] = {}
 
     if preset is not None:
@@ -781,7 +873,13 @@ def build_task_model(
     model_kwargs.update(kwargs)
 
     model = build_model(**model_kwargs)
-    return task.wrap_model_if_needed(model)
+    wrapped = task.wrap_model_if_needed(model)
+    # Metadata is deliberately attached to the returned module so Catalyst can
+    # validate task/model compatibility later even when task/model construction
+    # occurs before the Catalyst object exists.
+    setattr(wrapped, "_catalyst_task", task)
+    setattr(wrapped, "_catalyst_model_kwargs", dict(model_kwargs))
+    return wrapped
 
 
 def validate_task_batch(
@@ -888,6 +986,7 @@ def task_from_parameters(parameters: Mapping[str, Any], *, default_task: str = "
 __all__ = [
     "GNNTask",
     "VectorChannelAdapter",
+    "GraphMultiScalarAdapter",
     "build_task_model",
     "validate_task_batch",
     "task_from_parameters",

@@ -368,7 +368,12 @@ def active_y_sampling(params_group):
     X = np.arange(len(y))
 
     exploration_points = math.ceil(exploration_weight*n)
-    exploitation_points = math.fabs(n - exploration_points)
+    exploitation_points = int(n - exploration_points)
+
+    if n < 0 or n > len(y):
+        raise ValueError(
+            f"samples_per_iteration must satisfy 0 <= n <= len(y); got n={n}, len(y)={len(y)}."
+        )
 
     print('Selecting ',exploration_points, ' exploration and ', exploitation_points,' exploitation points')
 
@@ -376,14 +381,21 @@ def active_y_sampling(params_group):
     if exploitation_points > 0:
         if params_group['exploitation_strategy'] == 'greedy':
             max_y = max(y)
-            exploitation_samples = np.array([])
-            iteration = 0.0
-            while len(exploitation_samples) < exploitation_points:
-                try:
-                    exploitation_samples = rng.choice(np.where(y >= ((1.0 - (0.05 + 0.05*iteration))*max_y))[0], int(exploitation_points), replace=False)
-                except:
-                    pass
-                iteration += 1.0
+            exploitation_samples = None
+            # Relax the threshold in bounded increments until enough candidates
+            # are available. The old bare-except loop could spin indefinitely.
+            for iteration in range(20):
+                threshold = (1.0 - (0.05 + 0.05 * iteration)) * max_y
+                candidates = np.where(y >= threshold)[0]
+                if len(candidates) >= exploitation_points:
+                    exploitation_samples = rng.choice(
+                        candidates, exploitation_points, replace=False
+                    )
+                    break
+            if exploitation_samples is None:
+                # At the final relaxed threshold all finite entries should be
+                # candidates, but use the top values as a deterministic fallback.
+                exploitation_samples = np.argsort(np.asarray(y))[-exploitation_points:]
             y = np.delete(y, exploitation_samples)
     # exploration second
     max_dists = [np.max(np.abs(yy - training_y)) for yy in y]

@@ -537,7 +537,7 @@ def _has_any_attr(data, names):
 def _safe_data_attr_preview(data, max_items=40):
     try:
         keys = list(data.keys()) if callable(getattr(data, "keys", None)) else list(vars(data).keys())
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         keys = list(vars(data).keys()) if hasattr(data, "__dict__") else []
     return keys[:max_items]
 
@@ -665,6 +665,9 @@ def _num_graphs_from_schema(data, schema):
     explicit = getattr(data, "num_graphs", None)
     if explicit is not None:
         return int(explicit)
+    ptr = getattr(data, "ptr", None)
+    if torch.is_tensor(ptr):
+        return int(ptr.numel() - 1)
 
     primary_entries = [entry for entry in schema if entry["is_primary"]]
     if len(primary_entries) != 1:
@@ -699,13 +702,13 @@ def _sum_by_batch(values, batch, num_graphs=None):
         raise ValueError(f"num_graphs must be non-negative, got {num_graphs}.")
 
     if batch.numel() > 0:
-        min_id = int(batch.min().item())
-        max_id = int(batch.max().item())
-        if min_id < 0 or max_id >= num_graphs:
-            raise ValueError(
-                "batch contains graph ids outside the requested output range: "
-                f"min={min_id}, max={max_id}, num_graphs={num_graphs}."
-            )
+        # Tensor assertions avoid extracting CUDA scalars with .item() in every
+        # forward pass and remain friendly to torch.compile.
+        torch._assert(torch.all(batch >= 0), "batch contains a negative graph id.")
+        torch._assert(
+            torch.all(batch < num_graphs),
+            "batch contains a graph id outside the requested output range.",
+        )
 
     out = values.new_zeros((num_graphs, values.shape[1]))
     if batch.numel() > 0:
