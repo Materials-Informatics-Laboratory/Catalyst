@@ -8,7 +8,7 @@ Catalyst is a modular graph-learning framework for materials and scientific mach
 2. Constructing GNN models from encoders, processors, and decoders.
 3. Training models through a shared Catalyst backend.
 4. Running inference, saving predictions, and plotting parity/performance results.
-5. Defining generic ML tasks such as graph-level scalar regression and node-level vector regression.
+5. Defining generic ML tasks such as graph-level scalar regression, multiple independent graph-level scalar regression, and node-level vector regression.
 6. If using CUDA, Catalyst is built with DDP support allowing you to train your GNN models in a highly parallelized GPU environment. 
 
 A typical Catalyst model is assembled from three pieces:
@@ -17,7 +17,7 @@ A typical Catalyst model is assembled from three pieces:
 encoder -> processor -> decoder
 ```
 
-The **encoder** converts raw graph attributes into hidden features. The **processor** performs message passing, such as ALIGNN/order-based updates or equivariant updates. The **decoder** maps hidden features to a task-specific output such as a graph scalar or a node vector.
+The **encoder** converts raw graph attributes into hidden features. The **processor** performs message passing, such as ALIGNN/order-based updates or equivariant updates. The **decoder** maps hidden features to a task-specific output such as a graph scalar, multiple independent graph scalars, or a node vector.
 
 The high-level training object is:
 
@@ -197,6 +197,7 @@ The current task names are:
 
 ```text
 graph_scalar
+graph_multiscalar
 node_scalar
 node_vector
 graph_vector
@@ -227,7 +228,7 @@ sets the Catalyst backend so it knows where to find the target and how to accumu
 
 ---
 
-## What is the difference between `graph_scalar`, `node_scalar`, `node_vector`, and `graph_vector`?
+## What is the difference between `graph_scalar`, `graph_multiscalar`, `node_scalar`, `node_vector`, and `graph_vector`?
 
 ### `graph_scalar`
 
@@ -262,6 +263,55 @@ batch.target_scalar
 ```
 
 and that the loss should compare one scalar prediction per graph.
+
+### `graph_multiscalar`
+
+Use `graph_multiscalar` when each graph has **K independent scalar targets** that should be predicted together by one model.
+
+This is the task to use when the output is conceptually several separate scalar regression problems sharing the same GNN representation. The channels are ordinary invariant scalars and **do not** have the geometric or equivariant meaning of the three components of a vector.
+
+Expected prediction and batched target shape:
+
+```text
+[B, K]
+```
+
+where `B` is the number of graphs in the batch and `K = num_targets`.
+
+The canonical task-builder interface is:
+
+```python
+task = GNNTask.graph_multiscalar(
+    num_targets=3,
+    target_key="target_scalars",
+    target_names=["property_a", "property_b", "property_c"],
+)
+```
+
+`num_targets` must be at least 2. `target_names` is optional, but when provided it must contain exactly `num_targets` names.
+
+The default task configuration is:
+
+```text
+output_type = "scalar"
+output_level = "graph"
+out_dim = num_targets
+accumulate_loss = "exact"
+normalize_by = "primary_nodes"
+```
+
+For non-equivariant Catalyst presets, `build_task_model` automatically selects the `MultiScalarDecoder` when no custom decoder is supplied. `MultiScalarDecoder` produces `K` scalar channels for each available graph order, and `GraphMultiScalarAdapter` performs the graph-level pooling needed to produce the final `[B, K]` prediction.
+
+These channels are **not** passed through `VectorChannelAdapter`. For example, an output with shape `[B, 3]` from `graph_multiscalar(num_targets=3)` means three independent scalar predictions per graph, whereas `[B, 3]` from `graph_vector` means one three-component geometric vector per graph.
+
+The task builder also accepts the aliases:
+
+```text
+graph_scalar_multichannel
+scalar_multichannel
+```
+
+but `graph_multiscalar` is the canonical task name used by Catalyst.
 
 ### `node_scalar`
 
@@ -354,6 +404,8 @@ Example:
 task = GNNTask.graph_vector(target_key="target_vector")
 ```
 
+Use `graph_vector` only when the three output components belong to one geometric vector. If the graph has several unrelated scalar labels, use `graph_multiscalar` instead.
+
 ### `scalar_gradient`
 
 Use `scalar_gradient` for models that predict a scalar and train against the gradient of that scalar with respect to an input such as atomic positions.
@@ -372,7 +424,8 @@ This task is experimental in the current release.
 
 | Task | Prediction level | Output shape | Typical target | Catalyst loss accumulation |
 |---|---:|---:|---|---|
-| `graph_scalar` | Graph | `[B]` or `[B, 1]` | Energy, stability, graph property | `exact` |
+| `graph_scalar` | Graph | `[B]` or `[B, 1]` | One graph-level scalar | `exact` |
+| `graph_multiscalar` | Graph | `[B, K]` | K independent graph-level scalars | `exact` |
 | `node_scalar` | Node | `[N]` or `[N, 1]` | Atomic charge, local scalar | `node` |
 | `node_vector` | Node | `[N, 3]` | Forces, local vector field | `node` |
 | `graph_vector` | Graph | `[B, 3]` | Dipole, polarization, global vector | `exact` |
@@ -429,6 +482,68 @@ apply_task_model_kwargs=False
 ```
 
 This preserves the exact model architecture and uses the task only for backend consistency.
+
+---
+
+## Minimal example: multiple independent graph-level scalar targets
+
+Use `graph_multiscalar` when one graph should produce several independent scalar predictions.
+
+```python
+from catalyst.ml.gnn import GNNTask, build_task_model
+
+task = GNNTask.graph_multiscalar(
+    num_targets=3,
+    target_key="target_scalars",
+    target_names=["property_a", "property_b", "property_c"],
+)
+
+parameters = {
+    "model_dict": {
+        "prediction_params": {}
+    }
+}
+
+task.apply_to_catalyst_parameters(parameters)
+
+model = build_task_model(
+    task=task,
+    preset="alignn",
+    num_species=1,
+    cutoff=3.5,
+    dim=64,
+    num_convs=2,
+)
+```
+
+For a batch containing `B` graphs, the final prediction has shape:
+
+```text
+[B, 3]
+```
+
+and is compared directly with a target tensor of the same shape.
+
+With the standard non-equivariant preset route, the task builder automatically configures:
+
+```text
+decoder_type = "multiscalar"
+output_type = "scalar"
+output_level = "graph"
+out_dim = 3
+```
+
+and wraps the model with `GraphMultiScalarAdapter` so the order-wise output from `MultiScalarDecoder` is accumulated into one independent scalar value per target and per graph.
+
+If exact summed contributions are desired rather than the default normalization by the number of primary nodes, set:
+
+```python
+task = GNNTask.graph_multiscalar(
+    num_targets=3,
+    target_key="target_scalars",
+    normalize_by=None,
+)
+```
 
 ---
 
@@ -492,7 +607,7 @@ batch.target_vector
 
 ## Running smoke examples
 
-v2.1 includes three smoke examples:
+v2.2 includes three smoke examples:
 
 ```bash
 python examples/gnn_examples/smoke/01_generic_graph_scalar_smoke.py
@@ -551,12 +666,18 @@ This is the recommended route for direct vector-field prediction.
 From the repository root:
 
 ```bash
-python -m pytest unit_tests/test_gnn_tasks/test_gnn_tasks.py unit_tests/test_smoke_examples/test_smoke_examples_static.py
+python -m pytest \
+    examples/unit_tests/test_gnn_tasks/test_gnn_tasks.py \
+    examples/unit_tests/test_gnn_tasks/test_graph_multiscalar_task.py \
+    examples/unit_tests/test_smoke_examples/test_smoke_examples_static.py
 ```
 
 The task tests check that:
 
 - `GNNTask.graph_scalar` applies the correct backend contract.
+- `GNNTask.graph_multiscalar` configures `num_targets`, target metadata, and `[B, K]` prediction/target validation correctly.
+- `MultiScalarDecoder` produces independent K-channel scalar outputs and `GraphMultiScalarAdapter` pools them without vector semantics.
+- `build_task_model` automatically selects the multiscalar decoder for the standard non-equivariant multiscalar route.
 - `GNNTask.node_vector` applies the correct backend contract.
 - `VectorChannelAdapter` converts `[N, 1, 3]` to `[N, 3]`.
 - `VectorChannelAdapter` rejects `[N, 3, 3]` for one-vector tasks.
@@ -577,6 +698,15 @@ from catalyst.ml.gnn import (
     build_task_model,
     validate_task_batch,
     build_model,
+)
+```
+
+For multiple independent graph-level scalar targets, use the canonical task-builder interface:
+
+```python
+task = GNNTask.graph_multiscalar(
+    num_targets=3,
+    target_key="target_scalars",
 )
 ```
 
