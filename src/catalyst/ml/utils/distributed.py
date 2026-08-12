@@ -36,9 +36,9 @@ def validate_ddp_configuration(parameters, rank=None):
             "Catalyst 2.2 DDP currently supports CUDA devices only. "
             "Set device_dict['device']='cuda' (or cuda:<id>) or disable DDP."
         )
-    if backend != "nccl":
+    if backend != "nccl" and backend != "gloo":
         raise ValueError(
-            "Catalyst 2.2 CUDA DDP is validated for the NCCL backend only; "
+            "Catalyst 2.2 CUDA DDP is validated for the NCCL or GLOO backends only; "
             f"received ddp_backend={backend!r}."
         )
     if not torch.cuda.is_available():
@@ -56,8 +56,8 @@ def validate_ddp_configuration(parameters, rank=None):
 def ddp_setup(rank: int, world_size, backend):
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA DDP setup requested but CUDA is unavailable.")
-    if str(backend).lower() != "nccl":
-        raise ValueError("Catalyst CUDA DDP currently requires backend='nccl'.")
+    if str(backend).lower() != "nccl" and str(backend).lower() != "gloo":
+        raise ValueError("Catalyst CUDA DDP currently requires backend='nccl' or 'gloo'.")
 
     os.environ.setdefault("MASTER_ADDR", "localhost")
     os.environ.setdefault("MASTER_PORT", "12355")

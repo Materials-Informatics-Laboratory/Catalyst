@@ -22,6 +22,9 @@ def test_smoke_examples_are_discovered():
         "03_al_fcc_equivariant_node_vector_smoke.py",
         "04_al_fcc_alignn_graph_multiscalar_smoke.py",
         "05_al_fcc_train_checkpoint_inference_smoke.py",
+        "06_generic_node_scalar_smoke.py",
+        "07_equivariant_graph_vector_smoke.py",
+        "08_equivariant_scalar_gradient_smoke.py",
     ]
 
 

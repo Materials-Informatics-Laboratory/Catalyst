@@ -183,6 +183,7 @@ def test_public_workflow_examples_do_not_mutate_cat_parameters_directly():
         examples_root / "gnn_examples/alignn_examples/energy/al_fcc_alignn_energy_example.py",
         examples_root / "gnn_examples/alignn_examples/force/al_fcc_equivariant_force_catalyst_backend.py",
         examples_root / "gnn_examples/generic_gnn_example/example_workflow.py",
+        *sorted((examples_root / "gnn_examples/task_examples").glob("[0-9][0-9]_*.py")),
     ]
 
     violations = []

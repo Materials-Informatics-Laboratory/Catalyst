@@ -198,8 +198,8 @@ def validate_config_parameters(parameters: Mapping[str, Any]) -> list[str]:
     if device["run_ddp"]:
         if not device["device"].startswith("cuda"):
             raise CatalystParameterError("run_ddp=True requires device_dict.device='cuda' or 'cuda:<index>'.")
-        if device["ddp_backend"] != "nccl":
-            raise CatalystParameterError("Catalyst CUDA DDP requires device_dict.ddp_backend='nccl'.")
+        if device["ddp_backend"] != "nccl" and device["ddp_backend"] != "gloo":
+            raise CatalystParameterError("Catalyst CUDA DDP requires device_dict.ddp_backend='nccl' or 'gloo'.")
         if int(device["world_size"]) < 2:
             warnings_out.append("run_ddp=True with world_size=1 is valid for debugging but provides no multi-GPU speedup.")
     elif int(device["world_size"]) != 1:

@@ -1,0 +1,37 @@
+{
+  "seed": 13,
+  "output_dir": "output",
+  "task": {
+    "target_key": "target_scalar"
+  },
+  "dataset": {
+    "num_graphs": 28,
+    "graph_seed_base": 3000,
+    "n_nodes_base": 7,
+    "n_nodes_cycle": 8,
+    "n_types": 3,
+    "knn_k": 3
+  },
+  "target": {
+    "type_values": [
+      -0.4,
+      0.25,
+      1.1
+    ]
+  },
+  "model": {
+    "dim": 48,
+    "num_convs": 2,
+    "conv_type": "gine",
+    "aggr_scheme": "add",
+    "cutoff": 5.0,
+    "encode_3body": true
+  },
+  "training": {
+    "n_train": 20,
+    "n_validation": 4,
+    "epochs": 20,
+    "learning_rate": 0.005,
+    "batch_size": 7
+  }
+}
