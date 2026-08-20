@@ -20,6 +20,308 @@ import numpy as np
 from ase.geometry import get_distances
 
 
+def _empty_neighbor_candidates(dtype=np.float32):
+    """Return empty directed-neighbor arrays with Catalyst's canonical dtypes."""
+    return (
+        np.empty((0,), dtype=np.int64),
+        np.empty((0,), dtype=np.int64),
+        np.empty((0, 3), dtype=np.int64),
+        np.empty((0,), dtype=dtype),
+    )
+
+
+def _ckdtree_neighbor_candidates(atoms, search_cutoff, dtype=np.float32):
+    """Return directed finite-system neighbors using Cartesian cKDTree search.
+
+    This backend deliberately ignores periodic images.  It is therefore used only
+    after ``analyze_effective_periodicity`` has established that periodic copies
+    cannot contribute an edge within ``search_cutoff``.  Using cKDTree avoids the
+    cell-bin scaling path in ASE's general neighbor list for isolated clusters,
+    nanoparticles, and molecules in large simulation boxes.
+    """
+    if search_cutoff is None or not np.isfinite(search_cutoff) or search_cutoff <= 0:
+        raise ValueError("search_cutoff must be a positive finite value.")
+
+    positions = np.asarray(atoms.get_positions(), dtype=np.float64)
+    if len(positions) < 2:
+        return _empty_neighbor_candidates(dtype=dtype)
+
+    tree = cKDTree(positions)
+    try:
+        pairs = tree.query_pairs(float(search_cutoff), output_type="ndarray")
+    except TypeError:  # older SciPy fallback
+        pairs = np.asarray(list(tree.query_pairs(float(search_cutoff))), dtype=np.int64)
+
+    pairs = np.asarray(pairs, dtype=np.int64)
+    if pairs.size == 0:
+        return _empty_neighbor_candidates(dtype=dtype)
+    pairs = pairs.reshape((-1, 2))
+
+    # cKDTree query_pairs yields each undirected pair once. Catalyst radius graphs
+    # are directed, so explicitly create both orientations.
+    i = np.concatenate((pairs[:, 0], pairs[:, 1])).astype(np.int64, copy=False)
+    j = np.concatenate((pairs[:, 1], pairs[:, 0])).astype(np.int64, copy=False)
+    vectors = positions[j] - positions[i]
+    distances = np.linalg.norm(vectors, axis=1).astype(dtype, copy=False)
+    shifts = np.zeros((len(i), 3), dtype=np.int64)
+
+    keep = distances > np.finfo(np.dtype(dtype)).eps
+    i = i[keep]
+    j = j[keep]
+    distances = distances[keep]
+    shifts = shifts[keep]
+
+    if len(i):
+        # Match the deterministic source/distance/destination ordering used by
+        # the image-aware path closely enough for reproducible serialized graphs.
+        order = np.lexsort((j, distances, i))
+        i = i[order]
+        j = j[order]
+        distances = distances[order]
+        shifts = shifts[order]
+
+    return i, j, shifts, distances
+
+
+def _periodic_lattice_basis(atoms):
+    """Return the declared-periodic cell vectors and their original axis indices."""
+    pbc = np.asarray(atoms.pbc, dtype=bool).reshape(3)
+    axes = np.flatnonzero(pbc)
+    if len(axes) == 0:
+        return axes, np.empty((0, 3), dtype=np.float64)
+    cell = np.asarray(atoms.cell.array, dtype=np.float64).reshape(3, 3)
+    return axes, cell[axes]
+
+
+def _shortest_periodic_translation(atoms, max_shell=24, tol=1.0e-12):
+    """Find the shortest nonzero lattice translation allowed by declared PBC.
+
+    The search is exact once the smallest singular value of the periodic lattice
+    basis proves that integer vectors outside the current coefficient shell cannot
+    beat the best translation already found.  If the cell is singular or too
+    ill-conditioned to certify within ``max_shell``, ``exact`` is False and callers
+    must use a conservative fallback rather than assuming a finite system.
+    """
+    axes, basis = _periodic_lattice_basis(atoms)
+    ndim = len(axes)
+    if ndim == 0:
+        return float("inf"), True, 0, axes, basis
+
+    if not np.all(np.isfinite(basis)):
+        return float("nan"), False, 0, axes, basis
+
+    singular_values = np.linalg.svd(basis, compute_uv=False)
+    if len(singular_values) != ndim or np.min(singular_values) <= tol:
+        return float("nan"), False, 0, axes, basis
+    sigma_min = float(np.min(singular_values))
+
+    best = float("inf")
+    shell_used = 0
+    for shell in range(1, int(max_shell) + 1):
+        shell_used = shell
+        ranges = [range(-shell, shell + 1) for _ in range(ndim)]
+        for coeff in itertools.product(*ranges):
+            if all(v == 0 for v in coeff):
+                continue
+            # Only inspect vectors touching the newly added shell.
+            if max(abs(v) for v in coeff) != shell:
+                continue
+            translation = np.asarray(coeff, dtype=np.float64) @ basis
+            norm = float(np.linalg.norm(translation))
+            if norm > tol and norm < best:
+                best = norm
+
+        # Any coefficient vector outside [-shell, shell]^d has ||n|| >= shell+1.
+        # Therefore ||n B|| >= sigma_min * (shell+1).
+        if np.isfinite(best) and sigma_min * float(shell + 1) > best + tol:
+            return best, True, shell_used, axes, basis
+
+    return best, False, shell_used, axes, basis
+
+
+def _wrapped_positions_for_periodicity_test(atoms):
+    """Return positions wrapped only along declared periodic directions."""
+    wrapped = atoms.copy()
+    if np.any(np.asarray(wrapped.pbc, dtype=bool)):
+        try:
+            wrapped.wrap()
+        except Exception:
+            # The caller will conservatively fall back to the periodic backend if
+            # the subsequent geometry checks cannot certify nonperiodicity.
+            pass
+    return np.asarray(wrapped.get_positions(), dtype=np.float64)
+
+
+def analyze_effective_periodicity(
+    atoms,
+    cutoff,
+    *,
+    max_shift_candidates=4096,
+    shortest_vector_max_shell=24,
+    tol=1.0e-9,
+):
+    """Classify whether periodic images can alter a radius graph at ``cutoff``.
+
+    ``Atoms.pbc`` describes simulation boundary conditions, not whether periodic
+    copies are physically relevant to a particular graph radius.  This routine
+    therefore distinguishes *declared* PBC from *effective* graph periodicity.
+
+    The classification is conservative:
+      1. With no declared PBC, the graph is finite/nonperiodic.
+      2. A rigorous lattice-translation/bounding-box separation bound can prove
+         that no periodic image can approach within the graph cutoff.
+      3. Otherwise cKDTree cross-image queries test every lattice translation that
+         could possibly create an edge within the cutoff.
+      4. If the cell is too singular/ill-conditioned or the required image search
+         would be excessive, the routine falls back to periodic=True rather than
+         risk dropping physically valid periodic-image edges.
+
+    The returned metadata is intentionally JSON/pickle friendly so it can be
+    attached directly to Catalyst graph objects for later auditing.
+    """
+    cutoff = float(cutoff)
+    if not np.isfinite(cutoff) or cutoff <= 0:
+        raise ValueError("cutoff must be a positive finite value.")
+
+    pbc = np.asarray(atoms.pbc, dtype=bool).reshape(3)
+    metadata = {
+        "declared_pbc": [bool(v) for v in pbc.tolist()],
+        "effective_periodic": False,
+        "effective_periodicity": "nonperiodic",
+        "neighbor_backend": "ckdtree_finite",
+        "periodicity_cutoff_A": cutoff,
+        "shortest_periodic_lattice_translation_A": None,
+        "structure_bbox_diagonal_A": None,
+        "periodic_image_distance_lower_bound_A": None,
+        "detected_periodic_image_distance_A": None,
+        "periodicity_detection_method": "declared_nonperiodic",
+        "periodicity_image_shifts_tested": 0,
+        "periodicity_test_conservative_fallback": False,
+    }
+
+    if not np.any(pbc):
+        return metadata
+
+    positions = _wrapped_positions_for_periodicity_test(atoms)
+    if len(positions) == 0:
+        metadata["periodicity_detection_method"] = "empty_structure"
+        return metadata
+
+    bbox_diagonal = (
+        float(np.linalg.norm(np.ptp(positions, axis=0))) if len(positions) > 1 else 0.0
+    )
+    metadata["structure_bbox_diagonal_A"] = bbox_diagonal
+
+    shortest, shortest_exact, shell_used, axes, basis = _shortest_periodic_translation(
+        atoms,
+        max_shell=shortest_vector_max_shell,
+        tol=max(float(tol), 1.0e-12),
+    )
+    if np.isfinite(shortest):
+        metadata["shortest_periodic_lattice_translation_A"] = float(shortest)
+        lower_bound = float(shortest - bbox_diagonal)
+        metadata["periodic_image_distance_lower_bound_A"] = lower_bound
+    else:
+        lower_bound = float("-inf")
+
+    if shortest_exact and lower_bound > cutoff + tol:
+        metadata["periodicity_detection_method"] = "bbox_separation_proof"
+        return metadata
+
+    ndim = len(axes)
+    if ndim == 0:
+        return metadata
+
+    singular_values = np.linalg.svd(basis, compute_uv=False)
+    if (
+        len(singular_values) != ndim
+        or not np.all(np.isfinite(singular_values))
+        or float(np.min(singular_values)) <= max(float(tol), 1.0e-12)
+    ):
+        metadata.update({
+            "effective_periodic": True,
+            "effective_periodicity": "periodic",
+            "neighbor_backend": "ase_periodic",
+            "periodicity_detection_method": "conservative_periodic_singular_cell",
+            "periodicity_test_conservative_fallback": True,
+        })
+        return metadata
+
+    sigma_min = float(np.min(singular_values))
+    # For two copies of a structure with Cartesian diameter <= bbox_diagonal,
+    # translations longer than bbox_diagonal + cutoff cannot create a cutoff edge.
+    translation_bound = float(bbox_diagonal + cutoff + tol)
+    coeff_radius = max(1, int(np.ceil(translation_bound / sigma_min)))
+    candidate_count_upper = (2 * coeff_radius + 1) ** ndim - 1
+    if candidate_count_upper > int(max_shift_candidates):
+        metadata.update({
+            "effective_periodic": True,
+            "effective_periodicity": "periodic",
+            "neighbor_backend": "ase_periodic",
+            "periodicity_detection_method": "conservative_periodic_many_images",
+            "periodicity_test_conservative_fallback": True,
+        })
+        return metadata
+
+    shifts = []
+    for coeff in itertools.product(range(-coeff_radius, coeff_radius + 1), repeat=ndim):
+        if all(v == 0 for v in coeff):
+            continue
+        coeff_arr = np.asarray(coeff, dtype=np.int64)
+        translation = coeff_arr.astype(np.float64) @ basis
+        norm = float(np.linalg.norm(translation))
+        if norm <= translation_bound:
+            full_shift = np.zeros(3, dtype=np.int64)
+            full_shift[axes] = coeff_arr
+            shifts.append((norm, full_shift, translation))
+
+    shifts.sort(key=lambda item: (item[0], tuple(item[1].tolist())))
+    if len(shifts) > int(max_shift_candidates):
+        metadata.update({
+            "effective_periodic": True,
+            "effective_periodicity": "periodic",
+            "neighbor_backend": "ase_periodic",
+            "periodicity_detection_method": "conservative_periodic_many_images",
+            "periodicity_test_conservative_fallback": True,
+        })
+        return metadata
+
+    tree = cKDTree(positions)
+    nearest_tested = float("inf")
+    for _, full_shift, translation in shifts:
+        # Query the translated copy against the primary coordinates. A same-index
+        # hit is valid here because a nonzero lattice translation represents a
+        # physical periodic image of that atom.
+        distances, _ = tree.query(positions + translation, k=1)
+        local_min = float(np.min(np.asarray(distances, dtype=np.float64)))
+        metadata["periodicity_image_shifts_tested"] += 1
+        nearest_tested = min(nearest_tested, local_min)
+        if local_min <= cutoff + tol:
+            metadata.update({
+                "effective_periodic": True,
+                "effective_periodicity": "periodic",
+                "neighbor_backend": "ase_periodic",
+                "detected_periodic_image_distance_A": local_min,
+                "periodicity_detection_method": "image_kdtree_contact",
+            })
+            return metadata
+
+    if np.isfinite(nearest_tested):
+        metadata["detected_periodic_image_distance_A"] = nearest_tested
+    metadata["periodicity_detection_method"] = "image_kdtree_no_contact"
+    return metadata
+
+
+def _radius_neighbor_candidates(atoms, search_cutoff, dtype=np.float32):
+    """Dispatch radius-neighbor construction using cutoff-aware periodicity."""
+    periodicity = analyze_effective_periodicity(atoms, search_cutoff)
+    if bool(periodicity["effective_periodic"]):
+        candidates = _ase_neighbor_candidates(atoms, search_cutoff, dtype=dtype)
+    else:
+        candidates = _ckdtree_neighbor_candidates(atoms, search_cutoff, dtype=dtype)
+    return (*candidates, periodicity)
+
+
 def _ase_neighbor_candidates(atoms, search_cutoff, dtype=np.float32):
     """Return directed ASE neighbor candidates including periodic image shifts.
 
@@ -812,25 +1114,35 @@ def atoms2graph(atoms, cutoff, k=5):
     return np.stack((edge_i, edge_j)), edge_d.astype(np.float32)
 
 '''
-def atoms2graph(atoms, cutoff, k=5, return_shifts=False):
-    """Convert ASE Atoms to a directed periodic-image-aware neighbor graph.
+def atoms2graph(atoms, cutoff, k=5, return_shifts=False, return_periodicity=False):
+    """Convert ASE Atoms to a directed neighbor graph.
 
-    Radius graphs (``k < 0``) use ASE's ``(i, j, S, d)`` neighbor-list output so
-    distinct periodic images are retained.  kNN graphs use the same image-aware
-    candidate representation and select the nearest ``k`` entries per source.
+    Radius graphs (``k < 0``) now use cutoff-aware *effective periodicity*. The
+    declared ``atoms.pbc`` flag is treated only as permission for periodic images;
+    Catalyst tests whether any such image can actually contribute an edge within
+    ``cutoff``. Effectively finite systems use a Cartesian cKDTree backend, while
+    truly periodic radius graphs retain ASE's image-aware ``(i, j, S, d)`` path.
 
-    With ``return_shifts=True`` the third return value is an integer ``(E, 3)``
-    array of ASE cell shifts satisfying
-    ``edge_vec = pos[j] + shifts @ cell - pos[i]``.
+    kNN behavior is intentionally unchanged because its effective search radius can
+    expand dynamically.
+
+    With ``return_shifts=True`` an integer ``(E, 3)`` ASE-style cell-shift array is
+    returned. With ``return_periodicity=True`` a final metadata dictionary reports
+    the backend decision and cutoff-aware periodicity diagnostics. Existing callers
+    retain their original return signature by default.
     """
+    periodicity = None
     if k < 0:
-        i, j, shifts, distances = _ase_neighbor_candidates(
+        i, j, shifts, distances, periodicity = _radius_neighbor_candidates(
             atoms, float(cutoff), dtype=np.float32
         )
         edge_index = np.stack((i, j)) if len(i) else np.empty((2, 0), dtype=np.int64)
+        outputs = [edge_index, distances.astype(np.float32, copy=False)]
         if return_shifts:
-            return edge_index, distances.astype(np.float32, copy=False), shifts
-        return edge_index, distances.astype(np.float32, copy=False)
+            outputs.append(shifts)
+        if return_periodicity:
+            outputs.append(periodicity)
+        return tuple(outputs) if len(outputs) > 2 else tuple(outputs)
 
     result = build_knn_edges_from_atoms(
         atoms=atoms,
@@ -841,6 +1153,20 @@ def atoms2graph(atoms, cutoff, k=5, return_shifts=False):
         symmetrize=False,
         return_shifts=return_shifts,
     )
+    if return_periodicity:
+        knn_metadata = {
+            "declared_pbc": [bool(v) for v in np.asarray(atoms.pbc, dtype=bool).tolist()],
+            "effective_periodic": bool(np.any(np.asarray(atoms.pbc, dtype=bool))),
+            "effective_periodicity": "not_evaluated_for_knn",
+            "neighbor_backend": "ase_knn",
+            "periodicity_cutoff_A": None if cutoff is None else float(cutoff),
+            "periodicity_detection_method": "knn_legacy_path",
+        }
+        if return_shifts:
+            edge_index, distances, shifts = result
+            return edge_index, distances, shifts, knn_metadata
+        edge_index, distances = result
+        return edge_index, distances, knn_metadata
     return result
 
 

@@ -470,8 +470,8 @@ def _build_angular_components(atoms, edge_index_G, include_angs, dihedral,
 def _build_graph_components_once(atoms, cutoff, k, include_angs, dihedral,
                                  require_bonds, require_angles, require_dihedrals,
                                  include_equivariant_fields=True):
-    edge_index_G, x_bnd, edge_shifts = atoms2graph(
-        atoms, cutoff=cutoff, k=k, return_shifts=True
+    edge_index_G, x_bnd, edge_shifts, periodicity_info = atoms2graph(
+        atoms, cutoff=cutoff, k=k, return_shifts=True, return_periodicity=True
     )
     edge_index_G, x_bnd, edge_shifts = _deduplicate_bond_graph(
         edge_index_G, x_bnd, edge_shifts
@@ -496,6 +496,7 @@ def _build_graph_components_once(atoms, cutoff, k, include_angs, dihedral,
         cutoff_used=cutoff,
         k_used=k,
         edge_shifts=edge_shifts,
+        periodicity_info=periodicity_info,
     )
     result.update(angular)
 
@@ -709,6 +710,9 @@ def alignnd(atoms, neighbor_params, dihedral=False, store_atoms=False, use_pt=Fa
     data.graph_cutoff_used = components['cutoff_used']
     data.graph_k_used = components['k_used']
     data.graph_build_attempts = components['graph_build_attempts']
+    data.graph_periodicity = dict(components.get('periodicity_info', {}))
+    for _periodicity_key, _periodicity_value in data.graph_periodicity.items():
+        setattr(data, f'graph_{_periodicity_key}', _periodicity_value)
     data.generate_gid()
     return data
 
@@ -766,6 +770,7 @@ def realignnd(structures, neighbor_params, dihedral=False, store_atoms=False,
     cutoffs_used = []
     ks_used = []
     attempts_used = []
+    periodicity_used = []
 
     for structure_index, atoms in enumerate(structures):
         x_atm = _build_atom_features_from_basis(atoms, elems_array, atom_labels=atom_labels)
@@ -839,6 +844,7 @@ def realignnd(structures, neighbor_params, dihedral=False, store_atoms=False,
         cutoffs_used.append(components['cutoff_used'])
         ks_used.append(components['k_used'])
         attempts_used.append(components['graph_build_attempts'])
+        periodicity_used.append(dict(components.get('periodicity_info', {})))
 
     final_edge_index_G = np.hstack(f_edge_index_G) if f_edge_index_G else _empty_edge_index()
     final_x_atm = np.concatenate(f_x_atm, axis=0) if f_x_atm else np.empty((0, len(elems_array)), dtype=np.float32)
@@ -897,6 +903,7 @@ def realignnd(structures, neighbor_params, dihedral=False, store_atoms=False,
     data.graph_cutoffs_used = cutoffs_used
     data.graph_ks_used = ks_used
     data.graph_build_attempts = attempts_used
+    data.graph_periodicity = periodicity_used
     data.generate_gid()
     return data
 
