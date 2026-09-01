@@ -170,16 +170,14 @@ class EquivariantAtomicEncoder(nn.Module):
         if z.numel() == 0:
             raise ValueError("Cannot encode an empty graph with zero nodes.")
 
-        max_z = int(z.max().item())
-        min_z = int(z.min().item())
-        if min_z < 0:
-            raise ValueError(f"z contains negative species/atomic ids. Minimum z={min_z}.")
-
-        if max_z >= self.embedding_size:
-            raise ValueError(
-                f"z contains id {max_z}, but embedding_size={self.embedding_size}. "
-                "Increase max_atomic_number or num_species."
-            )
+        # Keep range checks in the tensor graph rather than extracting GPU
+        # scalars with .item(), which forces synchronization and causes
+        # torch.compile graph breaks.
+        torch._assert(torch.all(z >= 0), "z contains a negative species/atomic id.")
+        torch._assert(
+            torch.all(z < self.embedding_size),
+            "z contains a species/atomic id outside the configured embedding range.",
+        )
 
         h = self.z_embedding(z)
 

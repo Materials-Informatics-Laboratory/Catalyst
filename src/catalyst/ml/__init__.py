@@ -1,23 +1,17 @@
 """Machine-learning entry points."""
 
-try:
-    from .training import run_training, run_active_learning, setup_training
-except Exception:
-    pass
+from .training import run_training, setup_training
+from .inference import run_inference, setup_inference
+from .gnn import *
+from .gnn import __all__ as _gnn_all
+from .nn import *
+from .nn import __all__ as _nn_all
 
-try:
-    from .inference import run_inference, setup_inference
-except Exception:
-    pass
-
-try:
-    from .gnn import *
-except Exception:
-    pass
-
-try:
-    from .nn import *
-except Exception:
-    pass
-
-__all__ = [name for name in globals() if not name.startswith("_")]
+__all__ = [
+    "run_training",
+    "setup_training",
+    "run_inference",
+    "setup_inference",
+    *_gnn_all,
+    *_nn_all,
+]

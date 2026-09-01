@@ -2,7 +2,7 @@ from ..utils.loss import loss_setup
 from ..utils.distributed import reduce_tensor, combine_dicts_across_gpus
 from ..utils.memory import optimizer_to
 from .modules.utils.predict import accumulate_predictions
-from ...data.utils import load_dictionary, save_dictionary
+from ...data.utils import load_dictionary, save_dictionary, safe_torch_load
 from .modules.utils.data_manager import setup_dataloader
 from ..utils.optimizer import set_optimizer
 
@@ -103,14 +103,30 @@ class GNN:
         print(self.training_graphs)
         print(self.validation_graphs)
 
-    def compile_model(self):
-        torch._dynamo.config.suppress_errors = True
+    def compile_model(
+        self,
+        *,
+        backend="inductor",
+        mode="default",
+        dynamic=True,
+        suppress_errors=False,
+    ):
+        """Compile the wrapped model with a performance backend.
+
+        Catalyst previously used ``backend="eager"``, which is a debugging
+        backend and does not provide compiler speedups.  Graph mini-batches have
+        naturally varying node/edge counts, so dynamic shapes default to True.
+        """
+        if not hasattr(torch, "compile"):
+            raise RuntimeError("torch.compile is unavailable in this PyTorch build.")
+        torch._dynamo.config.suppress_errors = bool(suppress_errors)
         self.model = torch.compile(
             self.model,
-            mode="default",
-            backend="eager",
-            dynamic=False,
+            mode=mode,
+            backend=backend,
+            dynamic=bool(dynamic),
         )
+        return self.model
 
     def send_model(self, device):
         self.model.to(device)
@@ -170,6 +186,91 @@ class GNN:
     def _nonblocking(self, parameters):
         return bool(parameters.get("device_dict", {}).get("pin_memory", False))
 
+    def _move_batch(self, data, parameters):
+        """Move a batch unless a PrefetchLoader already placed it on-device."""
+        target = torch.device(self.device) if not isinstance(self.device, torch.device) else self.device
+        probe = None
+        for name in ("pos", "x_atm", "node_G", "x", "z"):
+            value = getattr(data, name, None)
+            if torch.is_tensor(value):
+                probe = value
+                break
+        if probe is not None and probe.device == target:
+            return data
+        return data.to(target, non_blocking=self._nonblocking(parameters))
+
+    def _amp_dtype(self, parameters):
+        name = str(parameters.get("device_dict", {}).get("amp_dtype", "float16")).lower()
+        aliases = {
+            "float16": torch.float16, "fp16": torch.float16, "half": torch.float16,
+            "bfloat16": torch.bfloat16, "bf16": torch.bfloat16,
+        }
+        if name not in aliases:
+            raise ValueError("device_dict['amp_dtype'] must be 'float16'/'fp16' or 'bfloat16'/'bf16'.")
+        dtype = aliases[name]
+        if self._autocast_device_type() == "cpu" and dtype == torch.float16:
+            raise ValueError("CPU AMP with float16 is not supported by Catalyst; use amp_dtype='bfloat16'.")
+        return dtype
+
+    def _autocast_context(self, parameters):
+        if not bool(parameters.get("device_dict", {}).get("use_amp", False)):
+            return nullcontext()
+        return torch.amp.autocast(
+            device_type=self._autocast_device_type(),
+            dtype=self._amp_dtype(parameters),
+        )
+
+    def configure_numeric_performance(self, parameters):
+        """Apply explicitly requested matmul/TF32 performance settings."""
+        device_cfg = parameters.get("device_dict", {}) or {}
+        precision = device_cfg.get("float32_matmul_precision", None)
+        if precision is not None:
+            precision = str(precision).lower()
+            if precision not in {"highest", "high", "medium"}:
+                raise ValueError(
+                    "float32_matmul_precision must be one of 'highest', 'high', or 'medium'."
+                )
+            torch.set_float32_matmul_precision(precision)
+
+        allow_tf32 = device_cfg.get("allow_tf32", None)
+        if allow_tf32 is not None and torch.cuda.is_available():
+            allow_tf32 = bool(allow_tf32)
+            if hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "matmul"):
+                torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+            if hasattr(torch.backends, "cudnn"):
+                torch.backends.cudnn.allow_tf32 = allow_tf32
+
+    @staticmethod
+    def _checkpoint_parameter_copy(parameters):
+        """Copy configuration without deep-copying live model/optimizer tensors."""
+        safe = {}
+        for key, value in parameters.items():
+            if key != "model_dict":
+                safe[key] = copy.deepcopy(value)
+                continue
+
+            model_dict = {}
+            for model_key, model_value in value.items():
+                if model_key in {"model", "optimizer", "scheduler", "loss_fn"}:
+                    continue
+                if model_key == "optimizer_params" and isinstance(model_value, dict):
+                    opt_cfg = {}
+                    for opt_key, opt_value in model_value.items():
+                        if opt_key == "params_group" and isinstance(opt_value, dict):
+                            group = {
+                                k: copy.deepcopy(v)
+                                for k, v in opt_value.items()
+                                if k != "params"
+                            }
+                            opt_cfg[opt_key] = group
+                        else:
+                            opt_cfg[opt_key] = copy.deepcopy(opt_value)
+                    model_dict[model_key] = opt_cfg
+                else:
+                    model_dict[model_key] = copy.deepcopy(model_value)
+            safe[key] = model_dict
+        return safe
+
     # -------------------------------------------------------------------------
     # State / optimizer
     # -------------------------------------------------------------------------
@@ -181,23 +282,20 @@ class GNN:
         self.optimizer_state = optimizer_state
 
     def set_optimizer_(self, parameters):
-        parameters["model_dict"]["optimizer_params"]["params_group"]["params"] = self.model.parameters()
-        self.optimizer = set_optimizer(parameters)
+        params_group = parameters["model_dict"]["optimizer_params"]["params_group"]
+        params_group["params"] = self.model.parameters()
+        try:
+            self.optimizer = set_optimizer(parameters)
+        finally:
+            # Do not leave a live generator/model-parameter reference inside the
+            # serializable configuration dictionary.
+            params_group.pop("params", None)
 
-        for param in self.optimizer.state.values():
-            if isinstance(param, torch.Tensor):
-                param.data = param.data.to(self.device)
-                if param._grad is not None:
-                    param._grad.data = param._grad.data.to(self.device)
-            elif isinstance(param, dict):
-                for subparam in param.values():
-                    if isinstance(subparam, torch.Tensor):
-                        subparam.data = subparam.data.to(self.device)
-                        if subparam._grad is not None:
-                            subparam._grad.data = subparam._grad.data.to(self.device)
+        optimizer_to(self.optimizer, self.device)
 
-        use_amp = bool(parameters["device_dict"].get("use_amp", False))
-        self.scaler = torch.amp.GradScaler(enabled=use_amp)
+        use_amp = bool(parameters.get("device_dict", {}).get("use_amp", False))
+        use_scaler = use_amp and self._autocast_device_type() == "cuda" and self._amp_dtype(parameters) == torch.float16
+        self.scaler = torch.amp.GradScaler(enabled=use_scaler)
         self.scalar = self.scaler
 
     def save_checkpoint(self, parameters, epoch, rank=0, fname=None):
@@ -259,21 +357,7 @@ class GNN:
 
         core = self._core_model()
 
-        safe_parameters = copy.deepcopy(parameters)
-
-        if "model_dict" in safe_parameters:
-            safe_parameters["model_dict"].pop("model", None)
-            safe_parameters["model_dict"].pop("optimizer", None)
-            safe_parameters["model_dict"].pop("scheduler", None)
-            safe_parameters["model_dict"].pop("loss_fn", None)
-
-            # Optimizer param groups contain live parameter generators/tensors;
-            # do not serialize them inside the config copy.
-            optimizer_params = safe_parameters["model_dict"].get("optimizer_params", None)
-            if isinstance(optimizer_params, dict):
-                params_group = optimizer_params.get("params_group", None)
-                if isinstance(params_group, dict):
-                    params_group.pop("params", None)
+        safe_parameters = self._checkpoint_parameter_copy(parameters)
 
         checkpoint = {
             "epoch": epoch,
@@ -620,7 +704,7 @@ class GNN:
         ):
             try:
                 self.optimizer.load_state_dict(checkpoint["optimizer_state"])
-            except Exception as exc:
+            except (ValueError, RuntimeError, KeyError, TypeError) as exc:
                 warnings.warn(
                     "Model weights were loaded, but optimizer_state could not be loaded. "
                     "This is usually fine for inference. "
@@ -638,7 +722,7 @@ class GNN:
         if load_optimizer and scaler_obj is not None and scaler_state is not None:
             try:
                 scaler_obj.load_state_dict(scaler_state)
-            except Exception as exc:
+            except (ValueError, RuntimeError, KeyError, TypeError) as exc:
                 warnings.warn(
                     "Model weights were loaded, but scaler_state/scalar_state could not be loaded. "
                     "This is usually fine for inference. "
@@ -680,14 +764,14 @@ class GNN:
                         f"{params['io_dict']['data_dir']!r}."
                     )
             else:
-                gids = [torch.load(gname)["gid"] for gname in graph_files]
+                gids = [safe_torch_load(gname, map_location="cpu")["gid"] for gname in graph_files]
 
             if load_training:
                 _, _, c = np.intersect1d(self.training_samples, gids, return_indices=True)
                 selected_graphs = [graph_files[cc] for cc in c]
 
                 if format == 0:
-                    self.training_graphs = [torch.load(g) for g in selected_graphs]
+                    self.training_graphs = [safe_torch_load(g, map_location="cpu") for g in selected_graphs]
                 else:
                     self.training_graphs = selected_graphs
 
@@ -695,7 +779,7 @@ class GNN:
             selected_graphs = [graph_files[cc] for cc in c]
 
             if format == 0:
-                self.validation_graphs = [torch.load(g) for g in selected_graphs]
+                self.validation_graphs = [safe_torch_load(g, map_location="cpu") for g in selected_graphs]
             else:
                 self.validation_graphs = selected_graphs
 
@@ -785,7 +869,11 @@ class GNN:
         # prediction_params override them.
         for source in (loss_params, prediction_params):
             for key in allowed:
-                if key in source:
+                # Optional prediction settings use None in Catalyst's default
+                # parameter tree to mean "unspecified". Do not forward those
+                # null placeholders: doing so would override the real defaults
+                # of accumulate_predictions(), e.g. channel_mode="target".
+                if key in source and source[key] is not None:
                     kwargs[key] = source[key]
 
         return kwargs
@@ -891,139 +979,132 @@ class GNN:
     # -------------------------------------------------------------------------
 
     def train(self, training_dict):
-        """
-        Modular training loop with optional AMP.
-
-        Supports:
-            legacy list outputs
-            direct tensor outputs
-            dict outputs from EquivariantDecoder
-            per-node vector targets with accumulate_loss='node'
-
-        training_dict:
-          'params'   : full parameter dict
-          'loss_fn'  : optional custom loss function with signature:
-                       loss_fn(preds, y, vec, data, loss_params) -> tensor
-        """
+        """Run one training epoch without per-batch host/device synchronization."""
         self.model.train()
 
         parameters = training_dict["params"]
         loss_params = parameters["model_dict"]["loss_params"]
-        use_amp = bool(parameters["device_dict"].get("use_amp", False))
-
         loss_fn = self._make_loss_fn(training_dict)
-
-        loss = 0.0
 
         if self.training_loader is None:
             raise RuntimeError("training_loader is None. Call set_dataloader(..., training=True) first.")
 
-        for data in self.training_loader:
-            data = data.to(self.device, non_blocking=self._nonblocking(parameters))
+        loss_total = torch.zeros((), device=self.device, dtype=torch.float64)
+        batch_count = 0
 
+        for data in self.training_loader:
+            data = self._move_batch(data, parameters)
             self.optimizer.zero_grad(set_to_none=True)
 
-            with torch.amp.autocast(
-                enabled=use_amp,
-                device_type=self._autocast_device_type(),
-            ):
+            with self._autocast_context(parameters):
                 pred = self.model(data)
                 preds, y, vec = self._accumulate_predictions(
-                    pred,
-                    data,
-                    parameters,
-                    return_y=True,
+                    pred, data, parameters, return_y=True
                 )
                 preds, y = self._align_pred_and_target(preds, y)
                 batch_loss = loss_fn(preds, y, vec, data, loss_params)
 
-            loss += float(batch_loss.detach().item())
+            # Keep the running metric on device. Calling .item() here would force
+            # one CUDA synchronization for every mini-batch.
+            loss_total = loss_total + batch_loss.detach().to(dtype=torch.float64)
+            batch_count += 1
 
             self.scaler.scale(batch_loss).backward()
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
-        if parameters["device_dict"]["run_ddp"]:
-            # reduce_tensor already returns the cross-rank mean. Dividing by
-            # world_size again would under-report the loss by that factor.
-            loss = reduce_tensor(torch.tensor(loss, device=self.device)).item()
+        if batch_count == 0:
+            raise RuntimeError("training_loader produced zero batches.")
 
-        return loss / len(self.training_loader)
+        count = torch.tensor(float(batch_count), device=self.device, dtype=torch.float64)
+        if parameters["device_dict"].get("run_ddp", False):
+            import torch.distributed as dist
+            total_pair = torch.stack((loss_total, count))
+            dist.all_reduce(total_pair, op=dist.ReduceOp.SUM)
+            epoch_loss = total_pair[0] / total_pair[1].clamp_min(1.0)
+        else:
+            epoch_loss = loss_total / count
+
+        return float(epoch_loss.item())
 
     def validate(self, parameters, rank=0):
-        """
-        Validation loop.
+        """Run one validation pass with optional prediction collection.
 
-        Unlike the original version, this method is not decorated with
-        @torch.no_grad because scalar_gradient models need autograd during
-        forward.  Instead, it conditionally uses no_grad or enable_grad.
+        By default Catalyst now keeps only the scalar validation loss on device.
+        Predictions/targets are copied to the CPU only when ``write_indv_pred``
+        is requested, avoiding repeated GPU synchronization during ordinary
+        training epochs.
         """
         self.model.eval()
-
         loss_params = parameters["model_dict"]["loss_params"]
         loss_fn = self._make_loss_fn(parameters)
+        collect = bool(parameters.get("io_dict", {}).get("write_indv_pred", False))
 
-        loss = 0.0
-        values = [[], [], []]
-        gids = []
+        loss_total = torch.zeros((), device=self.device, dtype=torch.float64)
+        batch_count = 0
+        values = [[], [], []] if collect else None
+        gids = [] if collect else None
         vec = False
 
         if self.validation_loader is None:
             raise RuntimeError("validation_loader is None. Call set_dataloader(..., validation=True) first.")
 
-        grad_context = torch.enable_grad if self._model_requires_grad_forward() else torch.no_grad
-
+        grad_context = torch.enable_grad if self._model_requires_grad_forward() else torch.inference_mode
         with grad_context():
             for data in self.validation_loader:
-                data = data.to(self.device, non_blocking=self._nonblocking(parameters))
+                data = self._move_batch(data, parameters)
+                with self._autocast_context(parameters):
+                    pred = self.model(data)
+                    preds, y, vec = self._accumulate_predictions(
+                        pred, data, parameters, return_y=True
+                    )
+                    preds, y = self._align_pred_and_target(preds, y)
+                    batch_loss = loss_fn(preds, y, vec, data, loss_params)
 
-                pred = self.model(data)
-                preds, y, vec = self._accumulate_predictions(
-                    pred,
-                    data,
-                    parameters,
-                    return_y=True,
-                )
-                preds, y = self._align_pred_and_target(preds, y)
+                loss_total = loss_total + batch_loss.detach().to(dtype=torch.float64)
+                batch_count += 1
 
-                batch_loss = loss_fn(preds, y, vec, data, loss_params)
-                loss += float(batch_loss.detach().item())
+                if collect:
+                    values[0].append(self._tensor_to_python(preds))
+                    values[1].append(self._tensor_to_python(y))
+                    values[2].append(self._tensor_to_python(batch_loss))
+                    if hasattr(data, "gid"):
+                        gids.append(self._tensor_to_python(data.gid))
+                    elif hasattr(data, "frame_index"):
+                        gids.append(self._tensor_to_python(data.frame_index))
+                    else:
+                        gids.append(None)
 
-                values[0].append(self._tensor_to_python(preds))
-                values[1].append(self._tensor_to_python(y))
-                values[2].append(self._tensor_to_python(batch_loss))
+        if batch_count == 0:
+            raise RuntimeError("validation_loader produced zero batches.")
 
-                if hasattr(data, "gid"):
-                    gids.append(self._tensor_to_python(data.gid))
-                elif hasattr(data, "frame_index"):
-                    gids.append(self._tensor_to_python(data.frame_index))
-                else:
-                    gids.append(None)
+        count = torch.tensor(float(batch_count), device=self.device, dtype=torch.float64)
+        if parameters["device_dict"].get("run_ddp", False):
+            import torch.distributed as dist
+            total_pair = torch.stack((loss_total, count))
+            dist.all_reduce(total_pair, op=dist.ReduceOp.SUM)
+            epoch_loss = total_pair[0] / total_pair[1].clamp_min(1.0)
+        else:
+            epoch_loss = loss_total / count
 
-        test_info = {
-            "gids": gids,
-            "pred": values[0],
-            "y": values[1],
-            "loss": values[2],
-            "loss_fn": parameters["model_dict"]["accumulate_loss"],
-            "vec": bool(vec),
-        }
-
-        if parameters["device_dict"]["run_ddp"]:
-            test_info = combine_dicts_across_gpus(test_info)
-
-        if parameters["io_dict"]["write_indv_pred"]:
+        if collect:
+            test_info = {
+                "gids": gids,
+                "pred": values[0],
+                "y": values[1],
+                "loss": values[2],
+                "loss_fn": parameters["model_dict"]["accumulate_loss"],
+                "vec": bool(vec),
+            }
+            if parameters["device_dict"].get("run_ddp", False):
+                test_info = combine_dicts_across_gpus(test_info)
             if rank == 0:
                 save_dictionary(
                     fname=os.path.join(parameters["io_dict"]["results_dir"], "indv_pred.data"),
                     data=test_info,
                 )
 
-        if parameters["device_dict"]["run_ddp"]:
-            # reduce_tensor already returns the cross-rank mean.
-            loss = reduce_tensor(torch.tensor(loss, device=self.device)).item()
-
-        return loss / len(self.validation_loader)
+        return float(epoch_loss.item())
 
     def predict(self, parameters, rank=0):
         """
@@ -1041,11 +1122,11 @@ class GNN:
         if self.validation_loader is None:
             raise RuntimeError("validation_loader is None. Call set_dataloader(..., validation=True) first.")
 
-        grad_context = torch.enable_grad if self._model_requires_grad_forward() else torch.no_grad
+        grad_context = torch.enable_grad if self._model_requires_grad_forward() else torch.inference_mode
 
         with grad_context():
             for data in self.validation_loader:
-                data = data.to(self.device, non_blocking=self._nonblocking(parameters))
+                data = self._move_batch(data, parameters)
 
                 pred = self.model(data)
                 preds, vec = self._accumulate_predictions(

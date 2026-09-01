@@ -32,11 +32,6 @@ def check_generic_params(target_dict: Mapping[str, Any]) -> Dict[str, Any]:
 
     generic_pairwise_atomic
         Builds a center-node star graph from one local neighborhood.
-
-    generic_nbody
-        Builds generic n-body topology/features as a dictionary. This is useful
-        for development of 4-body+ graph containers without forcing those fields
-        into the current Generic_Graph_Data schema.
     """
     source_dict: Dict[str, Any] = {
         "type": None,
@@ -91,21 +86,11 @@ def generic_graph_gen(data: Mapping[str, Any]):
             include_equivariant_fields=bool(data["include_equivariant_fields"]),
         )
 
-    if graph_type == "generic_nbody":
-        return generic_nbody(
-            data=data["raw_data"],
-            data_params=data["params"],
-            max_body_order=int(data["max_body_order"]),
-            feature_fns=data["feature_fns"],
-            include_self_edges=bool(data["include_self_edges"]),
-            source_from_neighbor_table=bool(data["source_from_neighbor_table"]),
-            dtype=data["dtype"],
-            strict=bool(data["strict"]),
-        )
+
 
     raise ValueError(
         f"Unsupported generic graph type {graph_type!r}. Supported types are "
-        "'generic_pairwise', 'generic_pairwise_atomic', and 'generic_nbody'."
+        "'generic_pairwise' and 'generic_pairwise_atomic'."
     )
 
 
@@ -189,7 +174,7 @@ def _looks_like_positions(value: Any, n_nodes: int) -> bool:
         return False
     try:
         arr = np.asarray(value)
-    except Exception:
+    except (TypeError, ValueError):
         return False
     return arr.ndim == 2 and arr.shape[0] == int(n_nodes) and arr.shape[1] == 3
 
@@ -425,14 +410,11 @@ def _attach_optional_equivariant_fields(
 
     if "edge_dist" in data_params:
         graph.edge_dist = _maybe_tensor(data_params.get("edge_dist"), dtype=torch.float)
-    elif getattr(graph, "node_A", None) is not None:
+    elif torch.is_tensor(getattr(graph, "node_A", None)):
         # node_A is the edge scalar produced after self-edge filtering. This is
         # safer than raw data_params["dist"], whose shape may include self entries.
-        try:
-            if graph.node_A.numel() == graph.edge_index.size(1):
-                graph.edge_dist = graph.node_A.reshape(-1)
-        except Exception:
-            pass
+        if graph.node_A.numel() == graph.edge_index.size(1):
+            graph.edge_dist = graph.node_A.reshape(-1)
 
     if "cell" in data_params:
         graph.cell = _maybe_tensor(data_params.get("cell"), dtype=torch.float)

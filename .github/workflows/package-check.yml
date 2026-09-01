@@ -1,0 +1,65 @@
+name: Package Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  package-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install packaging tools
+        run: python -m pip install --upgrade build twine
+
+      - name: Build distributions
+        run: python -m build
+
+      - name: Check PyPI metadata and README rendering
+        run: python -m twine check dist/*
+
+      - name: Verify required modules are present in wheel
+        run: |
+          python - <<'PY'
+          import glob
+          import zipfile
+
+          wheel = glob.glob("dist/*.whl")[0]
+          required = {
+              "catalyst/__init__.py",
+              "catalyst/_version.py",
+              "catalyst/ml/utils/__init__.py",
+              "catalyst/ml/utils/pooling_algorithms.py",
+              "catalyst/characterization/graph_order_parameter/__init__.py",
+              "catalyst/characterization/graph_order_parameter/gop.py",
+          }
+          with zipfile.ZipFile(wheel) as archive:
+              names = set(archive.namelist())
+          missing = sorted(required - names)
+          if missing:
+              raise SystemExit(f"Missing from wheel: {missing}")
+          print("Wheel contains all required Catalyst modules.")
+          PY
+
+      - name: Test wheel installation without resolving heavy dependencies
+        run: |
+          python -m venv wheel-test-env
+          wheel-test-env/bin/python -m pip install --no-deps dist/*.whl
+          wheel-test-env/bin/python - <<'PY'
+          import catalyst
+          from importlib.metadata import version
+
+          assert catalyst.__version__ == version("catalyst-gnn")
+          print("Installed Catalyst version:", catalyst.__version__)
+          PY

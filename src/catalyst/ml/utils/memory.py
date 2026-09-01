@@ -1,7 +1,11 @@
+import gc
+
 import torch
+
+
 def optimizer_to(optim, device):
+    """Move optimizer state tensors to ``device`` in-place."""
     for param in optim.state.values():
-        # Not sure there are any global tensors in the state dict
         if isinstance(param, torch.Tensor):
             param.data = param.data.to(device)
             if param._grad is not None:
@@ -13,26 +17,40 @@ def optimizer_to(optim, device):
                     if subparam._grad is not None:
                         subparam._grad.data = subparam._grad.data.to(device)
 
+
 def get_model_device(model):
     try:
         return next(model.parameters()).device
     except StopIteration:
-        return None  # Model has no parameters
+        return None
+
 
 def clear_torch_memory():
-    try:
-        gc.collect()
+    """Release Python garbage and any unused CUDA caching allocator blocks."""
+    gc.collect()
+    if torch.cuda.is_available():
         torch.cuda.empty_cache()
-    except:
-        print('Clearing cuda cache failed...')
-        pass
-def change_model_device(model,device):
+
+
+def change_model_device(model, device):
+    """Move a model/wrapper to ``device`` or raise a useful error.
+
+    Older Catalyst code called ``exit(0)`` when both move attempts failed, which
+    made a genuine model/device error look like a successful process exit.
+    """
     try:
         model.to(device)
-    except:
+        return model
+    except (AttributeError, TypeError, RuntimeError) as direct_error:
+        wrapped = getattr(model, "model", None)
+        if wrapped is None:
+            raise RuntimeError(
+                f"Failed to move model of type {type(model).__name__} to {device!r}."
+            ) from direct_error
         try:
-            model.model.to(device)
-        except:
-            print('Failed to send model to device...')
-            exit(0)
-
+            wrapped.to(device)
+            return model
+        except (AttributeError, TypeError, RuntimeError) as wrapped_error:
+            raise RuntimeError(
+                f"Failed to move model or wrapped model to {device!r}."
+            ) from wrapped_error

@@ -1,18 +1,37 @@
 """
-Al FCC ALIGNN energy-learning example using the Catalyst training backend.
+Al FCC ALIGNN energy-per-atom example using the Catalyst training backend.
 
-Recommended location:
-    catalyst/examples/gnn_example/al_fcc_alignn_energy_catalyst_backend.py
+This example is intentionally designed as a robust learning demonstration rather
+than a narrow single-trajectory benchmark. It generates several families of FCC
+Al structures with EMT reference energies:
 
-This example follows the same pattern as the full random Catalyst example:
+    * isotropic compression/expansion,
+    * uniaxial strain,
+    * shear strain,
+    * random thermal-like atomic displacements,
+    * short MD trajectories at several temperatures.
 
-    cat = Catalyst()
-    cat.set_params(build_catalyst_parameters(CONFIG))
+The GNN predicts normalized energy per atom. The decoder is a local-environment
+energy readout: ALIGNN/order message passing updates atom, bond, and angle hidden
+states, and the decoder forms per-atom-normalized atomic, pair, and angular energy
+contributions. This gives geometry a direct route to the scalar target instead of
+forcing every geometric signal through the atom channel alone. The main
+optimization/checkpoint/inference workflow uses the public Catalyst training
+backend.
 
-    cat.set_model(build_regression_model(DEVICE))
-    run_distributed_or_single(cat, run_training, cat)
+The example also includes diagnostics for the common failure mode where every
+prediction collapses to the training-target mean:
 
-    run_inference(...)
+    * pre-training output/gradient checks,
+    * a small direct overfit diagnostic on a diverse training subset,
+    * post-training prediction-spread/collapse checks.
+
+The tiny overfit diagnostic is intentionally advisory by default because its
+numerical threshold depends on optimizer, hardware, and random initialization.
+The post-training collapse check is the authoritative model-quality guard.
+
+All Matplotlib figures are written to <main_path>/figures using the non-interactive
+Agg backend.
 """
 
 from __future__ import annotations
@@ -26,16 +45,14 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.multiprocessing as mp
 from torch import nn
 
-try:
-    from torch_geometric.utils import scatter
-except ImportError:  # pragma: no cover
-    scatter = None
 
 from ase import units
 from ase.build import bulk
@@ -78,13 +95,14 @@ def load_json_config(config_path: Path = CONFIG_PATH) -> Dict[str, Any]:
 
 
 CONFIG = load_json_config()
-BASE_DIR = Path(__file__).resolve().parent
 
 # Frequently used settings. Edit the JSON file, not this script.
 AL_CONFIG = CONFIG["al_fcc"]
 MODEL_CONFIG = CONFIG["model_architecture"]
 TRAINING_OVERRIDES = CONFIG["training_overrides"]
 WORKFLOW = CONFIG["workflow"]
+GENERATION_CONFIG = CONFIG.get("dataset_generation", {})
+DIAGNOSTICS_CONFIG = CONFIG.get("diagnostics", {})
 
 DEVICE = CONFIG["catalyst_parameters"]["device_dict"]["device"]
 
@@ -97,11 +115,21 @@ RUN_TESTING = WORKFLOW["test"]
 RUN_PLOT_TEST = WORKFLOW["plot_test"]
 RUN_PLOT_TRAINING = WORKFLOW["plot_training"]
 RUN_PREDICTIONS = WORKFLOW["predictions"]
+RUN_PREFLIGHT_DIAGNOSTICS = WORKFLOW.get("preflight_diagnostics", True)
+RUN_OVERFIT_SANITY = WORKFLOW.get("overfit_sanity_check", True)
+RUN_POSTTRAIN_DIAGNOSTICS = WORKFLOW.get("posttrain_diagnostics", True)
 
 TRAINING_BATCH_SIZE = TRAINING_OVERRIDES["training_batch_size"]
 TRAINING_NUM_EPOCHS_OVERRIDE = TRAINING_OVERRIDES["num_epochs"]
 TRAINING_DELTA_OVERRIDE = TRAINING_OVERRIDES["train_delta"]
 TRAINING_TOLERANCE_OVERRIDE = TRAINING_OVERRIDES["train_tolerance"]
+
+
+def get_figures_dir(cat: Catalyst) -> Path:
+    """Return the example figure directory, creating it if needed."""
+    figures_dir = Path(cat.parameters["io_dict"]["main_path"]) / "figures"
+    figures_dir.mkdir(parents=True, exist_ok=True)
+    return figures_dir
 
 
 # =============================================================================
@@ -123,31 +151,8 @@ def build_regression_task() -> GNNTask:
     )
 
 
-def resolve_relative_path(path_value: Optional[str]) -> Optional[str]:
-    """Resolve JSON path strings relative to this example script."""
-    if path_value is None:
-        return None
-    path = Path(path_value)
-    if path.is_absolute():
-        return str(path)
-    return str(BASE_DIR / path)
 
 
-def build_loss_function(loss_name: str):
-    """Convert the JSON loss-function name into a PyTorch loss object."""
-    from catalyst.ml.utils.loss import MaxNpercent
-    loss_functions = {
-        "MSELoss": torch.nn.MSELoss,
-        "L1Loss": torch.nn.L1Loss,
-        "SmoothL1Loss": torch.nn.SmoothL1Loss,
-        "MaxNpercent":MaxNpercent
-    }
-    if loss_name not in loss_functions:
-        raise ValueError(
-            f"Unsupported loss function {loss_name!r}. "
-            f"Supported options are: {sorted(loss_functions)}"
-        )
-    return loss_functions[loss_name]()
 
 
 def latest_checkpoint(checkpoint_dir: Path, checkpoint_pattern: str = "checkpoint_epoch_*.pt") -> str:
@@ -175,45 +180,10 @@ def latest_checkpoint(checkpoint_dir: Path, checkpoint_pattern: str = "checkpoin
     return str(latest_path)
 
 
-def build_catalyst_parameters(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Build the Catalyst runtime parameter dictionary from JSON."""
-    parameters = dict(config["catalyst_parameters"])
-
-    # Copy nested dictionaries so runtime edits do not mutate CONFIG unexpectedly.
-    parameters["device_dict"] = dict(parameters["device_dict"])
-    parameters["io_dict"] = dict(parameters["io_dict"])
-    parameters["sampling_dict"] = dict(parameters.get("sampling_dict", {}))
-    parameters["loader_dict"] = dict(parameters["loader_dict"])
-    parameters["model_dict"] = dict(parameters["model_dict"])
-
-    model_dict = parameters["model_dict"]
-    model_dict["optimizer_params"] = dict(model_dict["optimizer_params"])
-    model_dict["optimizer_params"]["params_group"] = dict(
-        model_dict["optimizer_params"]["params_group"]
-    )
-
-    # Resolve paths relative to the script location.
-    io_dict = parameters["io_dict"]
-    for key in ["main_path", "data_dir", "model_dir", "results_dir", "samples_dir", "projection_dir"]:
-        io_dict[key] = resolve_relative_path(io_dict.get(key))
-
-    # Reconstruct non-JSON Python objects.
-    loss_params = dict(model_dict["loss_params"])
-    loss_params["function"] = build_loss_function(loss_params["function"])
-    if "sub_function" in loss_params and loss_params["sub_function"] is not None:
-        loss_params["sub_function"] = build_loss_function(loss_params["sub_function"])
-    model_dict["loss_params"] = loss_params
-    model_dict["model"] = None
-
-    # Configure the existing Catalyst backend from the formal generic task
-    # contract. This sets accumulate_loss and prediction_params consistently.
-    build_regression_task().apply_to_catalyst_parameters(parameters)
-
-    return parameters
 
 
 def scatter_sum(values: torch.Tensor, index: torch.Tensor, dim_size: int | None = None) -> torch.Tensor:
-    """Fallback scatter-sum used only by AtomicEnergyReadout."""
+    """Small dependency-free graph-wise scatter sum helper."""
     if dim_size is None:
         dim_size = int(index.max().item()) + 1 if index.numel() > 0 else 0
 
@@ -223,259 +193,139 @@ def scatter_sum(values: torch.Tensor, index: torch.Tensor, dim_size: int | None 
     return out
 
 
-class AlignnEnergyReadout(nn.Module):
-    """
-    Extreme-aware order readout for graph_scalar ALIGNN energy learning.
+class LocalEnvironmentEnergyReadout(nn.Module):
+    """Energy-per-atom readout using atom, bond, and angle hidden states.
 
-    The original readout used only mean pooling over atom/bond/angle hidden
-    states. That tends to underpredict high-energy MD frames because high-energy
-    frames are often controlled by the most distorted local environments, and
-    mean pooling can average those rare distortions away.
+    A monoatomic crystal can make an atom-only readout unnecessarily fragile:
+    all atoms start from the same species embedding and geometry must first be
+    transferred from edge/angle channels into the atom channel.  This readout
+    keeps the physically local character of an energy model while giving the
+    learned two- and three-body representations a direct route to the target.
 
-    This decoder keeps stable mean information, but also exposes max/top-k
-    local information to the graph-level MLP.
+    For each graph it builds three scalar contributions:
 
-    Per order it builds:
-        mean(projected hidden)
-        max(projected hidden)
-        mean(local scalar contribution)
-        max(local scalar contribution)
-        top-k mean(local scalar contribution)
+        atomic term  = sum_i epsilon_i(h_1) / N_atoms
+        pair term    = sum_b epsilon_b(h_2) / N_atoms
+        angular term = sum_a epsilon_a(h_3) / N_atoms
 
-    The output remains shape [B].
+    A very small final MLP combines the three terms into normalized E/N.  The
+    normalization by N_atoms preserves sensible scaling if the supercell size is
+    changed later.
     """
 
-    def __init__(
-        self,
-        dim: int,
-        hidden_dim: int | None = None,
-        act=nn.SiLU(),
-        topk_fraction: float = 0.10,
-        topk_min: int = 4,
-        feature_clip: float = 50.0,
-    ):
+    def __init__(self, dim: int, hidden_dim: int | None = None):
         super().__init__()
+        hidden_dim = int(hidden_dim or dim)
+        bottleneck = max(hidden_dim // 2, 16)
 
-        hidden_dim = hidden_dim or dim
-        self.hidden_dim = int(hidden_dim)
-        self.topk_fraction = float(topk_fraction)
-        self.topk_min = int(topk_min)
-        self.feature_clip = float(feature_clip)
-
-        def make_proj():
+        def make_head():
             return nn.Sequential(
                 nn.Linear(dim, hidden_dim),
-                act,
-                nn.LayerNorm(hidden_dim),
-                nn.Linear(hidden_dim, hidden_dim),
-                act,
-                nn.LayerNorm(hidden_dim),
+                nn.SiLU(),
+                nn.Linear(hidden_dim, bottleneck),
+                nn.SiLU(),
+                nn.Linear(bottleneck, 1),
             )
 
-        def make_local_head():
-            return nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim),
-                act,
-                nn.LayerNorm(hidden_dim),
-                nn.Linear(hidden_dim, 1),
-            )
-
-        self.atom_proj = make_proj()
-        self.bond_proj = make_proj()
-        self.angle_proj = make_proj()
-
-        self.atom_local = make_local_head()
-        self.bond_local = make_local_head()
-        self.angle_local = make_local_head()
-
-        # Per order: mean_h + max_h + mean_local + max_local + topk_mean_local
-        per_order_dim = 2 * hidden_dim + 3
-        final_in_dim = 3 * per_order_dim
-
-        self.final = nn.Sequential(
-            nn.LayerNorm(final_in_dim),
-            nn.Linear(final_in_dim, 2 * hidden_dim),
-            act,
-            nn.LayerNorm(2 * hidden_dim),
-            nn.Linear(2 * hidden_dim, hidden_dim),
-            act,
-            nn.LayerNorm(hidden_dim),
-            nn.Linear(hidden_dim, 1),
+        self.atom_head = make_head()
+        self.bond_head = make_head()
+        self.angle_head = make_head()
+        self.combine = nn.Sequential(
+            nn.Linear(3, 16),
+            nn.SiLU(),
+            nn.Linear(16, 1),
         )
 
-        # Start near the normalized target mean. This avoids unstable first
-        # steps but does not constrain the output range.
-        last = self.final[-1]
-        if isinstance(last, nn.Linear):
-            nn.init.zeros_(last.bias)
+        # Targets are standardized around zero.  Biases start at zero, while
+        # weights retain PyTorch's ordinary nonzero initialization so geometry
+        # can influence the prediction from the first forward pass.
+        for module in (self.atom_head[-1], self.bond_head[-1], self.angle_head[-1], self.combine[-1]):
+            if isinstance(module, nn.Linear):
+                nn.init.zeros_(module.bias)
 
-    def _finite(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.nan_to_num(
-            x,
-            nan=0.0,
-            posinf=self.feature_clip,
-            neginf=-self.feature_clip,
-        ).clamp(min=-self.feature_clip, max=self.feature_clip)
-
-    def _first_existing(self, data, names):
+    @staticmethod
+    def _first_existing(data, names):
         for name in names:
-            if hasattr(data, name):
-                value = getattr(data, name)
-                if value is not None:
-                    return value
+            value = getattr(data, name, None)
+            if value is not None:
+                return value
         return None
 
-    def _batch(self, data, names, n_items, device):
+    @staticmethod
+    def _batch_or_zeros(data, names, n_items: int, device: torch.device) -> torch.Tensor:
         for name in names:
-            if hasattr(data, name):
-                value = getattr(data, name)
-                if value is not None:
-                    return value.to(device)
+            value = getattr(data, name, None)
+            if value is not None:
+                return value.to(device=device, dtype=torch.long)
         return torch.zeros(n_items, dtype=torch.long, device=device)
 
-    def _empty_order_features(self, template: torch.Tensor, n_graphs: int) -> torch.Tensor:
-        return template.new_zeros((n_graphs, 2 * self.hidden_dim + 3))
-
-    def _topk_mean(self, values_1d: torch.Tensor) -> torch.Tensor:
-        n = int(values_1d.numel())
-        if n == 0:
-            return values_1d.new_zeros(())
-        k = max(self.topk_min, int(round(self.topk_fraction * n)))
-        k = min(k, n)
-        return torch.topk(values_1d, k=k, largest=True).values.mean()
-
-    def _order_features(
+    def _per_atom_normalized_term(
         self,
-        h: torch.Tensor | None,
-        batch: torch.Tensor | None,
-        proj: nn.Module,
-        local_head: nn.Module,
+        hidden: torch.Tensor | None,
+        batch_index: torch.Tensor | None,
+        head: nn.Module,
         n_graphs: int,
-        template: torch.Tensor,
+        atom_counts: torch.Tensor,
     ) -> torch.Tensor:
-        if h is None or batch is None:
-            return self._empty_order_features(template, n_graphs)
+        if hidden is None or batch_index is None or hidden.numel() == 0:
+            return atom_counts.new_zeros((n_graphs,))
 
-        z = self._finite(proj(self._finite(h.float())))
-        batch = batch.to(z.device)
-
-        local = self._finite(local_head(z).view(-1))
-
-        graph_features = []
-        for graph_idx in range(n_graphs):
-            mask = batch == graph_idx
-            if not torch.any(mask):
-                graph_features.append(z.new_zeros((2 * self.hidden_dim + 3,)))
-                continue
-
-            z_g = z[mask]
-            local_g = local[mask]
-
-            mean_h = z_g.mean(dim=0)
-            max_h = z_g.max(dim=0).values
-
-            mean_local = local_g.mean().view(1)
-            max_local = local_g.max().view(1)
-            topk_local = self._topk_mean(local_g).view(1)
-
-            graph_features.append(
-                torch.cat(
-                    [
-                        mean_h,
-                        max_h,
-                        mean_local,
-                        max_local,
-                        topk_local,
-                    ],
-                    dim=0,
-                )
-            )
-
-        return self._finite(torch.stack(graph_features, dim=0))
+        local = head(hidden.float()).view(-1)
+        total = scatter_sum(local, batch_index, dim_size=n_graphs)
+        return total / atom_counts
 
     def forward(self, data):
-        h_atom = self._first_existing(data, ["h_atm", "h_1", "h_scalar"])
-        h_bond = self._first_existing(data, ["h_bnd", "h_2", "h_edge"])
-        h_angle = self._first_existing(data, ["h_ang", "h_3"])
+        h_atom = self._first_existing(data, ["h_1", "h_atm", "h_g_node", "h_node"])
+        h_bond = self._first_existing(data, ["h_2", "h_bnd", "h_a_node", "h_edge"])
+        h_angle = self._first_existing(data, ["h_3", "h_ang", "h_a_edge"])
 
         if h_atom is None:
-            raise AttributeError("Missing atom hidden states: expected h_atm, h_1, or h_scalar.")
+            raise AttributeError(
+                "LocalEnvironmentEnergyReadout requires atom hidden states under "
+                "h_1/h_atm/h_g_node/h_node."
+            )
 
         device = h_atom.device
-
-        atom_batch = self._batch(
-            data,
-            ["x_atm_batch", "x_1_batch", "batch"],
-            h_atom.size(0),
-            device,
+        atom_batch = self._batch_or_zeros(
+            data, ["x_atm_batch", "node_G_batch", "batch"], h_atom.size(0), device
         )
-        n_graphs = int(atom_batch.max().item()) + 1 if atom_batch.numel() > 0 else 1
-
-        atom_feat = self._order_features(
-            h_atom,
+        n_graphs = int(atom_batch.max().item()) + 1 if atom_batch.numel() else 1
+        atom_counts = scatter_sum(
+            torch.ones(h_atom.size(0), dtype=h_atom.dtype, device=device),
             atom_batch,
-            self.atom_proj,
-            self.atom_local,
-            n_graphs,
-            h_atom,
-        )
+            dim_size=n_graphs,
+        ).clamp_min(1.0)
 
         bond_batch = None
         if h_bond is not None:
-            bond_batch = self._batch(
-                data,
-                ["x_bnd_batch", "x_2_batch", "node_A_batch"],
-                h_bond.size(0),
-                h_bond.device,
+            bond_batch = self._batch_or_zeros(
+                data, ["x_bnd_batch", "node_A_batch"], h_bond.size(0), device
             )
-
-        bond_feat = self._order_features(
-            h_bond,
-            bond_batch,
-            self.bond_proj,
-            self.bond_local,
-            n_graphs,
-            h_atom,
-        )
 
         angle_batch = None
         if h_angle is not None:
-            angle_batch = self._batch(
-                data,
-                ["x_ang_batch", "x_3_batch", "edge_A_batch"],
-                h_angle.size(0),
-                h_angle.device,
+            angle_batch = self._batch_or_zeros(
+                data, ["x_ang_batch", "edge_A_batch"], h_angle.size(0), device
             )
 
-        angle_feat = self._order_features(
-            h_angle,
-            angle_batch,
-            self.angle_proj,
-            self.angle_local,
-            n_graphs,
-            h_atom,
+        atom_term = self._per_atom_normalized_term(
+            h_atom, atom_batch, self.atom_head, n_graphs, atom_counts
+        )
+        bond_term = self._per_atom_normalized_term(
+            h_bond, bond_batch, self.bond_head, n_graphs, atom_counts
+        )
+        angle_term = self._per_atom_normalized_term(
+            h_angle, angle_batch, self.angle_head, n_graphs, atom_counts
         )
 
-        graph_feat = torch.cat([atom_feat, bond_feat, angle_feat], dim=-1)
-        energy = self.final(graph_feat)
-
-        return torch.nan_to_num(energy.view(-1), nan=0.0, posinf=50.0, neginf=-50.0)
-
+        local_terms = torch.stack([atom_term, bond_term, angle_term], dim=-1)
+        return self.combine(local_terms).view(-1)
 
 
 def build_regression_model(device: str = DEVICE) -> GNN:
-    """
-    Build the ALIGNN/order graph_scalar regression model used by Catalyst.
-
-    The task interface owns the backend contract:
-        - target_key="target_scalar"
-        - accumulate_loss="exact"
-        - prediction_params["output_key"]="scalar"
-
-    Training, checkpointing, and inference are still handled by the Catalyst
-    backend.
-    """
+    """Build the ALIGNN/order graph-scalar regression model used by Catalyst."""
     task = build_regression_task()
+    conv_type = str(MODEL_CONFIG.get("conv_type", "gine")).lower().strip()
 
     model = build_task_model(
         task=task,
@@ -483,14 +333,10 @@ def build_regression_model(device: str = DEVICE) -> GNN:
         apply_task_model_kwargs=False,
         preset="alignn",
         processor_type="order",
-        conv_type=MODEL_CONFIG["conv_type"],
-        decoder=AlignnEnergyReadout(
+        conv_type=conv_type,
+        decoder=LocalEnvironmentEnergyReadout(
             dim=MODEL_CONFIG["hidden_dim"],
-            hidden_dim=MODEL_CONFIG["hidden_dim"],
-            act=nn.SiLU(),
-            topk_fraction=0.10,
-            topk_min=4,
-            feature_clip=50.0,
+            hidden_dim=MODEL_CONFIG.get("readout_hidden_dim", MODEL_CONFIG["hidden_dim"]),
         ),
         num_species=AL_CONFIG["num_species"],
         cutoff=AL_CONFIG["cutoff"],
@@ -580,42 +426,170 @@ def build_al_fcc_supercell():
     return atoms
 
 
-def run_md_frames() -> list:
-    atoms = build_al_fcc_supercell()
+def _with_emt(atoms):
+    atoms = atoms.copy()
+    atoms.pbc = True
+    atoms.calc = EMT()
+    return atoms
 
-    MaxwellBoltzmannDistribution(atoms, temperature_K=AL_CONFIG["temperature_K"])
-    Stationary(atoms)
-    ZeroRotation(atoms)
 
-    dyn = VelocityVerlet(
-        atoms,
-        timestep=AL_CONFIG["timestep_fs"] * units.fs,
+def _deform_structure(base_atoms, deformation: np.ndarray):
+    """Apply a homogeneous deformation to the cell and scaled coordinates."""
+    atoms = base_atoms.copy()
+    old_cell = np.asarray(atoms.cell.array, dtype=float)
+    new_cell = old_cell @ np.asarray(deformation, dtype=float).T
+    atoms.set_cell(new_cell, scale_atoms=True)
+    atoms.wrap()
+    atoms.calc = EMT()
+    return atoms
+
+
+def _linspace_config(name: str, default_min: float, default_max: float, default_count: int):
+    lower = float(GENERATION_CONFIG.get(f"{name}_min", default_min))
+    upper = float(GENERATION_CONFIG.get(f"{name}_max", default_max))
+    count = int(GENERATION_CONFIG.get(f"{name}_count", default_count))
+    if count < 1:
+        raise ValueError(f"dataset_generation.{name}_count must be >= 1")
+    return np.linspace(lower, upper, count)
+
+
+def generate_structure_ensemble() -> list[tuple[Any, dict[str, Any]]]:
+    """Create a deterministic, structurally diverse FCC-Al regression dataset."""
+    base = build_al_fcc_supercell()
+    seed = int(GENERATION_CONFIG.get("seed", 112358))
+    rng = np.random.default_rng(seed)
+
+    structures: list[tuple[Any, dict[str, Any]]] = []
+
+    # 1) Equation-of-state-like isotropic strains.
+    for strain in _linspace_config("isotropic_strain", -0.08, 0.08, 25):
+        deformation = np.eye(3) * (1.0 + float(strain))
+        atoms = _deform_structure(base, deformation)
+        structures.append(
+            (atoms, {"family": "isotropic", "parameter": float(strain)})
+        )
+
+    # 2) Uniaxial strains along each Cartesian direction.
+    uniaxial_values = _linspace_config("uniaxial_strain", -0.06, 0.06, 11)
+    for axis in range(3):
+        for strain in uniaxial_values:
+            if abs(float(strain)) < 1.0e-12:
+                continue
+            deformation = np.eye(3)
+            deformation[axis, axis] = 1.0 + float(strain)
+            atoms = _deform_structure(base, deformation)
+            structures.append(
+                (
+                    atoms,
+                    {
+                        "family": f"uniaxial_{'xyz'[axis]}",
+                        "parameter": float(strain),
+                    },
+                )
+            )
+
+    # 3) Simple shears.  These deliberately perturb bond angles as well as
+    # distances, making the 3-body ALIGNN pathway useful in the example.
+    shear_values = _linspace_config("shear_strain", -0.05, 0.05, 11)
+    shear_components = [(0, 1, "xy"), (0, 2, "xz"), (1, 2, "yz")]
+    for i, j, label in shear_components:
+        for gamma in shear_values:
+            if abs(float(gamma)) < 1.0e-12:
+                continue
+            deformation = np.eye(3)
+            deformation[i, j] = float(gamma)
+            atoms = _deform_structure(base, deformation)
+            structures.append(
+                (atoms, {"family": f"shear_{label}", "parameter": float(gamma)})
+            )
+
+    # 4) Thermal-like random displacements about the ideal lattice. Remove the
+    # center-of-mass translation so the perturbation changes local geometry only.
+    sigmas = GENERATION_CONFIG.get(
+        "random_displacement_sigmas_A", [0.01, 0.03, 0.05, 0.08, 0.12]
     )
+    samples_per_sigma = int(GENERATION_CONFIG.get("random_samples_per_sigma", 8))
+    for sigma in sigmas:
+        sigma = float(sigma)
+        for sample_idx in range(samples_per_sigma):
+            atoms = base.copy()
+            displacement = rng.normal(0.0, sigma, size=(len(atoms), 3))
+            displacement -= displacement.mean(axis=0, keepdims=True)
+            atoms.positions += displacement
+            atoms.wrap()
+            atoms.calc = EMT()
+            structures.append(
+                (
+                    atoms,
+                    {
+                        "family": "random_displacement",
+                        "parameter": sigma,
+                        "replicate": int(sample_idx),
+                    },
+                )
+            )
 
-    frames = []
-    energies = []
+    # 5) Short MD trajectories at several temperatures. These add realistic
+    # correlated thermal environments without making the full dataset a single
+    # narrow trajectory.
+    temperatures = GENERATION_CONFIG.get("md_temperatures_K", [300.0, 600.0, 900.0, 1200.0])
+    md_equilibration_steps = int(GENERATION_CONFIG.get("md_equilibration_steps", 50))
+    md_sample_stride = int(GENERATION_CONFIG.get("md_sample_stride", 10))
+    md_samples_per_temperature = int(GENERATION_CONFIG.get("md_samples_per_temperature", 10))
+    timestep_fs = float(GENERATION_CONFIG.get("md_timestep_fs", AL_CONFIG.get("timestep_fs", 1.0)))
 
-    for step in range(AL_CONFIG["md_steps"] + 1):
-        if step > 0:
-            dyn.run(1)
+    for temp_index, temperature in enumerate(temperatures):
+        atoms = _with_emt(base)
+        # Use a dedicated RNG stream for deterministic but independent velocities.
+        velocity_rng = np.random.default_rng(seed + 1000 + temp_index)
+        MaxwellBoltzmannDistribution(
+            atoms,
+            temperature_K=float(temperature),
+            rng=velocity_rng,
+        )
+        Stationary(atoms)
+        ZeroRotation(atoms)
+        dyn = VelocityVerlet(atoms, timestep=timestep_fs * units.fs)
+        if md_equilibration_steps > 0:
+            dyn.run(md_equilibration_steps)
 
-        if step < AL_CONFIG["equilibration_steps"]:
-            continue
+        for sample_idx in range(md_samples_per_temperature):
+            if md_sample_stride > 0:
+                dyn.run(md_sample_stride)
+            frame = _with_emt(atoms)
+            structures.append(
+                (
+                    frame,
+                    {
+                        "family": "md",
+                        "parameter": float(temperature),
+                        "replicate": int(sample_idx),
+                    },
+                )
+            )
 
-        if (step - AL_CONFIG["equilibration_steps"]) % AL_CONFIG["sample_every"] != 0:
-            continue
+    energies_per_atom = []
+    family_counts: dict[str, int] = {}
+    for atoms, metadata in structures:
+        energy_per_atom = float(atoms.get_potential_energy()) / float(len(atoms))
+        energies_per_atom.append(energy_per_atom)
+        family = str(metadata["family"])
+        family_counts[family] = family_counts.get(family, 0) + 1
 
-        frame = atoms.copy()
-        frame.calc = EMT()
-        energy = float(frame.get_potential_energy())
+    if not structures:
+        raise RuntimeError("Dataset generation produced zero structures.")
 
-        frames.append(frame)
-        energies.append(energy)
+    print(f"Generated {len(structures)} structurally diverse FCC-Al structures.")
+    print(
+        "Energy/atom range: "
+        f"{min(energies_per_atom):.6f} to {max(energies_per_atom):.6f} eV/atom; "
+        f"std={np.std(energies_per_atom):.6f} eV/atom"
+    )
+    print("Structure-family counts:")
+    for family, count in sorted(family_counts.items()):
+        print(f"  {family:24s}: {count}")
 
-    print(f"Generated {len(frames)} MD frames.")
-    print(f"Energy range: {min(energies):.6f} to {max(energies):.6f} eV")
-
-    return frames
+    return structures
 
 
 def _as_single_graph(obj):
@@ -651,7 +625,13 @@ def finalize_graph_metadata(graph):
     return graph
 
 
-def atoms_to_alignn_graph(atoms, energy_eV: float, gid: str):
+def atoms_to_alignn_graph(
+    atoms,
+    energy_eV: float,
+    energy_per_atom_eV: float,
+    gid: str,
+    metadata: dict[str, Any],
+):
     graph = alignn_gen(
         {
             "type": "alignnd",
@@ -665,12 +645,8 @@ def atoms_to_alignn_graph(atoms, energy_eV: float, gid: str):
             "include_angs": True,
             "cpu_cores": 1,
             "store_atoms_type": "ase-atoms",
-
-            # Updated graph fields. Older graph builders may ignore these.
             "include_equivariant_fields": AL_CONFIG.get("include_equivariant_fields", True),
             "include_edge_geometry": AL_CONFIG.get("include_edge_geometry", True),
-
-            # Retry controls.
             "auto_retry_graph": True,
             "max_graph_attempts": AL_CONFIG.get("max_graph_attempts", 6),
             "cutoff_scale": AL_CONFIG.get("cutoff_scale", 1.15),
@@ -687,31 +663,60 @@ def atoms_to_alignn_graph(atoms, energy_eV: float, gid: str):
 
     graph.gid = gid
     graph.energy_eV = torch.tensor([energy_eV], dtype=torch.float32)
+    graph.energy_per_atom_eV = torch.tensor([energy_per_atom_eV], dtype=torch.float32)
+    graph.n_atoms_reference = torch.tensor([len(atoms)], dtype=torch.long)
+    graph.structure_family = str(metadata.get("family", "unknown"))
+    graph.structure_parameter = torch.tensor(
+        [float(metadata.get("parameter", 0.0))], dtype=torch.float32
+    )
 
-    # Raw target initially; normalize_targets(...) overwrites y/target_scalar.
-    graph.y = torch.tensor([energy_eV], dtype=torch.float32)
-    graph.target_scalar = torch.tensor([energy_eV], dtype=torch.float32)
+    # Raw energy/atom target initially; normalize_targets(...) overwrites these.
+    graph.y = torch.tensor([energy_per_atom_eV], dtype=torch.float32)
+    graph.target_scalar = torch.tensor([energy_per_atom_eV], dtype=torch.float32)
 
     return graph
 
 
 def generate_data(cat: Catalyst) -> None:
     data_dir = reset_dir(cat.parameters["io_dict"]["data_dir"])
-    frames = run_md_frames()
+    structures = generate_structure_ensemble()
+    manifest = []
 
-    for idx, atoms in enumerate(frames):
+    for idx, (atoms, metadata) in enumerate(structures):
         energy_eV = float(atoms.get_potential_energy())
-        gid = f"al_fcc_md_{idx:05d}"
+        energy_per_atom_eV = energy_eV / float(len(atoms))
+        family = str(metadata.get("family", "structure"))
+        gid = f"al_fcc_{family}_{idx:05d}"
 
-        print(f"Building graph {idx + 1:4d}/{len(frames):4d}: {gid}, E={energy_eV:.6f} eV")
+        print(
+            f"Building graph {idx + 1:4d}/{len(structures):4d}: {gid}, "
+            f"E/N={energy_per_atom_eV:.6f} eV/atom"
+        )
 
         graph = atoms_to_alignn_graph(
             atoms=atoms,
             energy_eV=energy_eV,
+            energy_per_atom_eV=energy_per_atom_eV,
             gid=gid,
+            metadata=metadata,
+        )
+        torch.save(graph, data_dir / f"{gid}.pt")
+
+        manifest.append(
+            {
+                "gid": gid,
+                "family": family,
+                "parameter": float(metadata.get("parameter", 0.0)),
+                "energy_eV": energy_eV,
+                "energy_per_atom_eV": energy_per_atom_eV,
+                "n_atoms": len(atoms),
+            }
         )
 
-        torch.save(graph, data_dir / f"{gid}.pt")
+    with (Path(cat.parameters["io_dict"]["main_path"]) / "dataset_manifest.json").open(
+        "w", encoding="utf-8"
+    ) as handle:
+        json.dump(manifest, handle, indent=2)
 
 
 # =============================================================================
@@ -728,29 +733,51 @@ def sample_data(cat: Catalyst) -> None:
 
     samples_dir = reset_dir(Path(cat.parameters["io_dict"]["main_path"]) / "samples")
     model_samples_dir = reset_dir(samples_dir / "model_samples")
-    cat.parameters["io_dict"]["samples_dir"] = str(samples_dir)
+    cat.set_params({'io_dict': {'samples_dir': str(samples_dir)}}, save_params=False)
 
     gids = [Path(path).stem for path in data_files]
     rng = np.random.default_rng(CONFIG.get("sampling", {}).get("sampling_seed", 112358))
-    indices = np.arange(len(gids))
-    rng.shuffle(indices)
 
-    test_fraction = CONFIG["sampling"]["test_fraction"]
-    validation_fraction_of_remaining = CONFIG["sampling"]["validation_fraction_of_remaining"]
+    test_fraction = float(CONFIG["sampling"]["test_fraction"])
+    validation_fraction_of_remaining = float(
+        CONFIG["sampling"]["validation_fraction_of_remaining"]
+    )
 
-    n_total = len(indices)
-    n_test = int(round(test_fraction * n_total))
-    test_idx = indices[:n_test]
-    remaining_idx = indices[n_test:]
+    # Stratify by structure family so train/validation/test each contain the
+    # different deformation modes represented in the example.
+    family_to_gids: dict[str, list[str]] = {}
+    for path, gid in zip(data_files, gids):
+        graph = safe_torch_load(path, map_location="cpu")
+        family = str(getattr(graph, "structure_family", "unknown"))
+        family_to_gids.setdefault(family, []).append(gid)
 
-    n_remaining = len(remaining_idx)
-    n_validation = int(round(validation_fraction_of_remaining * n_remaining))
-    validation_idx = remaining_idx[:n_validation]
-    training_idx = remaining_idx[n_validation:]
+    training_gids: list[str] = []
+    validation_gids: list[str] = []
+    test_gids: list[str] = []
 
-    test_gids = [gids[i] for i in test_idx]
-    training_gids = [gids[i] for i in training_idx]
-    validation_gids = [gids[i] for i in validation_idx]
+    for family, family_gids in sorted(family_to_gids.items()):
+        family_gids = list(family_gids)
+        rng.shuffle(family_gids)
+        n_family = len(family_gids)
+
+        n_test = int(round(test_fraction * n_family))
+        if test_fraction > 0 and n_family >= 3:
+            n_test = max(1, n_test)
+        n_test = min(n_test, max(n_family - 2, 0))
+
+        remaining = family_gids[n_test:]
+        n_validation = int(round(validation_fraction_of_remaining * len(remaining)))
+        if validation_fraction_of_remaining > 0 and len(remaining) >= 2:
+            n_validation = max(1, n_validation)
+        n_validation = min(n_validation, max(len(remaining) - 1, 0))
+
+        test_gids.extend(family_gids[:n_test])
+        validation_gids.extend(remaining[:n_validation])
+        training_gids.extend(remaining[n_validation:])
+
+    rng.shuffle(training_gids)
+    rng.shuffle(validation_gids)
+    rng.shuffle(test_gids)
 
     save_dictionary(
         samples_dir / "test_data.npy",
@@ -801,7 +828,7 @@ def _graph_path_from_gid(cat: Catalyst, gid: str) -> Path:
 
 def normalize_targets(cat: Catalyst) -> None:
     """
-    Normalize graph.y and graph.target_scalar using training-set statistics.
+    Normalize energy-per-atom graph targets using training-set statistics.
 
     Training/inference still flow through Catalyst. This function only prepares
     graph targets before run_training.
@@ -818,29 +845,29 @@ def normalize_targets(cat: Catalyst) -> None:
     if not training_gids:
         raise RuntimeError("Training split is empty; cannot compute target normalization.")
 
-    training_energies = []
+    training_energies_per_atom = []
     for gid in training_gids:
         graph = safe_torch_load(_graph_path_from_gid(cat, gid))
-        training_energies.append(float(graph.energy_eV.view(-1)[0]))
+        training_energies_per_atom.append(float(graph.energy_per_atom_eV.view(-1)[0]))
 
-    target_mean = float(np.mean(training_energies))
-    target_std = float(np.std(training_energies))
+    target_mean = float(np.mean(training_energies_per_atom))
+    target_std = float(np.std(training_energies_per_atom))
     if target_std < 1.0e-12:
         target_std = 1.0
 
     data_files = sorted(glob.glob(os.path.join(cat.parameters["io_dict"]["data_dir"], "*.pt")))
     for path in data_files:
         graph = safe_torch_load(path)
-        energy = float(graph.energy_eV.view(-1)[0])
-        normalized = (energy - target_mean) / target_std
+        energy_per_atom = float(graph.energy_per_atom_eV.view(-1)[0])
+        normalized = (energy_per_atom - target_mean) / target_std
 
         graph.y = torch.tensor([normalized], dtype=torch.float32)
         graph.target_scalar = torch.tensor([normalized], dtype=torch.float32)
         graph.target_normalization = {
             "target_mean": target_mean,
             "target_std": target_std,
-            "target_units": "eV",
-            "target_type": "total_energy",
+            "target_units": "eV/atom",
+            "target_type": "energy_per_atom",
         }
 
         torch.save(graph, path)
@@ -853,14 +880,284 @@ def normalize_targets(cat: Catalyst) -> None:
             {
                 "target_mean": target_mean,
                 "target_std": target_std,
-                "target_units": "eV",
-                "target_type": "total_energy",
+                "target_units": "eV/atom",
+                "target_type": "energy_per_atom",
             },
             handle,
             indent=2,
         )
 
-    print(f"Target normalization: mean={target_mean:.6f} eV, std={target_std:.6f} eV")
+    print(f"Target normalization: mean={target_mean:.6f} eV/atom, std={target_std:.6f} eV/atom")
+
+
+# =============================================================================
+# LEARNING DIAGNOSTICS
+# =============================================================================
+
+
+def _training_gids(cat: Catalyst) -> list[str]:
+    split_path = (
+        Path(cat.parameters["io_dict"]["main_path"])
+        / "samples"
+        / "model_samples"
+        / "train_valid_split.npy"
+    )
+    split = load_dictionary(split_path)
+    return list(split.get("training", []))
+
+
+def _diverse_training_subset(cat: Catalyst, subset_size: int) -> list[Any]:
+    """Select approximately evenly spaced training targets for diagnostics."""
+    graphs = _load_graphs_from_gids(cat, _training_gids(cat))
+    if not graphs:
+        raise RuntimeError("Training split is empty; diagnostics cannot run.")
+
+    graphs.sort(key=lambda g: float(g.target_scalar.view(-1)[0]))
+    subset_size = max(2, min(int(subset_size), len(graphs)))
+    indices = np.linspace(0, len(graphs) - 1, subset_size).round().astype(int)
+    return [graphs[int(i)] for i in indices]
+
+
+def run_preflight_learning_diagnostics(cat: Catalyst) -> None:
+    """Check prediction shape and verify that a finite backward signal exists.
+
+    Initial scalar-output separation is reported but is not treated as a hard
+    requirement. The subsequent tiny-subset overfit test is the authoritative
+    check that the graph/model pair can learn structure-dependent variation.
+    """
+    from torch_geometric.loader import DataLoader
+
+    graphs = _diverse_training_subset(cat, subset_size=2)
+    follow_batch = _follow_batch_names(graphs)
+    loader = DataLoader(graphs, batch_size=2, shuffle=False, follow_batch=follow_batch)
+    batch = next(iter(loader))
+
+    gnn = build_regression_model(DEVICE)
+    batch = batch.to(gnn.device)
+    gnn.model.train()
+
+    raw_pred = gnn.model(batch)
+    preds, targets, _ = gnn._accumulate_predictions(
+        raw_pred, batch, cat.parameters, return_y=True
+    )
+    preds, targets = gnn._align_pred_and_target(preds, targets)
+
+    pred_values = as_numpy_tensor(preds).reshape(-1)
+    target_values = as_numpy_tensor(targets).reshape(-1)
+    if pred_values.size < 2 or target_values.size < 2:
+        raise RuntimeError("Preflight diagnostic expected two graph predictions/targets.")
+
+    structure_difference = float(abs(pred_values[1] - pred_values[0]))
+    tolerance = float(DIAGNOSTICS_CONFIG.get("preflight_output_difference_tolerance", 1.0e-10))
+
+    loss = nn.MSELoss()(preds.reshape(-1), targets.reshape(-1))
+    gnn.model.zero_grad(set_to_none=True)
+    loss.backward()
+    grad_sq = 0.0
+    for parameter in gnn.model.parameters():
+        if parameter.grad is not None:
+            grad_sq += float(torch.sum(parameter.grad.detach() ** 2).cpu())
+    grad_norm = math.sqrt(grad_sq)
+
+    print("Preflight learning diagnostics:")
+    print(f"  target pair          = {target_values.tolist()}")
+    print(f"  initial predictions  = {pred_values.tolist()}")
+    print(f"  prediction difference= {structure_difference:.6e}")
+    print(f"  gradient norm        = {grad_norm:.6e}")
+
+    # Equal or nearly equal *random initial scalar outputs* are not, by
+    # themselves, evidence of a collapsed representation. A zero-centered
+    # regression head can legitimately map two different latent states to nearly
+    # the same scalar before optimization. The hard preflight requirement is that
+    # backpropagation reaches the model; the tiny-subset overfit test below is the
+    # stronger end-to-end test of structure-dependent learnability.
+    if structure_difference <= tolerance:
+        print(
+            "  note                 = initial scalar outputs are nearly identical; "
+            "continuing to the gradient and tiny-overfit diagnostics"
+        )
+
+    if not math.isfinite(grad_norm) or grad_norm <= 1.0e-12:
+        raise RuntimeError(
+            "The preflight backward pass produced no useful model gradient."
+        )
+
+
+def run_overfit_sanity_check(cat: Catalyst) -> None:
+    """Run an advisory tiny-set optimization diagnostic.
+
+    This uses a separate throwaway model and therefore cannot contaminate the
+    production Catalyst checkpoint.  Failure to hit a particular loss ratio is
+    reported as a warning by default rather than treated as a package/runtime
+    failure; set diagnostics.overfit_fail_hard=true to restore strict behavior.
+    """
+    from torch_geometric.loader import DataLoader
+
+    subset_size = int(DIAGNOSTICS_CONFIG.get("overfit_subset_size", 6))
+    steps = int(DIAGNOSTICS_CONFIG.get("overfit_steps", 250))
+    learning_rate = float(DIAGNOSTICS_CONFIG.get("overfit_learning_rate", 5.0e-3))
+    required_fraction = float(DIAGNOSTICS_CONFIG.get("overfit_required_loss_fraction", 0.75))
+    fail_hard = bool(DIAGNOSTICS_CONFIG.get("overfit_fail_hard", False))
+
+    graphs = _diverse_training_subset(cat, subset_size=subset_size)
+    follow_batch = _follow_batch_names(graphs)
+    loader = DataLoader(
+        graphs,
+        batch_size=len(graphs),
+        shuffle=False,
+        follow_batch=follow_batch,
+        num_workers=0,
+    )
+    batch = next(iter(loader))
+
+    gnn = build_regression_model(DEVICE)
+    batch = batch.to(gnn.device)
+    # Adam without weight decay is intentionally used for a memorization test.
+    optimizer = torch.optim.Adam(gnn.model.parameters(), lr=learning_rate)
+    loss_fn = nn.MSELoss()
+
+    def prediction_and_loss():
+        raw = gnn.model(batch)
+        pred, target, _ = gnn._accumulate_predictions(
+            raw, batch, cat.parameters, return_y=True
+        )
+        pred, target = gnn._align_pred_and_target(pred, target)
+        return pred.reshape(-1), target.reshape(-1), loss_fn(pred.reshape(-1), target.reshape(-1))
+
+    gnn.model.eval()
+    with torch.no_grad():
+        initial_pred, initial_target, initial_loss_tensor = prediction_and_loss()
+        initial_loss = float(initial_loss_tensor.detach().cpu())
+        initial_pred_std = float(initial_pred.detach().float().std(unbiased=False).cpu())
+        target_std = float(initial_target.detach().float().std(unbiased=False).cpu())
+
+    best_loss = initial_loss
+    gnn.model.train()
+    for _ in range(max(1, steps)):
+        optimizer.zero_grad(set_to_none=True)
+        pred, target, loss = prediction_and_loss()
+        if not torch.isfinite(loss):
+            best_loss = float("nan")
+            break
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(gnn.model.parameters(), max_norm=100.0)
+        optimizer.step()
+        current = float(loss.detach().cpu())
+        if current < best_loss:
+            best_loss = current
+
+    gnn.model.eval()
+    with torch.no_grad():
+        final_pred, final_target, final_loss_tensor = prediction_and_loss()
+        final_loss = float(final_loss_tensor.detach().cpu())
+        final_pred_std = float(final_pred.detach().float().std(unbiased=False).cpu())
+
+    fraction = best_loss / max(initial_loss, 1.0e-15)
+
+    print("Tiny-subset overfit diagnostic:")
+    print(f"  subset size        = {len(graphs)}")
+    print(f"  optimization steps = {steps}")
+    print(f"  target std         = {target_std:.6e}")
+    print(f"  initial pred std   = {initial_pred_std:.6e}")
+    print(f"  final pred std     = {final_pred_std:.6e}")
+    print(f"  initial MSE        = {initial_loss:.6e}")
+    print(f"  best MSE           = {best_loss:.6e}")
+    print(f"  final MSE          = {final_loss:.6e}")
+    print(f"  best/initial       = {fraction:.6f}")
+
+    failed = (
+        not math.isfinite(best_loss)
+        or not math.isfinite(final_loss)
+        or fraction > required_fraction
+    )
+    if failed:
+        message = (
+            "Tiny-set optimization did not reach the configured loss-reduction "
+            f"target (best/initial={fraction:.4f}, required<={required_fraction:.4f}). "
+            "Continuing to the real Catalyst training run because this diagnostic "
+            "is optimizer- and initialization-dependent. The post-training "
+            "prediction-spread diagnostic will determine whether the trained model "
+            "actually collapsed."
+        )
+        if fail_hard:
+            raise RuntimeError(message)
+        print(f"WARNING: {message}")
+
+
+def _prediction_spread_stats(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
+    target_std = float(np.std(y_true)) if y_true.size else float("nan")
+    prediction_std = float(np.std(y_pred)) if y_pred.size else float("nan")
+    ratio = prediction_std / target_std if target_std > 1.0e-15 else float("nan")
+    mae, rmse = _parity_metrics(y_true, y_pred)
+
+    if y_true.size > 1 and np.var(y_true) > 1.0e-15:
+        ss_res = float(np.sum((y_true - y_pred) ** 2))
+        ss_tot = float(np.sum((y_true - np.mean(y_true)) ** 2))
+        r2 = 1.0 - ss_res / ss_tot
+    else:
+        r2 = float("nan")
+
+    return {
+        "target_std": target_std,
+        "prediction_std": prediction_std,
+        "prediction_to_target_std_ratio": ratio,
+        "mae": mae,
+        "rmse": rmse,
+        "r2": r2,
+    }
+
+
+def diagnose_trained_model(cat: Catalyst, fail_on_collapse: bool = True) -> dict[str, dict[str, float]]:
+    """Measure prediction spread on every split and detect mean-predictor collapse."""
+    main_path = Path(cat.parameters["io_dict"]["main_path"])
+    checkpoint_path = latest_checkpoint(main_path / "models" / "training")
+    split_train_valid = load_dictionary(main_path / "samples" / "model_samples" / "train_valid_split.npy")
+    split_test = load_dictionary(main_path / "samples" / "test_data.npy")
+    split_map = {
+        "training": split_train_valid.get("training", []),
+        "validation": split_train_valid.get("validation", []),
+        "test": split_test.get("gids", []),
+    }
+
+    target_mean, target_std = load_target_normalization(cat)
+    batch_size = int(cat.parameters["loader_dict"]["batch_size"][1])
+    batch_size = max(batch_size, 1)
+    metrics: dict[str, dict[str, float]] = {}
+
+    print("Post-training prediction-spread diagnostics:")
+    for split_name, gids in split_map.items():
+        graphs = _load_graphs_from_gids(cat, gids)
+        y_norm, pred_norm = _predict_graphs_with_checkpoint(
+            cat, graphs, checkpoint_path, batch_size
+        )
+        y = y_norm * target_std + target_mean
+        pred = pred_norm * target_std + target_mean
+        stats = _prediction_spread_stats(y, pred)
+        metrics[split_name] = stats
+        print(
+            f"  {split_name:10s}: target_std={stats['target_std']:.6e}, "
+            f"pred_std={stats['prediction_std']:.6e}, "
+            f"ratio={stats['prediction_to_target_std_ratio']:.4f}, "
+            f"MAE={stats['mae']:.6e} eV/atom, R2={stats['r2']:.4f}"
+        )
+
+    metrics_path = main_path / "model_diagnostics.json"
+    with metrics_path.open("w", encoding="utf-8") as handle:
+        json.dump(metrics, handle, indent=2)
+    print(f"Wrote {metrics_path}")
+
+    collapse_threshold = float(DIAGNOSTICS_CONFIG.get("collapse_std_ratio", 0.05))
+    training_ratio = metrics.get("training", {}).get(
+        "prediction_to_target_std_ratio", float("nan")
+    )
+    if fail_on_collapse and math.isfinite(training_ratio) and training_ratio < collapse_threshold:
+        raise RuntimeError(
+            "Prediction collapse detected: the training prediction standard "
+            f"deviation is only {training_ratio:.4f} times the target standard "
+            "deviation. The model is behaving like a constant mean predictor."
+        )
+
+    return metrics
 
 
 # =============================================================================
@@ -880,17 +1177,13 @@ def train_model(cat: Catalyst) -> None:
         checkpointing
         DDP behavior
     """
-    cat.parameters["io_dict"]["samples_dir"] = str(
-        Path(cat.parameters["io_dict"]["main_path"]) / "samples" / "model_samples"
-    )
+    cat.set_params({'io_dict': {'samples_dir': str(Path(cat.parameters['io_dict']['main_path']) / 'samples' / 'model_samples')}}, save_params=False)
     cat.set_model(build_regression_model(DEVICE))
     run_distributed_or_single(cat, run_training, cat)
 
 
 def retrain_model(cat: Catalyst, use_latest_checkpoint: bool = False) -> None:
-    cat.parameters["io_dict"]["samples_dir"] = str(
-        Path(cat.parameters["io_dict"]["main_path"]) / "samples" / "model_samples"
-    )
+    cat.set_params({'io_dict': {'samples_dir': str(Path(cat.parameters['io_dict']['main_path']) / 'samples' / 'model_samples')}}, save_params=False)
 
     model_pattern = "checkpoint_epoch_*.pt"
     model_dir = Path(cat.parameters["io_dict"]["main_path"]) / "models" / "training"
@@ -900,12 +1193,7 @@ def retrain_model(cat: Catalyst, use_latest_checkpoint: bool = False) -> None:
         else first_match(model_dir / model_pattern)
     )
 
-    cat.parameters["io_dict"].update(
-        {
-            "model_dir": str(model_dir),
-            "loaded_model_name": loaded_model_name,
-        }
-    )
+    cat.set_params({'io_dict': {'model_dir': str(model_dir), 'loaded_model_name': loaded_model_name}}, save_params=False)
 
     run_distributed_or_single(cat, run_training, cat)
 
@@ -923,14 +1211,7 @@ def run_testing_for_model(
         else first_match(model_dir / model_pattern)
     )
 
-    cat.parameters["io_dict"].update(
-        {
-            "write_indv_pred": True,
-            "results_dir": str(reset_dir(results_dir)),
-            "model_dir": str(model_dir),
-            "loaded_model_name": loaded_model_name,
-        }
-    )
+    cat.set_params({'io_dict': {'write_indv_pred': True, 'results_dir': str(reset_dir(results_dir)), 'model_dir': str(model_dir), 'loaded_model_name': loaded_model_name}}, save_params=False)
 
     if cat.parameters["device_dict"]["run_ddp"]:
         processes = []
@@ -947,7 +1228,7 @@ def run_testing_for_model(
 
 def test_model(cat: Catalyst) -> None:
     main_path = Path(cat.parameters["io_dict"]["main_path"])
-    cat.parameters["io_dict"]["samples_dir"] = str(main_path / "samples")
+    cat.set_params({'io_dict': {'samples_dir': str(main_path / 'samples')}}, save_params=False)
     cat.set_model(build_regression_model(DEVICE))
 
     run_testing_for_model(
@@ -965,14 +1246,7 @@ def predict(cat: Catalyst) -> None:
     results_dir = main_path / "testing" / "predict"
     loaded_model_name = latest_checkpoint(model_dir, "checkpoint_epoch_*.pt")
 
-    cat.parameters["io_dict"].update(
-        {
-            "write_indv_pred": False,
-            "results_dir": str(reset_dir(results_dir)),
-            "model_dir": str(model_dir),
-            "loaded_model_name": loaded_model_name,
-        }
-    )
+    cat.set_params({'io_dict': {'write_indv_pred': False, 'results_dir': str(reset_dir(results_dir)), 'model_dir': str(model_dir), 'loaded_model_name': loaded_model_name}}, save_params=False)
 
     cat.set_model(build_regression_model(DEVICE))
 
@@ -1061,7 +1335,7 @@ def load_target_normalization(cat: Catalyst) -> tuple[float, float]:
 
 def plot_training_results(cat: Catalyst) -> None:
     model_dir = Path(cat.parameters["io_dict"]["main_path"]) / "models" / "training"
-    cat.parameters["io_dict"]["model_dir"] = str(model_dir)
+    cat.set_params({'io_dict': {'model_dir': str(model_dir)}}, save_params=False)
 
     run_data = load_dictionary(model_dir / "run_information.npy")
     training_loss = run_data["training_loss"]
@@ -1075,7 +1349,10 @@ def plot_training_results(cat: Catalyst) -> None:
     ax.plot(epochs, validation_loss, color="r", marker="o", label="Validation loss")
     ax.legend(loc="upper right")
     plt.tight_layout()
-    plt.show()
+    output_path = get_figures_dir(cat) / "training_energy_loss.png"
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Wrote {output_path}")
 
 
 
@@ -1171,7 +1448,7 @@ def plot_test_data(cat: Catalyst) -> None:
         1. loads the latest training checkpoint,
         2. loads graph objects for each split,
         3. runs direct model inference on each split,
-        4. denormalizes predictions/targets back to eV,
+        4. denormalizes predictions/targets back to eV/atom,
         5. renders a 1x3 parity-plot figure.
     """
     main_path = Path(cat.parameters["io_dict"]["main_path"])
@@ -1246,7 +1523,7 @@ def plot_test_data(cat: Catalyst) -> None:
                 alpha=0.85,
             )
             ax.plot([lo, hi], [lo, hi], linestyle="-", color="r", linewidth=1.5)
-            ax.set_title(f"{split_name}\nN={len(y_eV)}, MAE={mae:.4f} eV, RMSE={rmse:.4f} eV")
+            ax.set_title(f"{split_name}\nN={len(y_eV)}, MAE={mae:.4f} eV/atom, RMSE={rmse:.4f} eV/atom")
         else:
             ax.set_title(f"{split_name}\nNo data")
             ax.text(
@@ -1262,12 +1539,15 @@ def plot_test_data(cat: Catalyst) -> None:
         ax.set_ylim(lo, hi)
         ax.set_aspect("equal", adjustable="box")
         ax.grid(True, alpha=0.25)
-        ax.set_xlabel("EMT energy (eV)")
+        ax.set_xlabel("EMT energy (eV/atom)")
 
-    axes[0].set_ylabel("GNN-predicted energy (eV)")
-    fig.suptitle("Parity plots for training, validation, and test splits", y=1.02)
+    axes[0].set_ylabel("GNN-predicted energy (eV/atom)")
+    fig.suptitle("Energy-per-atom parity plots for training, validation, and test splits", y=1.02)
     plt.tight_layout()
-    plt.show()
+    output_path = get_figures_dir(cat) / "energy_parity_train_validation_test.png"
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Wrote {output_path}")
 
 
 # =============================================================================
@@ -1276,8 +1556,22 @@ def plot_test_data(cat: Catalyst) -> None:
 
 
 def main() -> None:
-    cat = Catalyst()
-    cat.set_params(build_catalyst_parameters(CONFIG))
+    task = build_regression_task()
+    cat = Catalyst(
+        parameter_file=CONFIG_PATH,
+        parameters={
+            "loader_dict": {
+                "batch_size": TRAINING_BATCH_SIZE,
+                "shuffle_loader": True,
+            },
+            "model_dict": {
+                "num_epochs": TRAINING_NUM_EPOCHS_OVERRIDE,
+                "train_delta": TRAINING_DELTA_OVERRIDE,
+                "train_tolerance": TRAINING_TOLERANCE_OVERRIDE,
+            },
+        },
+        task=task,
+    )
 
     # Ensure base directories exist.
     make_dir(cat.parameters["io_dict"]["main_path"])
@@ -1292,27 +1586,27 @@ def main() -> None:
     if RUN_NORMALIZE_TARGETS:
         normalize_targets(cat)
 
+    if RUN_PREFLIGHT_DIAGNOSTICS:
+        run_preflight_learning_diagnostics(cat)
+
+    if RUN_OVERFIT_SANITY:
+        run_overfit_sanity_check(cat)
+
     if RUN_TRAINING:
-        cat.parameters["loader_dict"]["batch_size"] = TRAINING_BATCH_SIZE
-        cat.parameters["model_dict"]["num_epochs"] = TRAINING_NUM_EPOCHS_OVERRIDE
-        cat.parameters["model_dict"]["train_delta"] = TRAINING_DELTA_OVERRIDE
-        cat.parameters["model_dict"]["train_tolerance"] = TRAINING_TOLERANCE_OVERRIDE
         train_model(cat)
+
+        if RUN_POSTTRAIN_DIAGNOSTICS:
+            diagnose_trained_model(cat, fail_on_collapse=True)
 
         if RUN_PLOT_TRAINING:
             plot_training_results(cat)
 
     if RUN_RETRAINING:
-        cat.parameters["loader_dict"]["batch_size"] = TRAINING_BATCH_SIZE
-        cat.parameters["model_dict"]["num_epochs"] = TRAINING_NUM_EPOCHS_OVERRIDE
-        cat.parameters["model_dict"]["train_delta"] = TRAINING_DELTA_OVERRIDE
-        cat.parameters["model_dict"]["train_tolerance"] = TRAINING_TOLERANCE_OVERRIDE
         cat.set_model(build_regression_model(DEVICE))
-        cat.parameters["model_dict"]["restart_training"] = True
+        cat.set_params({"model_dict": {"restart_training": True}}, save_params=False)
         retrain_model(cat, use_latest_checkpoint=True)
 
     if RUN_TESTING:
-        cat.parameters["loader_dict"]["batch_size"] = TRAINING_BATCH_SIZE
         cat.set_model(build_regression_model(DEVICE))
         test_model(cat)
 

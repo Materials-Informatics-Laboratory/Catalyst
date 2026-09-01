@@ -109,7 +109,7 @@
     },
     "model_dict": {
       "n_models": 1,
-      "num_epochs": 50,
+      "num_epochs": 10,
       "train_delta": 0.0,
       "train_tolerance": 0.0,
       "worsen_tolerance": 999.0,
@@ -117,12 +117,6 @@
       "max_deltas": 999,
       "loss_params": {
         "function": "MSELoss"
-      },
-      "accumulate_loss": "node",
-      "prediction_params": {
-        "target_key": "target_vector",
-        "output_key": "vector",
-        "prefer_equivariant_key": "vector"
       },
       "model": null,
       "strict_loss_policy": false,

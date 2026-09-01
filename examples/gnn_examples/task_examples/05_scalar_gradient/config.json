@@ -1,0 +1,37 @@
+{
+  "seed": 15,
+  "output_dir": "output",
+  "task": {
+    "target_key": "target_vector",
+    "output_key": "gradient"
+  },
+  "dataset": {
+    "num_graphs": 22,
+    "direction_seed": 5005,
+    "distance_min": 2.0,
+    "distance_max": 3.0
+  },
+  "harmonic_potential": {
+    "equilibrium_distance": 2.55,
+    "spring_constant": 1.2
+  },
+  "model": {
+    "num_species": 2,
+    "cutoff": 5.0,
+    "dim": 40,
+    "num_convs": 2,
+    "rbf_dim": 24,
+    "return_dict": true,
+    "gradient_sign": "negative",
+    "reduce": "sum",
+    "create_graph": true,
+    "retain_graph": true
+  },
+  "training": {
+    "n_train": 14,
+    "n_validation": 4,
+    "epochs": 24,
+    "learning_rate": 0.002,
+    "batch_size": 2
+  }
+}

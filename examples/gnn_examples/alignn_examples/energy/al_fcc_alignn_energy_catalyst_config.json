@@ -3,7 +3,10 @@
     "generate_graphs": true,
     "generate_samples": true,
     "normalize_targets": true,
+    "preflight_diagnostics": true,
+    "overfit_sanity_check": true,
     "train": true,
+    "posttrain_diagnostics": true,
     "retrain": false,
     "test": true,
     "plot_test": true,
@@ -14,15 +17,11 @@
     "num_species": 1,
     "lattice_constant": 4.05,
     "repeat": [
-      3,
-      3,
-      3
+      2,
+      2,
+      2
     ],
-    "temperature_K": 800.0,
     "timestep_fs": 1.0,
-    "md_steps": 20000,
-    "sample_every": 3,
-    "equilibration_steps": 20,
     "cutoff": 4.0,
     "neighbor_k": -1,
     "include_dihedrals": false,
@@ -32,24 +31,64 @@
     "include_equivariant_fields": true,
     "include_edge_geometry": true
   },
+  "dataset_generation": {
+    "seed": 112358,
+    "isotropic_strain_min": -0.08,
+    "isotropic_strain_max": 0.08,
+    "isotropic_strain_count": 25,
+    "uniaxial_strain_min": -0.06,
+    "uniaxial_strain_max": 0.06,
+    "uniaxial_strain_count": 11,
+    "shear_strain_min": -0.05,
+    "shear_strain_max": 0.05,
+    "shear_strain_count": 11,
+    "random_displacement_sigmas_A": [
+      0.01,
+      0.03,
+      0.05,
+      0.08,
+      0.12
+    ],
+    "random_samples_per_sigma": 8,
+    "md_temperatures_K": [
+      300.0,
+      600.0,
+      900.0,
+      1200.0
+    ],
+    "md_equilibration_steps": 50,
+    "md_sample_stride": 10,
+    "md_samples_per_temperature": 10,
+    "md_timestep_fs": 1.0
+  },
   "sampling": {
     "sampling_seed": 112358,
     "test_fraction": 0.2,
     "validation_fraction_of_remaining": 0.25
   },
+  "diagnostics": {
+    "preflight_output_difference_tolerance": 1e-10,
+    "overfit_subset_size": 6,
+    "overfit_steps": 250,
+    "overfit_learning_rate": 0.005,
+    "overfit_required_loss_fraction": 0.75,
+    "collapse_std_ratio": 0.05,
+    "overfit_fail_hard": false
+  },
   "model_architecture": {
-    "n_convs": 3,
-    "hidden_dim": 128,
+    "n_convs": 2,
+    "hidden_dim": 96,
+    "readout_hidden_dim": 96,
     "regression_out_dim": 1,
-    "conv_type": "gated_gcn",
+    "conv_type": "gine",
     "aggr_scheme": "add"
   },
   "training_overrides": {
     "training_batch_size": [
-      8,
-      8
+      16,
+      16
     ],
-    "num_epochs": 200,
+    "num_epochs": 1,
     "train_delta": 0.001,
     "train_tolerance": 0.001
   },
@@ -92,10 +131,10 @@
       ]
     },
     "loader_dict": {
-      "shuffle_loader": false,
+      "shuffle_loader": true,
       "batch_size": [
-        1,
-        1
+        16,
+        16
       ],
       "num_workers": 0,
       "shuffle_steps": 10,
@@ -107,19 +146,14 @@
     },
     "model_dict": {
       "n_models": 1,
-      "num_epochs": 200,
+      "num_epochs": 1,
       "train_delta": 0.001,
       "train_tolerance": 0.001,
       "worsen_tolerance": 2.0,
-      "patience": 50,
+      "patience": 75,
       "max_deltas": 40,
       "loss_params": {
         "function": "MSELoss"
-      },
-      "accumulate_loss": "exact",
-      "prediction_params": {
-        "target_key": "y",
-        "prefer_equivariant_key": "scalar"
       },
       "model": null,
       "strict_loss_policy": false,
@@ -128,10 +162,9 @@
       "restart_training": false,
       "optimizer_params": {
         "dynamic_lr": true,
-        "optimizer": "AdamW",
+        "optimizer": "Adam",
         "params_group": {
-          "lr": 0.001,
-          "lr_decay_factor": 0.95
+          "lr": 0.003
         }
       },
       "active_learning": false,

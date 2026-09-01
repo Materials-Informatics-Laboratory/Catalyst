@@ -1,3 +1,84 @@
 [build-system]
-requires = ["setuptools>=54", "wheel"]
+requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "catalyst-gnn"
+dynamic = ["version"]
+description = "A modular graph neural network framework for materials and scientific machine learning"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+  { name = "James Chapman", email = "jc112358@bu.edu" },
+]
+keywords = [
+  "graph-neural-networks",
+  "materials-informatics",
+  "materials-science",
+  "machine-learning",
+  "pytorch",
+  "pytorch-geometric",
+  "atomistic-simulation",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+  "ase",
+  "GPUtil",
+  "joblib",
+  "networkx",
+  "numba",
+  "numpy",
+  "pandas",
+  "periodictable",
+  "psutil",
+  "scikit-learn",
+  "scipy",
+  "torch>=2.0.0",
+  "torch-geometric>=2.3.0",
+]
+
+[project.optional-dependencies]
+visualization = [
+  "matplotlib",
+]
+examples = [
+  "matplotlib",
+  "umap-learn",
+]
+dev = [
+  "build",
+  "matplotlib",
+  "pytest",
+  "twine",
+  "umap-learn",
+]
+
+[project.urls]
+Homepage = "https://github.com/Materials-Informatics-Laboratory/Catalyst"
+Repository = "https://github.com/Materials-Informatics-Laboratory/Catalyst"
+Issues = "https://github.com/Materials-Informatics-Laboratory/Catalyst/issues"
+
+[tool.setuptools.dynamic]
+version = { attr = "catalyst._version.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["catalyst*"]
+
+[tool.pytest.ini_options]
+testpaths = ["examples/unit_tests"]

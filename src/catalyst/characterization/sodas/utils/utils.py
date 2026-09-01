@@ -523,7 +523,7 @@ def manual_convolution(data, gammas, k=2, iterations=1, cutoff=10):
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import dijkstra as sparse_dijkstra
 from scipy.sparse.csgraph import connected_components
-from scipy.spatial import ConvexHull
+from scipy.spatial import ConvexHull, QhullError
 
 _generate_latent_space_path_legacy = generate_latent_space_path
 _assign_gammas_legacy = assign_gammas
@@ -1071,7 +1071,7 @@ def _convex_hull_diameter_2d(X, candidate_indices=None):
 
     try:
         hull = ConvexHull(Y)
-    except Exception:
+    except QhullError:
         return _exact_diameter_blockwise(X, candidate_indices=candidate_indices)
 
     hull_local = np.asarray(hull.vertices, dtype=int)

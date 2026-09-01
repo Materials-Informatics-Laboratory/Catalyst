@@ -54,10 +54,7 @@ from .gnn_builder import (
     PNAPreset,
 )
 
-try:
-    from .alignn import ALIGNN
-except Exception:
-    ALIGNN = None
+from .alignn import ALIGNN
 
 __all__ = [
     "GNNBuilder",
@@ -103,5 +100,4 @@ __all__ = [
     "PNAPreset",
 ]
 
-if ALIGNN is not None:
-    __all__.append("ALIGNN")
+__all__.append("ALIGNN")

@@ -1,46 +1,45 @@
-"""Catalyst public package namespace."""
+"""Catalyst public package namespace.
 
-__version__ = "0.1.0-alpha"
+The top-level module stays lightweight for packaging/metadata inspection, while
+convenience attributes are imported lazily.  Import failures are intentionally
+not swallowed: requesting a broken public component should expose the real
+exception rather than silently omitting it from the namespace.
+"""
 
-# Keep the top-level namespace light and tolerant. Most users should import from
-# subpackages directly, for example:
-#
-#     from catalyst.ml.gnn import GNNTask, build_task_model
-#     from catalyst.observer import Catalyst
-#
-# The convenience imports below are guarded so importing ``catalyst`` does not
-# fail during metadata-only operations or partial optional-dependency installs.
+from ._version import __version__
 
-__all__ = ["__version__"]
+__all__ = [
+    "__version__",
+    "Catalyst",
+    "CatalystParameterError",
+    "GNN",
+    "GNNTask",
+    "VectorChannelAdapter",
+    "GraphMultiScalarAdapter",
+    "build_task_model",
+    "validate_task_batch",
+    "task_from_parameters",
+    "build_model",
+]
 
-try:
-    from .observer import Catalyst
-except Exception:
-    pass
-else:
-    __all__.append("Catalyst")
 
-try:
-    from .ml.gnn import (
-        GNN,
-        GNNTask,
-        VectorChannelAdapter,
-        build_task_model,
-        validate_task_batch,
-        task_from_parameters,
-        build_model,
-    )
-except Exception:
-    pass
-else:
-    __all__.extend(
-        [
-            "GNN",
-            "GNNTask",
-            "VectorChannelAdapter",
-            "build_task_model",
-            "validate_task_batch",
-            "task_from_parameters",
-            "build_model",
-        ]
-    )
+def __getattr__(name):
+    if name in {"Catalyst", "CatalystParameterError"}:
+        from . import observer
+        return getattr(observer, name)
+
+    if name in {
+        "GNN",
+        "GNNTask",
+        "VectorChannelAdapter",
+        "GraphMultiScalarAdapter",
+        "build_task_model",
+        "validate_task_batch",
+        "task_from_parameters",
+        "build_model",
+    }:
+        from . import ml
+        from .ml import gnn
+        return getattr(gnn, name)
+
+    raise AttributeError(f"module 'catalyst' has no attribute {name!r}")

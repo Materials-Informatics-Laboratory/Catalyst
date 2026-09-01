@@ -1,0 +1,64 @@
+{
+  "workflow": {
+    "generate_graphs": true,
+    "project_graphs": true,
+    "generate_samples": true,
+    "visualize_final_graph": true
+  },
+  "synthetic_data": {
+    "n_types": 4,
+    "n_data": 1000,
+    "n_dim": 3,
+    "n_nodes_range": [5, 50],
+    "neighbor_range": [3, 9]
+  },
+  "model_architecture": {
+    "cutoff": 50.0,
+    "n_convs": 3,
+    "projection_in_dim": 100,
+    "projection_out_dim": 100,
+    "conv_type": "edge_conditioned",
+    "pooling": "sum"
+  },
+  "projection": {
+    "umap_n_neighbors": 10,
+    "umap_min_dist": 0.1,
+    "umap_n_components": 2
+  },
+  "catalyst_parameters": {
+    "device_dict": {
+      "world_size": 1,
+      "device": "cuda",
+      "ddp_backend": "gloo",
+      "run_ddp": false,
+      "pin_memory": false,
+      "find_unused_parameters": false,
+      "use_amp": false
+    },
+    "io_dict": {
+      "main_path": ".",
+      "data_dir": "data",
+      "samples_dir": "samples",
+      "projection_dir": "projections",
+      "remove_old_model": false,
+      "write_indv_pred": false,
+      "graph_read_format": 0,
+      "training_info_nwrite_steps": 1
+    },
+    "sampling_dict": {
+      "sampling_types": ["kmeans", "kmeans"],
+      "split": [0.2, 0.75],
+      "sampling_seed": 112358,
+      "params_groups": [
+        {"clusters": 5},
+        {"clusters": 5}
+      ]
+    },
+    "loader_dict": {
+      "shuffle_loader": false,
+      "batch_size": [100, 100],
+      "num_workers": 0,
+      "shuffle_steps": 10
+    }
+  }
+}

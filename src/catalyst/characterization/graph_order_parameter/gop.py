@@ -199,14 +199,14 @@ class GOP():
         try:
             graph[name]
             return True
-        except Exception:
+        except (KeyError, TypeError, IndexError, AttributeError):
             return False
 
     @staticmethod
     def _get_graph_attr(graph, name: str):
         try:
             return graph[name]
-        except Exception:
+        except (KeyError, TypeError, IndexError, AttributeError):
             if hasattr(graph, name):
                 return getattr(graph, name)
             raise AttributeError(f"Graph object does not contain required field {name!r}.")

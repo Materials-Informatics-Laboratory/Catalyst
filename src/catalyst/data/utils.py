@@ -3,6 +3,22 @@ import gzip
 import torch
 import io
 
+
+def safe_torch_load(source, map_location=None):
+    """Load trusted Catalyst/PyG objects across PyTorch versions.
+
+    PyTorch 2.6+ defaults ``torch.load`` to ``weights_only=True``. Catalyst graph
+    files intentionally contain custom PyG data objects, so trusted Catalyst files
+    must be loaded with ``weights_only=False``.  The TypeError fallback preserves
+    compatibility with older PyTorch releases that do not expose that keyword.
+
+    Never use this helper on untrusted pickle/torch files.
+    """
+    try:
+        return torch.load(source, map_location=map_location, weights_only=False)
+    except TypeError:
+        return torch.load(source, map_location=map_location)
+
 def write_labelled_extxyz(filename,labels,atoms,cutoff):
     of = open(filename, 'w')
     of.write(str(len(labels)) + '\n')
@@ -29,7 +45,7 @@ def load_dictionary(fname):
     class CPU_Unpickler(pickle.Unpickler):
         def find_class(self, module, name):
             if module == 'torch.storage' and name == '_load_from_bytes':
-                return lambda b: torch.load(io.BytesIO(b), map_location='cpu')
+                return lambda b: safe_torch_load(io.BytesIO(b), map_location='cpu')
             else:
                 return super().find_class(module, name)
 

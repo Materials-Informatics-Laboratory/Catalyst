@@ -7,7 +7,7 @@ from ..decoders.standard_decoders import ScalarDecoder as Decoder
 from ..decoders.standard_decoders import PositiveScalarsDecoder
 from ..decoders.standard_decoders import PositiveKChannelDecoder
 from ..decoders.standard_decoders import PositiveFeatureReadout
-from .generic_gnn import GenericGNN
+from .gnn_builder import GenericGNN
 
 
 class ALIGNN(GenericGNN):

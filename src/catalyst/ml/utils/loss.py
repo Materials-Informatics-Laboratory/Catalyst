@@ -1,13 +1,30 @@
 import torch.nn as nn
 import torch
 import math
-from ..gnn.modules.utils.predict import accumulate_predictions
+
 def loss_setup(params):
-    if isinstance(params['function'],str):
-        if params['function'] == 'MaxNpercent':
-            return MaxNpercent(percent=params['percent'],sub_function=params['sub_function'])
-    else:
-        return params['function']
+    """Construct a Catalyst loss from a callable/module or a JSON-friendly name."""
+    function = params.get('function')
+    if isinstance(function, str):
+        if function == 'MaxNpercent':
+            sub_function = params.get('sub_function')
+            if isinstance(sub_function, str):
+                if not hasattr(nn, sub_function):
+                    raise ValueError(f"Unknown torch.nn loss function {sub_function!r}.")
+                sub_function = getattr(nn, sub_function)()
+            return MaxNpercent(percent=params['percent'], sub_function=sub_function)
+        if not hasattr(nn, function):
+            raise ValueError(
+                f"Unknown torch.nn loss function {function!r}. "
+                "Use a torch.nn loss class name such as 'MSELoss' or pass a callable."
+            )
+        loss_cls = getattr(nn, function)
+        if not isinstance(loss_cls, type) or not issubclass(loss_cls, nn.Module):
+            raise ValueError(f"torch.nn.{function} is not a loss module class.")
+        return loss_cls()
+    if callable(function):
+        return function
+    raise ValueError("loss_params['function'] must be a callable/module or torch.nn loss name string.")
 
 def active_learning_setup(params,model_dict):
     if 'loss_regularization' in params['model_dict']['active_learning_params_group']['training_params_group']:
@@ -21,23 +38,44 @@ def active_learning_setup(params,model_dict):
         return None
 
 class MaxNpercent(nn.Module):
+    """Apply a base loss to the worst-error fraction of samples.
+
+    Ranking is performed on the first (sample) dimension using mean absolute
+    prediction error across any remaining scalar/vector channels.  The selected
+    samples retain their original shape when passed to ``sub_function``.
+    """
     def __init__(self, percent, sub_function):
         super(MaxNpercent, self).__init__()
+        percent = float(percent)
+        if not (0.0 < percent <= 1.0):
+            raise ValueError("MaxNpercent percent must satisfy 0 < percent <= 1.")
+        if not callable(sub_function):
+            raise TypeError("MaxNpercent sub_function must be callable.")
         self.percent = percent
         self.sub_function = sub_function
+
     def forward(self, input, target):
-        # Compute the loss
-        n = math.ceil(self.percent*float(len(input)))
-        stacked_tensor = torch.stack([input,target])
-        diff_tensor = torch.diff(stacked_tensor, dim=0)
-        sorted_indices = torch.argsort(diff_tensor,descending=True)[:n]
+        if input.shape != target.shape:
+            raise ValueError(
+                "MaxNpercent requires input and target to have identical shapes; "
+                f"received {tuple(input.shape)} and {tuple(target.shape)}."
+            )
+        if input.ndim == 0 or input.shape[0] == 0:
+            raise ValueError("MaxNpercent requires at least one sample.")
 
-        sorted_inputs = input[sorted_indices]
-        sorted_targets = target[sorted_indices]
+        n_samples = int(input.shape[0])
+        n_select = min(n_samples, max(1, math.ceil(self.percent * n_samples)))
+        per_sample_error = torch.abs(input - target)
+        if per_sample_error.ndim > 1:
+            per_sample_error = per_sample_error.reshape(n_samples, -1).mean(dim=1)
 
-        loss = self.sub_function(sorted_inputs,sorted_targets)
-
-        return loss
+        selected = torch.topk(
+            per_sample_error,
+            k=n_select,
+            largest=True,
+            sorted=False,
+        ).indices
+        return self.sub_function(input.index_select(0, selected), target.index_select(0, selected))
 
 class EWC:
     def __init__(self, model, dataloader, loss_fn,loss_accum, device='cpu'):
@@ -50,6 +88,7 @@ class EWC:
         self.params = {n: p.clone().detach() for n, p in model.named_parameters() if p.requires_grad}
         self.fisher = self._compute_fisher()
     def _compute_fisher(self):
+        from ..gnn.modules.utils.predict import accumulate_predictions
         fisher = {n: torch.zeros_like(p, device=self.device) for n, p in self.model.named_parameters() if p.requires_grad}
         self.model.eval()
 

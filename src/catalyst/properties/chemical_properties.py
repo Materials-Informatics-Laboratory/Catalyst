@@ -1,73 +1,84 @@
 import numpy as np
 
+
+def _element_names(group):
+    if group is None:
+        raise ValueError("Element group cannot be None.")
+    names = []
+    for entry in group:
+        if not isinstance(entry, (list, tuple, np.ndarray)) or len(entry) < 1:
+            raise ValueError(
+                "Each composition entry must contain at least an element label."
+            )
+        names.append(entry[0])
+    return names
+
+
 def check_num_elements(main_group, other_groups):
-    main_elements = []
-    unique_elements = []
-    total_others = 0
-
-    for el in main_group:
-        main_elements.append(el[0])
-    for system in other_groups:
-        for el in system:
-            check = 0
-            for e in unique_elements:
-                if e == el[0]:
-                    check = 1
-                    break
-            if check == 0:
-                unique_elements.append(el[0])
-
-    if len(unique_elements) == len(main_elements):
-        return 1
-    else:
+    """Return 1 only when the compared systems contain the same element set."""
+    main_elements = set(_element_names(main_group))
+    if not main_elements:
         return 0
+
+    unique_elements = set()
+    for system in other_groups or []:
+        unique_elements.update(_element_names(system))
+
+    return int(unique_elements == main_elements)
+
+
 def get_structure_stoichiometry(atoms):
-    stoichiometry = []
     symbols = atoms.get_chemical_symbols()
-
     n_atoms = len(symbols)
-    unique_symbols = np.unique(symbols)
-    for symbol in unique_symbols:
-        stoichiometry.append([symbol,0.0])
-        for element in symbols:
-            if element == symbol:
-                stoichiometry[-1][1] += 1.0
-        stoichiometry[-1][1] = stoichiometry[-1][1] / float(n_atoms)
-    return stoichiometry
+    if n_atoms == 0:
+        raise ValueError("Cannot calculate stoichiometry for an empty structure.")
 
-def check_stoichiometry(main_group, other_groups,delta=0.2):
-    real_ratios = []
+    unique_symbols, counts = np.unique(symbols, return_counts=True)
+    return [
+        [symbol, float(count) / float(n_atoms)]
+        for symbol, count in zip(unique_symbols, counts)
+    ]
+
+
+def check_stoichiometry(main_group, other_groups, delta=0.2):
+    """Check pairwise composition-difference agreement within ``delta``."""
+    delta = float(delta)
+    if delta < 0:
+        raise ValueError("delta must be non-negative.")
+
+    main_group = list(main_group)
+    if not main_group:
+        raise ValueError("main_group must contain at least one composition entry.")
+
+    real_ratios = {}
     for mg1 in main_group:
         for mg2 in main_group:
-            real_ratios.append([mg1[0]])
-            real_ratios[-1].append(mg2[0])
-            real_ratios[-1].append(abs(float(mg1[1]) - float(mg2[1])))
+            real_ratios[(mg1[0], mg2[0])] = abs(float(mg1[1]) - float(mg2[1]))
 
-    delta = .15
-    for i in range(len(other_groups)):
-        for j in range(len(other_groups[i])):
-            for k in range(len(other_groups[i])):
-                ratios = [other_groups[i][j][0],other_groups[i][k][0],abs(float(other_groups[i][j][1]) - float(other_groups[i][k][1]))]
-                for rr in real_ratios:
-                    if rr[0] == ratios[0] and rr[1] == ratios[1]:
-                        if rr[2] - delta < ratios[2] < rr[2] + delta:
-                            pass
-                        else:
-                            return 0
+    for system in other_groups or []:
+        for item1 in system:
+            for item2 in system:
+                key = (item1[0], item2[0])
+                if key not in real_ratios:
+                    return 0
+                observed = abs(float(item1[1]) - float(item2[1]))
+                if abs(observed - real_ratios[key]) >= delta:
+                    return 0
     return 1
 
-def calc_reaction_enthalpy(energies,n_systems=2):
-    '''
-    mole fractions
-    '''
-    x = []
-    for i in range(n_systems - 1):
-        x.append(1.0 / float(n_systems - 1))
-    '''
-    detla_hmix
-    '''
-    delta_hmix = energies[0]
-    for i,energy in enumerate(energies[1:]):
-        delta_hmix -= energy * x[i]
 
-    return delta_hmix
+def calc_reaction_enthalpy(energies, n_systems=2):
+    """Return reaction/mixing enthalpy for one product and equal-weight references."""
+    energies = list(energies)
+    n_systems = int(n_systems)
+    if n_systems < 2:
+        raise ValueError("n_systems must be at least 2.")
+    if len(energies) != n_systems:
+        raise ValueError(
+            f"Expected {n_systems} energies, received {len(energies)}."
+        )
+
+    reference_weight = 1.0 / float(n_systems - 1)
+    return float(energies[0]) - sum(
+        float(energy) * reference_weight for energy in energies[1:]
+    )

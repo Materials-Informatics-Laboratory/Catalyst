@@ -1,8 +1,5 @@
 """Characterization tools."""
 
-try:
-    from .sodas import SODAS
-except Exception:
-    pass
+from .sodas import SODAS
 
-__all__ = [name for name in ("SODAS",) if name in globals()]
+__all__ = ["SODAS"]

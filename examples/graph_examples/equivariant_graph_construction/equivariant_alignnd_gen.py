@@ -25,6 +25,8 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 import numpy as np
 import torch
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import networkx as nx
 
@@ -545,7 +547,7 @@ def main():
 
     output_dir = args.output_dir
     graph_dir = output_dir / "graphs"
-    plot_dir = output_dir / "plots"
+    figures_dir = output_dir / "figures"
     traj_path = output_dir / "al_fcc_md.traj"
     metadata_path = output_dir / "md_samples.csv"
 
@@ -593,7 +595,7 @@ def main():
             row = rows[idx]
             plot_networkx_graph(
                 graph,
-                output_path=plot_dir / f"networkx_frame_{idx:04d}.png",
+                output_path=figures_dir / f"networkx_frame_{idx:04d}.png",
                 title=f"Al FCC equivariant ALIGNN graph | step {row['step']}",
                 axes=tuple(args.projection_axes),
             )
@@ -601,13 +603,13 @@ def main():
     plot_graph_montage(
         graphs,
         rows,
-        output_path=plot_dir / "networkx_equivariant_graph_montage.png",
+        output_path=figures_dir / "networkx_equivariant_graph_montage.png",
         axes=tuple(args.projection_axes),
     )
 
     plot_md_summary(
         rows,
-        output_path=plot_dir / "md_energy_temperature_summary.png",
+        output_path=figures_dir / "md_energy_temperature_summary.png",
     )
 
     # Also save the final frame as a simple XYZ for quick inspection.
@@ -617,9 +619,9 @@ def main():
     print(f"  trajectory: {traj_path}")
     print(f"  metadata:   {metadata_path}")
     print(f"  graphs:     {graph_dir} ({len(graph_paths)} .pt files)")
-    print(f"  plots:      {plot_dir}")
+    print(f"  figures:    {figures_dir}")
     print("\nMain plot:")
-    print(f"  {plot_dir / 'networkx_equivariant_graph_montage.png'}")
+    print(f"  {figures_dir / 'networkx_equivariant_graph_montage.png'}")
 
 
 if __name__ == "__main__":

@@ -42,7 +42,10 @@ Important config
         vector_channels=1,
     )
 
-    task.apply_to_catalyst_parameters(parameters)
+    cat = Catalyst(
+        parameter_file=CONFIG_PATH,
+        task=task,
+    )
 
 and the model is built with:
 
@@ -73,6 +76,8 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -119,7 +124,6 @@ def load_json_config(config_path: Path = CONFIG_PATH) -> Dict[str, Any]:
 
 
 CONFIG = load_json_config()
-BASE_DIR = Path(__file__).resolve().parent
 
 WORKFLOW = CONFIG["workflow"]
 AL_CONFIG = CONFIG["al_fcc"]
@@ -145,6 +149,13 @@ TRAINING_DELTA_OVERRIDE = TRAINING_OVERRIDES["train_delta"]
 TRAINING_TOLERANCE_OVERRIDE = TRAINING_OVERRIDES["train_tolerance"]
 
 
+def get_figures_dir(cat: Catalyst) -> Path:
+    """Return the example figure directory, creating it if needed."""
+    figures_dir = Path(cat.parameters["io_dict"]["main_path"]) / "figures"
+    figures_dir.mkdir(parents=True, exist_ok=True)
+    return figures_dir
+
+
 # =============================================================================
 # PARAMETER AND MODEL BUILDERS
 # =============================================================================
@@ -167,29 +178,8 @@ def build_regression_task() -> GNNTask:
     )
 
 
-def resolve_relative_path(path_value: Optional[str]) -> Optional[str]:
-    if path_value is None:
-        return None
-    path = Path(path_value)
-    if path.is_absolute():
-        return str(path)
-    return str(BASE_DIR / path)
 
 
-def build_loss_function(loss_name: str):
-    loss_functions = {
-        "MSELoss": torch.nn.MSELoss,
-        "L1Loss": torch.nn.L1Loss,
-        "SmoothL1Loss": torch.nn.SmoothL1Loss,
-    }
-
-    if loss_name not in loss_functions:
-        raise ValueError(
-            f"Unsupported loss function {loss_name!r}. "
-            f"Supported options are: {sorted(loss_functions)}"
-        )
-
-    return loss_functions[loss_name]()
 
 
 def latest_checkpoint(checkpoint_dir: Path, checkpoint_pattern: str = "checkpoint_epoch_*.pt") -> str:
@@ -217,37 +207,6 @@ def latest_checkpoint(checkpoint_dir: Path, checkpoint_pattern: str = "checkpoin
     return str(latest_path)
 
 
-def build_catalyst_parameters(config: Dict[str, Any]) -> Dict[str, Any]:
-    parameters = dict(config["catalyst_parameters"])
-
-    parameters["device_dict"] = dict(parameters["device_dict"])
-    parameters["io_dict"] = dict(parameters["io_dict"])
-    parameters["sampling_dict"] = dict(parameters.get("sampling_dict", {}))
-    parameters["loader_dict"] = dict(parameters["loader_dict"])
-    parameters["model_dict"] = dict(parameters["model_dict"])
-
-    model_dict = parameters["model_dict"]
-    model_dict["optimizer_params"] = dict(model_dict["optimizer_params"])
-    model_dict["optimizer_params"]["params_group"] = dict(
-        model_dict["optimizer_params"]["params_group"]
-    )
-
-    io_dict = parameters["io_dict"]
-    for key in ["main_path", "data_dir", "model_dir", "results_dir", "samples_dir", "projection_dir"]:
-        io_dict[key] = resolve_relative_path(io_dict.get(key))
-
-    loss_params = dict(model_dict["loss_params"])
-    loss_params["function"] = build_loss_function(loss_params["function"])
-    if "sub_function" in loss_params and loss_params["sub_function"] is not None:
-        loss_params["sub_function"] = build_loss_function(loss_params["sub_function"])
-    model_dict["loss_params"] = loss_params
-    model_dict["model"] = None
-
-    # Configure the existing Catalyst backend from the formal generic task
-    # contract. This sets accumulate_loss and prediction_params consistently.
-    build_regression_task().apply_to_catalyst_parameters(parameters)
-
-    return parameters
 
 
 def build_regression_model(device: str = DEVICE) -> GNN:
@@ -522,7 +481,7 @@ def sample_data(cat: Catalyst) -> None:
 
     samples_dir = reset_dir(Path(cat.parameters["io_dict"]["main_path"]) / "samples")
     model_samples_dir = reset_dir(samples_dir / "model_samples")
-    cat.parameters["io_dict"]["samples_dir"] = str(samples_dir)
+    cat.set_params({'io_dict': {'samples_dir': str(samples_dir)}}, save_params=False)
 
     gids = [Path(path).stem for path in data_files]
     rng = np.random.default_rng(CONFIG.get("sampling", {}).get("sampling_seed", 112358))
@@ -693,17 +652,13 @@ def train_model(cat: Catalyst) -> None:
     """
     Train using Catalyst's backend. No local training loop lives here.
     """
-    cat.parameters["io_dict"]["samples_dir"] = str(
-        Path(cat.parameters["io_dict"]["main_path"]) / "samples" / "model_samples"
-    )
+    cat.set_params({'io_dict': {'samples_dir': str(Path(cat.parameters['io_dict']['main_path']) / 'samples' / 'model_samples')}}, save_params=False)
     cat.set_model(build_regression_model(DEVICE))
     run_distributed_or_single(cat, run_training, cat)
 
 
 def retrain_model(cat: Catalyst, use_latest_checkpoint: bool = False) -> None:
-    cat.parameters["io_dict"]["samples_dir"] = str(
-        Path(cat.parameters["io_dict"]["main_path"]) / "samples" / "model_samples"
-    )
+    cat.set_params({'io_dict': {'samples_dir': str(Path(cat.parameters['io_dict']['main_path']) / 'samples' / 'model_samples')}}, save_params=False)
 
     model_pattern = "checkpoint_epoch_*.pt"
     model_dir = Path(cat.parameters["io_dict"]["main_path"]) / "models" / "training"
@@ -713,12 +668,7 @@ def retrain_model(cat: Catalyst, use_latest_checkpoint: bool = False) -> None:
         else first_match(model_dir / model_pattern)
     )
 
-    cat.parameters["io_dict"].update(
-        {
-            "model_dir": str(model_dir),
-            "loaded_model_name": loaded_model_name,
-        }
-    )
+    cat.set_params({'io_dict': {'model_dir': str(model_dir), 'loaded_model_name': loaded_model_name}}, save_params=False)
 
     run_distributed_or_single(cat, run_training, cat)
 
@@ -737,15 +687,7 @@ def run_inference_for_split(
         else first_match(model_dir / "checkpoint_epoch_*.pt")
     )
 
-    cat.parameters["io_dict"].update(
-        {
-            "write_indv_pred": True,
-            "samples_dir": str(Path(cat.parameters["io_dict"]["main_path"]) / "samples" / samples_subdir),
-            "results_dir": str(reset_dir(results_dir)),
-            "model_dir": str(model_dir),
-            "loaded_model_name": loaded_model_name,
-        }
-    )
+    cat.set_params({'io_dict': {'write_indv_pred': True, 'samples_dir': str(Path(cat.parameters['io_dict']['main_path']) / 'samples' / samples_subdir), 'results_dir': str(reset_dir(results_dir)), 'model_dir': str(model_dir), 'loaded_model_name': loaded_model_name}}, save_params=False)
 
     cat.set_model(build_regression_model(DEVICE))
 
@@ -798,15 +740,7 @@ def predict(cat: Catalyst) -> None:
     model_dir = main_path / "models" / "training"
     loaded_model_name = latest_checkpoint(model_dir, "checkpoint_epoch_*.pt")
 
-    cat.parameters["io_dict"].update(
-        {
-            "write_indv_pred": False,
-            "samples_dir": str(main_path / "samples" / "inference_test"),
-            "results_dir": str(reset_dir(main_path / "testing" / "predict")),
-            "model_dir": str(model_dir),
-            "loaded_model_name": loaded_model_name,
-        }
-    )
+    cat.set_params({'io_dict': {'write_indv_pred': False, 'samples_dir': str(main_path / 'samples' / 'inference_test'), 'results_dir': str(reset_dir(main_path / 'testing' / 'predict')), 'model_dir': str(model_dir), 'loaded_model_name': loaded_model_name}}, save_params=False)
 
     cat.set_model(build_regression_model(DEVICE))
 
@@ -974,7 +908,7 @@ def plot_training_results(cat: Catalyst) -> None:
     ax.legend(loc="upper right")
     plt.tight_layout()
 
-    out = Path(cat.parameters["io_dict"]["main_path"]) / "training_force_loss.png"
+    out = get_figures_dir(cat) / "training_force_loss.png"
     fig.savefig(out, dpi=200)
     plt.close(fig)
     print(f"Wrote {out}")
@@ -1044,7 +978,7 @@ def plot_force_parity(cat: Catalyst) -> None:
     fig.suptitle("Force-component parity for training, validation, and test splits", y=1.02)
     plt.tight_layout()
 
-    out = main_path / "force_component_parity_train_validation_test.png"
+    out = get_figures_dir(cat) / "force_component_parity_train_validation_test.png"
     fig.savefig(out, dpi=200)
     plt.close(fig)
     print(f"Wrote {out}")
@@ -1062,8 +996,19 @@ def plot_force_parity(cat: Catalyst) -> None:
 
 
 def main() -> None:
-    cat = Catalyst()
-    cat.set_params(build_catalyst_parameters(CONFIG))
+    task = build_regression_task()
+    cat = Catalyst(
+        parameter_file=CONFIG_PATH,
+        parameters={
+            "loader_dict": {"batch_size": TRAINING_BATCH_SIZE},
+            "model_dict": {
+                "num_epochs": TRAINING_NUM_EPOCHS_OVERRIDE,
+                "train_delta": TRAINING_DELTA_OVERRIDE,
+                "train_tolerance": TRAINING_TOLERANCE_OVERRIDE,
+            },
+        },
+        task=task,
+    )
 
     make_dir(cat.parameters["io_dict"]["main_path"])
     make_dir(cat.parameters["io_dict"]["data_dir"])
@@ -1078,26 +1023,17 @@ def main() -> None:
         normalize_targets(cat)
 
     if RUN_TRAINING:
-        cat.parameters["loader_dict"]["batch_size"] = TRAINING_BATCH_SIZE
-        cat.parameters["model_dict"]["num_epochs"] = TRAINING_NUM_EPOCHS_OVERRIDE
-        cat.parameters["model_dict"]["train_delta"] = TRAINING_DELTA_OVERRIDE
-        cat.parameters["model_dict"]["train_tolerance"] = TRAINING_TOLERANCE_OVERRIDE
         train_model(cat)
 
         if RUN_PLOT_TRAINING:
             plot_training_results(cat)
 
     if RUN_RETRAINING:
-        cat.parameters["loader_dict"]["batch_size"] = TRAINING_BATCH_SIZE
-        cat.parameters["model_dict"]["num_epochs"] = TRAINING_NUM_EPOCHS_OVERRIDE
-        cat.parameters["model_dict"]["train_delta"] = TRAINING_DELTA_OVERRIDE
-        cat.parameters["model_dict"]["train_tolerance"] = TRAINING_TOLERANCE_OVERRIDE
         cat.set_model(build_regression_model(DEVICE))
-        cat.parameters["model_dict"]["restart_training"] = True
+        cat.set_params({"model_dict": {"restart_training": True}}, save_params=False)
         retrain_model(cat, use_latest_checkpoint=True)
 
     if RUN_TESTING:
-        cat.parameters["loader_dict"]["batch_size"] = TRAINING_BATCH_SIZE
         test_model(cat)
 
     if RUN_PLOT_TEST:
