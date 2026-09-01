@@ -81,7 +81,7 @@ def test_all_six_public_task_names_have_a_full_example_path():
 
 
 def test_generic_workflow_is_now_generation_projection_and_sampling_only():
-    path = EXAMPLES_ROOT / "gnn_examples" / "generic_gnn_example" / "example_workflow.py"
+    path = EXAMPLES_ROOT / "gnn_examples" / "pre_training_workflow" / "example_workflow.py"
     text = path.read_text(encoding="utf-8")
     assert "generic_graph_gen" in text
     assert "SODAS" in text

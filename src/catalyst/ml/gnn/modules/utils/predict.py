@@ -673,7 +673,7 @@ def _num_graphs_from_schema(data, schema):
     if len(primary_entries) != 1:
         raise RuntimeError("Expected exactly one primary node entry in schema.")
 
-    primary_batch = data[primary_entries[0]["batch_attr"]]
+    primary_batch = getattr(data, primary_entries[0]["batch_attr"])
     if primary_batch.numel() == 0:
         return 0
 
@@ -730,7 +730,7 @@ def _primary_node_counts(data, schema, loss_tag):
     if len(primary_entries) != 1:
         raise RuntimeError("Expected exactly one primary node entry in schema.")
 
-    primary_batch = data[primary_entries[0]["batch_attr"]]
+    primary_batch = getattr(data, primary_entries[0]["batch_attr"])
 
     ones = torch.ones(
         primary_batch.shape[0],
@@ -804,7 +804,7 @@ def _accumulate_as_target(
             batch_attr = entry["batch_attr"]
 
             values = _reshape_prediction(pred[pred_index], n_channels)
-            batch = data[batch_attr]
+            batch = getattr(data, batch_attr)
 
             summed = _sum_by_batch(
                 values,
@@ -893,7 +893,7 @@ def _accumulate_as_latent_features(
             name = entry["name"]
 
             values = _reshape_prediction(pred[pred_index], n_channels)
-            batch = data[batch_attr]
+            batch = getattr(data, batch_attr)
 
             summed = _sum_by_batch(
                 values,
