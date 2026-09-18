@@ -41,31 +41,17 @@ from catalyst.ml.gnn import build_model
 
 ## Installation
 
-For a standard installation:
+Catalyst can be installed in two ways depending on how you intend to use the package.
+
+### Standard installation
+
+For normal use, install the latest released version from PyPI:
 
 ```bash
 python -m pip install catalyst-gnn
 ```
 
-For plotting helpers and the repository examples:
-
-```bash
-python -m pip install "catalyst-gnn[examples]"
-```
-
-If you need a particular CUDA-enabled PyTorch build, install the appropriate
-PyTorch build for your system first, then install Catalyst. An already-installed
-compatible PyTorch satisfies Catalyst's dependency and will not be replaced.
-Catalyst supports Python 3.10 and newer; the Python versions supported by a
-specific PyTorch release may be more restrictive.
-
-For development from a local clone:
-
-```bash
-git clone https://github.com/Materials-Informatics-Laboratory/Catalyst.git
-cd Catalyst
-python -m pip install -e ".[dev]"
-```
+This installs the Catalyst Python package and its core dependencies. This is the recommended option if you want to use Catalyst as a library in your own workflows.
 
 To verify the installation:
 
@@ -73,11 +59,68 @@ To verify the installation:
 python -c "import catalyst; print(catalyst.__version__)"
 ```
 
-Then run the test suite from the repository root with:
+If you need a particular CUDA-enabled PyTorch build, install the appropriate PyTorch build for your system first, then install Catalyst. An already-installed compatible PyTorch satisfies Catalyst's dependency and will not be replaced.
+
+Catalyst supports Python 3.10 and newer; the Python versions supported by a specific PyTorch release may be more restrictive.
+
+### Development installation
+
+If you want access to the complete Catalyst source repository, including the example workflows, automated tests, and development utilities, clone the repository and install Catalyst in editable mode:
 
 ```bash
-python -m pytest
+git clone https://github.com/Materials-Informatics-Laboratory/Catalyst.git
+cd Catalyst
+python -m pip install -e ".[dev]"
 ```
+
+This is the recommended installation for developers, contributors, and users who want to explore or modify the included examples.
+
+Because this is an editable installation, changes made to the local Catalyst source code are immediately reflected in the installed package.
+
+To verify the installation:
+
+```bash
+python -c "import catalyst; print(catalyst.__version__)"
+```
+
+The repository examples are located under:
+
+```text
+examples/
+```
+
+and the complete automated test suite can be run from the repository root with:
+
+```bash
+python -m pytest -q
+```
+
+If you want the development environment for a particular released version rather than the current `main` branch, check out the corresponding release tag before installing. For example:
+
+```bash
+git checkout v2.2.0
+python -m pip install -e ".[dev]"
+```
+
+### Which installation should I use?
+
+Use:
+
+```bash
+python -m pip install catalyst-gnn
+```
+
+if you want to use Catalyst as a Python library in your own workflows.
+
+Use:
+
+```bash
+git clone https://github.com/Materials-Informatics-Laboratory/Catalyst.git
+cd Catalyst
+python -m pip install -e ".[dev]"
+```
+
+if you want the complete source repository, example workflows, test suite, or plan to modify or contribute to Catalyst.
 
 ---
 
