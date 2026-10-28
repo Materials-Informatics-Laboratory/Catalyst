@@ -10,6 +10,8 @@ Primary entry points:
     EquivariantGNN
 """
 
+from .introspection import unwrap_feature_model
+
 from .gnn_builder import (
     GNNBuilder,
     GenericGNN,
@@ -57,6 +59,7 @@ from .gnn_builder import (
 from .alignn import ALIGNN
 
 __all__ = [
+    "unwrap_feature_model",
     "GNNBuilder",
     "GenericGNN",
     "EquivariantGNN",

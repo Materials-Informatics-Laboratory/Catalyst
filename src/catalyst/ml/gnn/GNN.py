@@ -1,7 +1,10 @@
 from ..utils.loss import loss_setup
 from ..utils.distributed import reduce_tensor, combine_dicts_across_gpus
 from ..utils.memory import optimizer_to
-from .modules.utils.predict import accumulate_predictions
+from .modules.utils.predict import (
+    prediction_kwargs_from_parameters,
+    accumulate_predictions_from_parameters,
+)
 from ...data.utils import load_dictionary, save_dictionary, safe_torch_load
 from .modules.utils.data_manager import setup_dataloader
 from ..utils.optimizer import set_optimizer
@@ -835,61 +838,21 @@ class GNN:
     # -------------------------------------------------------------------------
 
     def _prediction_kwargs(self, parameters):
+        """Return configured ``accumulate_predictions`` keyword arguments.
+
+        Kept as a compatibility method on the training wrapper; the canonical
+        implementation is the public ``prediction_kwargs_from_parameters``
+        helper used by external inference/analysis tooling as well.
         """
-        Collect optional accumulate_predictions kwargs from the parameter dict.
-
-        Recommended config:
-
-            parameters["model_dict"]["prediction_params"] = {
-                "output_key": "vector",
-                "target_key": "target_vector",
-            }
-
-        For per-atom vector learning, also set:
-
-            parameters["model_dict"]["accumulate_loss"] = "node"
-        """
-        model_dict = parameters.get("model_dict", {})
-        loss_params = model_dict.get("loss_params", {}) or {}
-        prediction_params = model_dict.get("prediction_params", {}) or {}
-
-        allowed = {
-            "channel_mode",
-            "normalize_by",
-            "legacy_multichannel_shape",
-            "output_key",
-            "target_key",
-            "target_map",
-            "prefer_equivariant_key",
-        }
-
-        kwargs = {}
-
-        # Allow loss_params to carry these for backward compatibility, but let
-        # prediction_params override them.
-        for source in (loss_params, prediction_params):
-            for key in allowed:
-                # Optional prediction settings use None in Catalyst's default
-                # parameter tree to mean "unspecified". Do not forward those
-                # null placeholders: doing so would override the real defaults
-                # of accumulate_predictions(), e.g. channel_mode="target".
-                if key in source and source[key] is not None:
-                    kwargs[key] = source[key]
-
-        return kwargs
+        return prediction_kwargs_from_parameters(parameters)
 
     def _accumulate_predictions(self, pred, data, parameters, return_y=True, loss_tag=None):
-        if loss_tag is None:
-            loss_tag = parameters["model_dict"]["accumulate_loss"]
-
-        kwargs = self._prediction_kwargs(parameters)
-
-        return accumulate_predictions(
+        return accumulate_predictions_from_parameters(
             pred,
             data,
-            loss_tag,
+            parameters,
             return_y=return_y,
-            **kwargs,
+            loss_tag=loss_tag,
         )
 
     def _align_pred_and_target(self, preds, y):

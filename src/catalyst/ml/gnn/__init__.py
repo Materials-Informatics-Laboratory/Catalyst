@@ -1,6 +1,10 @@
 """Public Catalyst GNN API."""
 
 from .GNN import GNN
+from .modules.utils.predict import (
+    prediction_kwargs_from_parameters,
+    accumulate_predictions_from_parameters,
+)
 from .tasks import (
     GNNTask,
     VectorChannelAdapter,
@@ -11,6 +15,7 @@ from .tasks import (
 )
 
 from .modules.models import (
+    unwrap_feature_model,
     GNNBuilder,
     GenericGNN,
     EquivariantGNN,
@@ -37,6 +42,9 @@ from .modules.models import (
 
 __all__ = [
     "GNN",
+    "unwrap_feature_model",
+    "prediction_kwargs_from_parameters",
+    "accumulate_predictions_from_parameters",
     "GNNTask",
     "VectorChannelAdapter",
     "GraphMultiScalarAdapter",

@@ -20,6 +20,9 @@ __all__ = [
     "validate_task_batch",
     "task_from_parameters",
     "build_model",
+    "unwrap_feature_model",
+    "prediction_kwargs_from_parameters",
+    "accumulate_predictions_from_parameters",
 ]
 
 
@@ -37,6 +40,9 @@ def __getattr__(name):
         "validate_task_batch",
         "task_from_parameters",
         "build_model",
+        "unwrap_feature_model",
+        "prediction_kwargs_from_parameters",
+        "accumulate_predictions_from_parameters",
     }:
         from . import ml
         from .ml import gnn

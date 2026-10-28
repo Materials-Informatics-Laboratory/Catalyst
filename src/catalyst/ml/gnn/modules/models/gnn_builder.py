@@ -329,7 +329,15 @@ class GNNBuilder(nn.Module):
         self.clone_gradient_input = bool(clone_gradient_input)
         self.force_enable_grad = bool(force_enable_grad)
 
-    def _forward_impl(self, data):
+    def _forward_features_impl(self, data):
+        """Run input preparation, encoding, and message passing only.
+
+        The returned graph object retains the final hidden representations
+        produced by the processor (for example ``h_1``, ``h_2``, and ``h_3``
+        for order-aware models).  The object is intentionally the same mutable
+        graph/Batch instance used by the normal forward pass so downstream
+        tooling can inspect or intervene on the representation before decoding.
+        """
         data = attach_input_aliases(data)
 
         if self.prepare_gradient:
@@ -345,10 +353,44 @@ class GNNBuilder(nn.Module):
         data = self.processor(data)
         data = attach_hidden_aliases(data)
         data = backfill_legacy_hidden_names(data)
+        return data
+
+    def forward_features(self, data):
+        """Return the post-processor, pre-decoder graph representation.
+
+        This public feature API is useful for representation analysis, transfer
+        learning, interpretability, and controlled latent interventions.  For
+        scalar-gradient models, gradients are enabled when required so the
+        returned representation remains connected to the configured gradient
+        input.
+        """
+        if self.prepare_gradient and self.force_enable_grad:
+            with torch.enable_grad():
+                return self._forward_features_impl(data)
+
+        return self._forward_features_impl(data)
+
+    def decode_features(self, data):
+        """Decode a graph object produced by :meth:`forward_features`.
+
+        Callers may modify supported hidden fields on ``data`` between
+        ``forward_features`` and ``decode_features`` to perform controlled
+        representation interventions while reusing the trained Catalyst decoder.
+        """
+        if self.prepare_gradient and self.force_enable_grad:
+            with torch.enable_grad():
+                return self.decoder(data)
 
         return self.decoder(data)
 
+    def _forward_impl(self, data):
+        data = self._forward_features_impl(data)
+        return self.decoder(data)
+
     def forward(self, data):
+        # Preserve the historical behavior exactly: for scalar-gradient models,
+        # the full encoder -> processor -> decoder path runs inside one
+        # torch.enable_grad() context.
         if self.prepare_gradient and self.force_enable_grad:
             with torch.enable_grad():
                 return self._forward_impl(data)

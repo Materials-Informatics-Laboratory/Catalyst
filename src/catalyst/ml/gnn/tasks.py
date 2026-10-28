@@ -108,9 +108,7 @@ class VectorChannelAdapter(nn.Module):
         self.squeeze_single_channel = bool(squeeze_single_channel)
         self.output_keys = tuple(output_keys)
 
-    def forward(self, data):
-        output = self.model(data)
-
+    def _adapt_output(self, output):
         if isinstance(output, Mapping):
             output = _get_output_from_mapping(output, self.output_keys)
 
@@ -151,6 +149,25 @@ class VectorChannelAdapter(nn.Module):
             "VectorChannelAdapter expected vector output shape [N, 3] or "
             f"[N, C, 3], but got {_shape(output)}."
         )
+
+    def forward_features(self, data):
+        method = getattr(self.model, "forward_features", None)
+        if not callable(method):
+            raise AttributeError(
+                "Wrapped model does not expose forward_features()."
+            )
+        return method(data)
+
+    def decode_features(self, data):
+        method = getattr(self.model, "decode_features", None)
+        if not callable(method):
+            raise AttributeError(
+                "Wrapped model does not expose decode_features()."
+            )
+        return self._adapt_output(method(data))
+
+    def forward(self, data):
+        return self._adapt_output(self.model(data))
 
 
 class GraphMultiScalarAdapter(nn.Module):
@@ -235,9 +252,7 @@ class GraphMultiScalarAdapter(nn.Module):
 
         return output
 
-    def forward(self, data):
-        output = self.model(data)
-
+    def _adapt_output(self, output, data):
         if isinstance(output, Mapping):
             output = _get_output_from_mapping(output, self.output_keys)
 
@@ -272,6 +287,25 @@ class GraphMultiScalarAdapter(nn.Module):
             "tensor, mapping, or list/tuple of order contributions. "
             f"Got {_shape(output)}."
         )
+
+    def forward_features(self, data):
+        method = getattr(self.model, "forward_features", None)
+        if not callable(method):
+            raise AttributeError(
+                "Wrapped model does not expose forward_features()."
+            )
+        return method(data)
+
+    def decode_features(self, data):
+        method = getattr(self.model, "decode_features", None)
+        if not callable(method):
+            raise AttributeError(
+                "Wrapped model does not expose decode_features()."
+            )
+        return self._adapt_output(method(data), data)
+
+    def forward(self, data):
+        return self._adapt_output(self.model(data), data)
 
 
 @dataclass(frozen=True)

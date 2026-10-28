@@ -7,6 +7,71 @@ from torch import nn
 # =============================================================================
 
 
+_PREDICTION_PARAMETER_KEYS = {
+    "channel_mode",
+    "normalize_by",
+    "legacy_multichannel_shape",
+    "output_key",
+    "target_key",
+    "target_map",
+    "prefer_equivariant_key",
+}
+
+
+def prediction_kwargs_from_parameters(parameters):
+    """Extract ``accumulate_predictions`` keyword arguments from parameters.
+
+    ``prediction_params`` overrides matching legacy entries in ``loss_params``.
+    Values set to ``None`` are ignored so they do not overwrite the real
+    defaults of :func:`accumulate_predictions`.
+    """
+    model_dict = parameters.get("model_dict", {})
+    loss_params = model_dict.get("loss_params", {}) or {}
+    prediction_params = model_dict.get("prediction_params", {}) or {}
+
+    kwargs = {}
+    for source in (loss_params, prediction_params):
+        for key in _PREDICTION_PARAMETER_KEYS:
+            if key in source and source[key] is not None:
+                kwargs[key] = source[key]
+
+    return kwargs
+
+
+def accumulate_predictions_from_parameters(
+    pred,
+    data,
+    parameters,
+    *,
+    return_y=True,
+    loss_tag=None,
+):
+    """Apply the same prediction accumulation contract as Catalyst training.
+
+    This is the public counterpart to the high-level ``GNN`` wrapper's internal
+    accumulation path.  It is intended for inference and representation-analysis
+    tools that decode a model manually but still need predictions to be reduced
+    exactly as configured for training.
+    """
+    if loss_tag is None:
+        try:
+            loss_tag = parameters["model_dict"]["accumulate_loss"]
+        except KeyError as exc:
+            raise KeyError(
+                "parameters['model_dict']['accumulate_loss'] is required when "
+                "loss_tag is not supplied."
+            ) from exc
+
+    kwargs = prediction_kwargs_from_parameters(parameters)
+    return accumulate_predictions(
+        pred,
+        data,
+        loss_tag,
+        return_y=return_y,
+        **kwargs,
+    )
+
+
 def accumulate_predictions(
     pred,
     data,

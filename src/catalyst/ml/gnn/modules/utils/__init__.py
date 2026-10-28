@@ -7,6 +7,10 @@ from .edges import add_edges, mask_edges
 from .basis import bessel, gaussian, scalar2basis, GaussianRandomFourierFeatures
 from .data_manager import setup_dataloader
 
-from .predict import accumulate_predictions
+from .predict import (
+    accumulate_predictions,
+    prediction_kwargs_from_parameters,
+    accumulate_predictions_from_parameters,
+)
 
 __all__ = [name for name in globals() if not name.startswith("_")]
