@@ -790,10 +790,15 @@ class Generic_Graph_Data(Data):
         self.gid = None
 
     def __inc__(self, key, value, *args, **kwargs):
-        if key == "edge_index_G":
+        # Order-style aliases are stored as independent tensors on the PyG Data
+        # object, so they must receive exactly the same batching increments as
+        # their legacy counterparts.  Falling back to PyG's default for
+        # ``edge_index_3`` incorrectly offsets the angular graph by the number
+        # of atoms instead of the number of bonds.
+        if key in {"edge_index_G", "edge_index_2"}:
             return self.node_G.size(0)
 
-        if key == "edge_index_A":
+        if key in {"edge_index_A", "edge_index_3"}:
             return self.node_A.size(0)
 
         if key == "edge_index":
@@ -894,10 +899,14 @@ class Atomic_Graph_Data(Data):
         self.gid = None
 
     def __inc__(self, key, value, *args, **kwargs):
-        if key == "edge_index_G":
+        # Keep modular order aliases batch-identical to the legacy ALIGNN
+        # connectivity.  In particular ``edge_index_3`` indexes bonds, not
+        # atoms; PyG's default index increment would therefore corrupt the
+        # angular graph for every graph after the first in a mini-batch.
+        if key in {"edge_index_G", "edge_index_2"}:
             return self.x_atm.size(0)
 
-        if key == "edge_index_A":
+        if key in {"edge_index_A", "edge_index_3"}:
             return self.x_bnd.size(0)
 
         if key == "edge_index":
